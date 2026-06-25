@@ -30,6 +30,18 @@ pub enum Error {
     /// Failed to join the VM worker thread.
     #[error("Internal thread error")]
     ThreadJoin,
+
+    /// Failed to connect to the guest vsock port.
+    #[error("vsock connect failed: {0}")]
+    VsockConnect(String),
+
+    /// Connection timed out — no guest listening on the vsock port.
+    #[error("vsock connection timed out")]
+    VsockTimeout,
+
+    /// I/O error on vsock socket read/write.
+    #[error("vsock I/O error: {0}")]
+    VsockIo(#[source] std::io::Error),
 }
 
 /// Convenience alias for `std::result::Result<T, Error>`.

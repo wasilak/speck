@@ -13,10 +13,19 @@ objc2-foundation = { version = "0.3", features = ["NSURL", "NSError"] }
 objc2-virtualization = { version = "0.3", features = [
     "VZVirtualMachineConfiguration",
     "VZVirtualMachine",
-    "VZLinuxBootLoader",
     "VZVirtualMachineDelegate",
+    "VZBootLoader",
+    "VZPlatformConfiguration",
+    "VZSocketDeviceConfiguration",
+    "VZSocketDevice",
+    "VZVirtioSocketDeviceConfiguration",
+    "VZVirtioSocketDevice",
+    "VZVirtioSocketConnection",
+    "block2",
+    "dispatch2",
 ] }
 block2 = "0.6"
 dispatch2 = "0.3"
+libc = "0.2"
 thiserror = "2"
 tokio = { version = "1.52", features = ["sync"] }

@@ -1,31 +1,21 @@
-// Public error types.
-pub mod error;
+#[cfg(not(all(target_arch = "aarch64", target_os = "macos")))]
+compile_error!(
+    "speck-vz targets aarch64-apple-darwin only; Virtualization.framework is macOS-only."
+);
 
-// Guest configuration stub (full impl in Plan 02-02).
 pub mod config;
-
-// VM worker thread with dispatch queue infrastructure.
+mod delegate;
+pub mod error;
+pub mod guest;
 mod vm_thread;
+mod vsock;
 
-// Re-export the public error types at the crate root.
+pub use config::GuestConfig;
 pub use error::{Error, Result};
+pub use guest::Guest;
+pub use speck_core::{EngineEvent, EventSink, VmState};
+pub use vsock::VzSocket;
 
-// Re-export core types that form part of the public API.
-pub use speck_core::{EventSink, EngineEvent, VmState};
-
-// ---------------------------------------------------------------------------
-// Stubs preserved from Phase 1 — will evolve in later plans.
-// ---------------------------------------------------------------------------
-
-/// Return the crate version (from `Cargo.toml`).
 pub fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
-
-/// Accept (and discard) an event sink — placeholder for the future
-/// observability pipeline built on top of `VmEventDispatcher`.
-pub fn accepts_sink(_sink: &dyn speck_core::EventSink) {}
-
-/// Re-export `VmThread` and `InternalState` for use by higher-level orchestration.
-pub use vm_thread::{InternalState, VmThread};
-
