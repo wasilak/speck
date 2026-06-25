@@ -1,0 +1,19 @@
+[package]
+name = "speck-guest"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# IMPORTANT: speck-guest is the in-VM binary (targeting aarch64-linux-musl in Phase 5).
+# NEVER add host-side crates here.
+# TODO Phase 5: exclude speck-guest from default cross-compile
+# NOTE: speck-guest is intentionally exempt from the AArch64-macOS build gate — it has
+# no dependency on the crates that enforce it (see D-04). speck-guest targets
+# aarch64-unknown-linux-musl (a Linux guest), not macOS.
+
+[dependencies]
+libc = "0.2"
+
+[[bin]]
+name = "vminitd"
+path = "src/bin/vminitd.rs"
