@@ -15,7 +15,7 @@
 - **Plans:**
   - [x] 03-01-PLAN.md — Foundation: feature flags, error types, VzSocket wrapper, vsock_port config
   - [ ] 03-02-PLAN.md — VmThread wiring: vsock device in VM config, socket device extraction, vsock_connect
-  - [ ] 03-03-PLAN.md — Guest side: vminitd with AF_VSOCK echo server (static musl binary)
+  - [x] 03-03-PLAN.md — Guest side: vminitd with AF_VSOCK echo server (static musl binary)
   - [ ] 03-04-PLAN.md — Integration test: host→guest echo round-trip (checkpoint: human-verify)
 
 ### Phase 4: Guest Networking

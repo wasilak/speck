@@ -1,7 +1,7 @@
 # State
 
 **Current phase:** 03 — Vsock Echo
-**Status:** Executing (1/4 plans complete)
+**Status:** Executing (2/4 plans complete)
 **Previous phase:** 02 — FFI/Bridge + Bare VM Boot (✅ Complete)
 
 ## Plan 03-01 Complete
@@ -13,6 +13,17 @@
 - `GuestConfig.vsock_port` field (default 1234) with builder method
 - `cargo check -p speck-vz` passes ✅
 - Commit: `1fe2a66`
+
+## Plan 03-03 Complete
+
+- `speck-guest` crate with vminitd binary (static musl, `aarch64-unknown-linux-musl`)
+- `vsock_echo::serve()` with AF_VSOCK socket, bind to VMADDR_CID_ANY, listen, accept, echo loop
+- Kernel cmdline parser for `vsock_port=PORT` (default 1234)
+- `libc` dependency for raw socket syscalls
+- `#[cfg(target_os = "linux")]` gated module for cross-compile safety
+- `cargo check --target aarch64-unknown-linux-musl --lib` passes ✅
+- `cargo check --target aarch64-unknown-linux-musl --bin vminitd` passes ✅
+- Commits: `a2d8823`, `27d0ba9`
 
 ## Phase 2 Summary
 
