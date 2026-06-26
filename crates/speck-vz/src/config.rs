@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+use speck_net::config::NetworkConfig;
+
 /// Configuration for a micro-VM guest.
 ///
 /// This is the primary input to [`Guest::start`](crate::Guest::start).
@@ -42,6 +44,18 @@ pub struct GuestConfig {
     /// The host connects to this port inside the guest to reach
     /// `vminitd` (or equivalent).  Defaults to 1234.
     pub vsock_port: u32,
+
+    /// Optional network device configuration.
+    ///
+    /// When set, a `VZVirtioNetworkDeviceConfiguration` with a
+    /// `VZFileHandleNetworkDeviceAttachment` is wired into the VM.
+    pub network: Option<NetworkConfig>,
+
+    /// Optional vsock port for the DNS resolver proxy inside the guest.
+    ///
+    /// When set, the host connects to this port after the VM starts
+    /// to forward DNS queries to the host's system resolver.
+    pub dns_vsock_port: Option<u32>,
 }
 
 impl Default for GuestConfig {
@@ -54,6 +68,8 @@ impl Default for GuestConfig {
             memory_size_bytes: 512 * 1024 * 1024,
             stop_timeout: Duration::from_secs(10),
             vsock_port: 1234,
+            network: None,
+            dns_vsock_port: None,
         }
     }
 }
@@ -86,6 +102,14 @@ impl GuestConfig {
         {
             return Err(format!("initrd not found: {}", initrd.display()));
         }
+        if let Some(ref net) = self.network {
+            if net.mtu < 1500 {
+                return Err(format!(
+                    "network MTU must be >= 1500, got {}",
+                    net.mtu
+                ));
+            }
+        }
         Ok(())
     }
 }
@@ -116,6 +140,8 @@ pub struct GuestConfigBuilder {
     memory_size_bytes: u64,
     stop_timeout: Duration,
     vsock_port: u32,
+    network: Option<NetworkConfig>,
+    dns_vsock_port: Option<u32>,
 }
 
 impl Default for GuestConfigBuilder {
@@ -128,6 +154,8 @@ impl Default for GuestConfigBuilder {
             memory_size_bytes: 512 * 1024 * 1024,
             stop_timeout: Duration::from_secs(10),
             vsock_port: 1234,
+            network: None,
+            dns_vsock_port: None,
         }
     }
 }
@@ -178,6 +206,18 @@ impl GuestConfigBuilder {
         self
     }
 
+    /// Set the network device configuration.
+    pub fn network(mut self, network: NetworkConfig) -> Self {
+        self.network = Some(network);
+        self
+    }
+
+    /// Set the vsock port for DNS proxy connections.
+    pub fn dns_vsock_port(mut self, port: u32) -> Self {
+        self.dns_vsock_port = Some(port);
+        self
+    }
+
     /// Consume the builder and produce a [`GuestConfig`].
     ///
     /// # Panics
@@ -194,6 +234,8 @@ impl GuestConfigBuilder {
             memory_size_bytes: self.memory_size_bytes,
             stop_timeout: self.stop_timeout,
             vsock_port: self.vsock_port,
+            network: self.network,
+            dns_vsock_port: self.dns_vsock_port,
         }
     }
 }
