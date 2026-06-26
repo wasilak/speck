@@ -239,3 +239,45 @@ impl GuestConfigBuilder {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_guest_config_phase5_fields() {
+        let dir = std::env::temp_dir().join("speck-test-phase5");
+        std::fs::create_dir_all(&dir).unwrap();
+        let kernel = dir.join("Image");
+        std::fs::write(&kernel, b"dummy kernel").unwrap();
+
+        let rootfs = dir.join("rootfs.ext4");
+        let data = dir.join("data.ext4");
+
+        let config = GuestConfig::builder()
+            .kernel_path(&kernel)
+            .rootfs_disk_path(&rootfs)
+            .data_disk_path(&data)
+            .containerd_vsock_port(9001)
+            .buildkitd_vsock_port(9002)
+            .ready_vsock_port(9000)
+            .build();
+
+        // Assert all 5 new fields propagate correctly
+        assert_eq!(config.rootfs_disk_path, Some(rootfs.clone()));
+        assert_eq!(config.data_disk_path, Some(data.clone()));
+        assert_eq!(config.containerd_vsock_port, Some(9001));
+        assert_eq!(config.buildkitd_vsock_port, Some(9002));
+        assert_eq!(config.ready_vsock_port, Some(9000));
+
+        // Validate with non-existent disk paths returns error about rootfs
+        let err = config.validate().unwrap_err();
+        assert!(
+            err.contains("rootfs"),
+            "expected error about rootfs, got: {err}"
+        );
+
+        // Clean up
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
