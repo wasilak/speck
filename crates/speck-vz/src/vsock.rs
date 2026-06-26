@@ -1,9 +1,11 @@
 use std::io;
+use std::os::unix::io::AsRawFd;
 
 /// A host-side vsock connection wrapping a raw file descriptor.
 ///
 /// Obtained from `Guest::vsock_connect()` (via `VZVirtioSocketConnection::fileDescriptor`).
 /// The fd is owned and closed on `Drop`.
+#[derive(Debug)]
 pub struct VzSocket {
     fd: std::os::unix::io::RawFd,
 }
@@ -42,6 +44,12 @@ impl VzSocket {
         } else {
             Ok(ret as usize)
         }
+    }
+}
+
+impl AsRawFd for VzSocket {
+    fn as_raw_fd(&self) -> std::os::unix::io::RawFd {
+        self.fd
     }
 }
 

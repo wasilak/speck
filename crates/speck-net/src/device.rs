@@ -6,7 +6,7 @@ use smoltcp::time::Instant;
 ///
 /// Reads/writes raw L2 Ethernet frames from a socketpair fd. The fd is set to
 /// `O_NONBLOCK` and is closed on `Drop`.
-pub(crate) struct FdDevice {
+pub struct FdDevice {
     fd: RawFd,
     mtu: usize,
 }
@@ -45,7 +45,7 @@ impl Drop for FdDevice {
 }
 
 /// Token that holds received frame data.
-pub(crate) struct FdRxToken(Vec<u8>);
+pub struct FdRxToken(Vec<u8>);
 
 impl RxToken for FdRxToken {
     fn consume<R, F>(self, f: F) -> R
@@ -57,7 +57,7 @@ impl RxToken for FdRxToken {
 }
 
 /// Token that holds the fd for writing outbound frames.
-pub(crate) struct FdTxToken {
+pub struct FdTxToken {
     fd: RawFd,
 }
 

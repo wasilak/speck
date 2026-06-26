@@ -60,6 +60,14 @@ impl Guest {
     pub fn join(&mut self) -> Result<(), Error> {
         self.thread.join()
     }
+
+    pub fn netstack_fd(&self) -> Result<std::os::unix::io::RawFd, Error> {
+        self.thread.netstack_fd()
+    }
+
+    pub fn dns_vsock_fd(&self) -> Result<std::os::unix::io::RawFd, Error> {
+        self.thread.dns_vsock_fd()
+    }
 }
 
 impl Drop for Guest {

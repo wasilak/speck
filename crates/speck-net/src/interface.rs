@@ -8,7 +8,7 @@ use crate::config;
 /// Owns the smoltcp device and provides a [`poll()`](Self::poll) method that drives
 /// packet processing. Future modules (re-origination, DNS) will add sockets to the
 /// socket set.
-pub(crate) struct SmoltcpInterface {
+pub struct SmoltcpInterface {
     iface: Interface,
     device: super::device::FdDevice,
     sockets: SocketSet<'static>,

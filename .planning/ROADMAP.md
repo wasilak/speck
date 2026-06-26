@@ -19,15 +19,15 @@
   - [x] 03-04-PLAN.md — Integration test: host→guest echo round-trip (written, compiles, gated on codesigning)
 
 ### Phase 4: Guest Networking
-- **Status:** 📋 Planned (6 plans across 3 waves)
+- **Status:** ✅ Complete (6/6 plans)
 - **Goal:** Host-inheriting networking via `VZFileHandleNetworkDeviceAttachment` + user-space netstack
 - **Plans:**
-  - [ ] 04-01-PLAN.md — speck-net crate scaffold + NetworkConfig type + workspace member (Wave 1)
-  - [ ] 04-02-PLAN.md — FdDevice (smoltcp Device trait) + SmoltcpInterface + SpeckNet::spawn() poll loop (Wave 2)
-  - [ ] 04-03-PLAN.md — VM network device wiring: VZFileHandleNetworkDeviceAttachment, socketpair, host_fd, DNS vsock port (Wave 2)
-  - [ ] 04-04-PLAN.md — TCP re-origination + DHCP server + vsock DNS proxy + MTU/MSS clamping (Wave 3)
-  - [ ] 04-05-PLAN.md — Integration test: ARP round-trip + DNS proxy via vsock (Wave 3, human-verify)
-  - [ ] 04-06-PLAN.md — Guest-side DNS forwarder in vminitd (Wave 2)
+  - [x] 04-01-PLAN.md — speck-net crate scaffold + NetworkConfig type + workspace member (Wave 1)
+  - [x] 04-02-PLAN.md — FdDevice (smoltcp Device trait) + SmoltcpInterface + SpeckNet::spawn() poll loop (Wave 2)
+  - [x] 04-03-PLAN.md — VM network device wiring: VZFileHandleNetworkDeviceAttachment, socketpair, host_fd, DNS vsock port (Wave 2)
+  - [x] 04-04-PLAN.md — TCP re-origination + DHCP server + vsock DNS proxy + MTU/MSS clamping (Wave 3)
+  - [x] 04-05-PLAN.md — Integration test: ARP round-trip + DNS proxy via vsock (Wave 3, human-verify)
+  - [x] 04-06-PLAN.md — Guest-side DNS forwarder in vminitd (Wave 3)
 
 ### Phase 5: containerd + BuildKit Integration
 - **Status:** 📋 Backlog

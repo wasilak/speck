@@ -2,8 +2,14 @@ pub mod config;
 pub mod device;
 pub mod error;
 pub mod interface;
+pub mod mtu;
+pub(crate) mod dhcp;
+pub(crate) mod dns;
+pub(crate) mod reorigin;
 
+pub use dns::spawn_dns_proxy;
 pub use error::{Error, Result};
+pub use mtu::{detect_host_mtu, mss_for_mtu};
 
 use std::os::unix::io::RawFd;
 
@@ -20,35 +26,45 @@ impl std::os::unix::io::AsRawFd for NetFd {
 /// The Speck netstack, managing a smoltcp-based TCP/IP stack over a socketpair fd.
 ///
 /// Created with [`new()`](Self::new) and [`NetworkConfig`], then started with
-/// [`spawn()`](Self::spawn) which returns a tokio task running the poll loop.
+/// [`spawn()`](Self::spawn) which returns tokio tasks running the poll loop
+/// and DNS proxy.
 pub struct SpeckNet {
-    fd: Option<RawFd>,
     config: config::NetworkConfig,
+    dns_vsock_port: Option<u32>,
 }
 
 impl SpeckNet {
-    /// Create a new `SpeckNet` with the given network configuration.
-    ///
-    /// The fd is provided later via [`spawn()`](Self::spawn).
-    pub fn new(config: config::NetworkConfig) -> Self {
-        Self { fd: None, config }
+    pub fn new(config: config::NetworkConfig, dns_vsock_port: Option<u32>) -> Self {
+        Self {
+            config,
+            dns_vsock_port,
+        }
     }
 
-    /// Start the netstack poll loop on a tokio task.
+    /// Spawn the netstack tasks.
     ///
-    /// Takes ownership of `fd` (the host end of a datagram socketpair), dups it,
-    /// and spawns a tokio task that runs a `smoltcp::Interface` poll loop driven
-    /// by `AsyncFd` readiness notifications.
-    pub fn spawn(mut self, fd: RawFd) -> tokio::task::JoinHandle<std::result::Result<(), Error>> {
-        self.fd = Some(fd);
-        tokio::task::spawn(async move {
-            let fd = self.fd.take().expect("SpeckNet: fd not set");
+    /// Returns a vector of `JoinHandle`s:
+    /// - A DNS proxy task if `vsock_fd` is provided
+    /// - The main netstack poll loop (TCP re-origination, DHCP, packet processing)
+    pub fn spawn(
+        self,
+        fd: RawFd,
+        vsock_fd: Option<RawFd>,
+    ) -> Vec<tokio::task::JoinHandle<std::result::Result<(), Error>>> {
+        let mut handles = Vec::new();
+
+        if let Some(vfd) = vsock_fd {
+            handles.push(dns::spawn_dns_proxy(vfd));
+        }
+
+        handles.push(tokio::task::spawn(async move {
+            let mtu = self.config.mtu as usize;
 
             // Wrap the fd for AsyncFd (readiness notification without closing on drop)
             let async_fd = tokio::io::unix::AsyncFd::new(NetFd(fd))
                 .map_err(|e| Error::Netstack(format!("AsyncFd::new: {e}")))?;
 
-            // Dup the fd so FdDevice gets its own copy (takes ownership, closes on drop)
+            // Dup the fd so FdDevice gets its own copy
             let device_fd = unsafe { libc::dup(fd) };
             if device_fd < 0 {
                 return Err(Error::Netstack(format!(
@@ -58,19 +74,39 @@ impl SpeckNet {
             }
 
             // Build the smoltcp device and interface
-            let device = device::FdDevice::new(device_fd, self.config.mtu as usize);
+            let device = device::FdDevice::new(device_fd, mtu);
             let mut net = interface::SmoltcpInterface::new(device, &self.config);
 
-            // Poll loop — waits for fd readiness then drives the smoltcp stack
+            // Re-origination bridge and DHCP server
+            let mut reorigin = reorigin::ReoriginBridge::new(self.config.mtu);
+            let mut dhcp = dhcp::DhcpServer::new(&self.config);
+            dhcp.add_to_set(net.sockets_mut());
+
+            // Poll loop
             loop {
                 let mut guard = async_fd
                     .readable()
                     .await
                     .map_err(|e| Error::Netstack(format!("readable: {e}")))?;
                 guard.clear_ready();
+
                 let timestamp = smoltcp::time::Instant::now();
+
+                // Process inbound packets (data arrives on fd)
                 net.poll(timestamp);
+
+                // Handle new TCP connections from the guest and bridge data
+                reorigin.handle_new_connections(net.sockets_mut());
+                reorigin.poll_bridges(net.sockets_mut());
+
+                // Process DHCP requests
+                dhcp.poll(net.sockets_mut());
+
+                // Process egress frames (tx queued during poll/reorigin/dhcp)
+                net.poll(smoltcp::time::Instant::now());
             }
-        })
+        }));
+
+        handles
     }
 }
