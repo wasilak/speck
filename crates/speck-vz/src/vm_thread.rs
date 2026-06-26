@@ -102,6 +102,10 @@ pub(crate) enum VmCommand {
     DnsVsockFd {
         reply: oneshot::Sender<std::result::Result<RawFd, Error>>,
     },
+    WaitForGuestReady {
+        ready_vsock_port: u32,
+        reply: oneshot::Sender<std::result::Result<(), Error>>,
+    },
     Shutdown,
 }
 
@@ -225,6 +229,16 @@ impl VmThread {
                                     "no dns vsock fd available".into(),
                                 )));
                             }
+                        }
+                        VmCommand::WaitForGuestReady {
+                            ready_vsock_port,
+                            reply,
+                        } => {
+                            let control = Arc::clone(&control);
+                            let q = queue.clone();
+                            let result =
+                                Self::do_wait_for_ready(&control, &q, ready_vsock_port);
+                            let _ = reply.send(result);
                         }
                         VmCommand::Shutdown => break,
                     }
@@ -687,6 +701,44 @@ impl VmThread {
         }
     }
 
+    /// Poll the guest's ready vsock port until the b"READY\n" signal arrives.
+    ///
+    /// Retries up to 30 times with 200 ms sleep between attempts (~6 s max).
+    /// ECONNREFUSED / VsockTimeout are expected until vminitd binds the port.
+    fn do_wait_for_ready(
+        control: &Arc<Mutex<VmControl>>,
+        queue: &DispatchQueue,
+        ready_vsock_port: u32,
+    ) -> Result<(), Error> {
+        for _ in 0..30 {
+            match Self::do_vsock_connect(control, queue, ready_vsock_port) {
+                Ok(sock) => {
+                    let mut buf = [0u8; 6];
+                    let mut n = 0;
+                    while n < 6 {
+                        match sock.read(&mut buf[n..]) {
+                            Ok(0) => break, // EOF before full signal
+                            Ok(read) => n += read,
+                            Err(e) => return Err(Error::VsockIo(e)),
+                        }
+                    }
+                    if &buf == b"READY\n" {
+                        return Ok(());
+                    } else {
+                        return Err(Error::VsockConnect(
+                            "unexpected READY signal".into(),
+                        ));
+                    }
+                }
+                Err(Error::VsockConnect(_)) | Err(Error::VsockTimeout) => {
+                    std::thread::sleep(Duration::from_millis(200));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Err(Error::GuestReadyTimeout)
+    }
+
     fn send_blocking<T>(
         &self,
         cmd: VmCommand,
@@ -754,6 +806,21 @@ impl VmThread {
     pub fn dns_vsock_fd(&self) -> std::result::Result<RawFd, Error> {
         let (tx, rx) = oneshot::channel();
         self.send_blocking(VmCommand::DnsVsockFd { reply: tx }, rx)?
+    }
+
+    /// Wait for the guest to send the READY signal on the given vsock port.
+    ///
+    /// Blocks until `do_wait_for_ready` returns (max ~6 s) or an error occurs.
+    /// This is the blocking primitive `Guest::wait_for_ready()` delegates to.
+    pub fn wait_for_ready(&self, ready_vsock_port: u32) -> std::result::Result<(), Error> {
+        let (tx, rx) = oneshot::channel();
+        self.send_blocking(
+            VmCommand::WaitForGuestReady {
+                ready_vsock_port,
+                reply: tx,
+            },
+            rx,
+        )?
     }
 
     pub fn join(&mut self) -> std::result::Result<(), Error> {
