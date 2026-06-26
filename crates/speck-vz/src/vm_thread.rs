@@ -16,10 +16,12 @@ use objc2_foundation::{NSArray, NSError, NSFileHandle, NSString, NSURL};
 use objc2_virtualization::{
     VZEntropyDeviceConfiguration, VZGenericPlatformConfiguration, VZLinuxBootLoader,
     VZMACAddress, VZNetworkDeviceAttachment, VZNetworkDeviceConfiguration,
-    VZSocketDevice, VZSocketDeviceConfiguration, VZVirtioEntropyDeviceConfiguration,
-    VZVirtioNetworkDeviceConfiguration, VZVirtioSocketConnection, VZVirtioSocketDevice,
-    VZVirtioSocketDeviceConfiguration, VZVirtualMachine, VZVirtualMachineConfiguration,
-    VZFileHandleNetworkDeviceAttachment,
+    VZSocketDevice, VZSocketDeviceConfiguration, VZStorageDeviceAttachment,
+    VZStorageDeviceConfiguration, VZVirtioBlockDeviceConfiguration,
+    VZVirtioEntropyDeviceConfiguration, VZVirtioNetworkDeviceConfiguration,
+    VZVirtioSocketConnection, VZVirtioSocketDevice, VZVirtioSocketDeviceConfiguration,
+    VZVirtualMachine, VZVirtualMachineConfiguration, VZFileHandleNetworkDeviceAttachment,
+    VZDiskImageStorageDeviceAttachment,
 };
 use socket2::{Domain, Socket, Type};
 
@@ -378,6 +380,23 @@ impl VmThread {
                 dup_host_fd = Some(d);
             }
 
+            // ── Storage devices: rootfs (/dev/vda) first, data disk (/dev/vdb) second
+            //    — ordering determines guest device names (Pitfall 4) ─────────────
+            let (_rootfs_block, _data_block) =
+                if let (Some(rootfs_path), Some(data_path)) =
+                    (&config.rootfs_disk_path, &config.data_disk_path)
+                {
+                    let rootfs_block = Self::make_block_device(rootfs_path, false)?;
+                    let data_block = Self::make_block_device(data_path, false)?;
+                    let disks: &[&VZStorageDeviceConfiguration] =
+                        &[&rootfs_block, &data_block];
+                    let storage_array = NSArray::from_slice(disks);
+                    vm_config.setStorageDevices(&storage_array);
+                    (Some(rootfs_block), Some(data_block))
+                } else {
+                    (None, None)
+                };
+
             Result::<_, Error>::Ok((vm_config, platform, entropy, vsock))
         }?;
 
@@ -557,6 +576,38 @@ impl VmThread {
                 Err(Error::StopTimeout)
             }
         }
+    }
+
+    /// Create a `VZVirtioBlockDeviceConfiguration` from a disk image path.
+    ///
+    /// The returned block device is backed by a `VZDiskImageStorageDeviceAttachment`
+    /// and can be added to `VZVirtualMachineConfiguration` via `setStorageDevices`.
+    /// Disk ordering determines guest device names: first attached → `/dev/vda`,
+    /// second → `/dev/vdb`, etc.
+    fn make_block_device(
+        path: &std::path::Path,
+        read_only: bool,
+    ) -> std::result::Result<Retained<VZVirtioBlockDeviceConfiguration>, Error> {
+        let path_str = NSString::from_str(
+            path.to_str()
+                .ok_or_else(|| Error::DiskAttachment("non-UTF-8 disk path".into()))?,
+        );
+        let url = NSURL::fileURLWithPath(&path_str);
+        let attachment = unsafe {
+            VZDiskImageStorageDeviceAttachment::initWithURL_readOnly_error(
+                VZDiskImageStorageDeviceAttachment::alloc(),
+                &url,
+                read_only,
+            )
+            .map_err(|_| Error::DiskAttachment("failed to create disk attachment".into()))?
+        };
+        let block_dev = unsafe {
+            VZVirtioBlockDeviceConfiguration::initWithAttachment(
+                VZVirtioBlockDeviceConfiguration::alloc(),
+                &attachment as &VZStorageDeviceAttachment,
+            )
+        };
+        Ok(block_dev)
     }
 
     fn do_vsock_connect(
