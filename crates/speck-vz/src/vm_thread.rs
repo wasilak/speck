@@ -1,58 +1,96 @@
-//! Dedicated VM worker thread with a serial GCD dispatch queue.
-//!
-//! Apple's `Virtualization.framework` requires that all methods on a
-//! `VZVirtualMachine` are called from a **single serial dispatch queue**
-//! (`dispatch_queue_t`).  This module enforces that invariant at the
-//! type level by spawning a dedicated OS thread that owns a serial GCD
-//! queue and processing every command on it.
-//!
-//! Commands are submitted via a bounded `mpsc` channel; replies travel
-//! back over `tokio::sync::oneshot` channels so callers can `await` the
-//! result from their own async context.
-
+use std::ops::{Deref, DerefMut};
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
+use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
 
+use block2::{RcBlock, StackBlock};
 use dispatch2::{DispatchQueue, DispatchQueueAttr};
+use objc2::AnyThread;
+use objc2::rc::{Retained, autoreleasepool};
+use objc2::runtime::ProtocolObject;
+use objc2_foundation::{NSArray, NSError, NSString, NSURL};
+use objc2_virtualization::{
+    VZEntropyDeviceConfiguration, VZGenericPlatformConfiguration, VZLinuxBootLoader,
+    VZSocketDevice, VZSocketDeviceConfiguration, VZVirtioEntropyDeviceConfiguration,
+    VZVirtioSocketConnection, VZVirtioSocketDevice, VZVirtioSocketDeviceConfiguration,
+    VZVirtualMachine, VZVirtualMachineConfiguration,
+};
 
 use crate::config::GuestConfig;
+use crate::delegate::{VmDelegate, VmStateEvent};
 use crate::error::Error;
+use crate::vsock::VzSocket;
 
-// ---------------------------------------------------------------------------
-// Command & state types
-// ---------------------------------------------------------------------------
+type ReplySender = Option<oneshot::Sender<std::result::Result<InternalState, Error>>>;
 
-/// Commands that can be sent to the VM worker thread.
+/// Wrapper around `Option<Retained<VZVirtualMachine>>` that is explicitly `Send`.
 ///
-/// Every variant that carries a `reply` channel **must** be answered
-/// exactly once — the caller is blocked on the corresponding oneshot
-/// receiver.
+/// SAFETY: `VZVirtualMachine` is only ever accessed from the serial dispatch queue,
+/// so holding the retained reference in a `Mutex`-guarded field is safe as long as
+/// all access happens on that queue.
+struct VmMachine {
+    inner: Option<Retained<VZVirtualMachine>>,
+}
+
+unsafe impl Send for VmMachine {}
+
+impl Deref for VmMachine {
+    type Target = Option<Retained<VZVirtualMachine>>;
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl DerefMut for VmMachine {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
+    }
+}
+
+/// Wrapper around `Option<Retained<VZSocketDevice>>` that is explicitly `Send`.
+///
+/// SAFETY: `VZSocketDevice` is only ever accessed from the serial dispatch queue,
+/// so holding the retained reference in a `Mutex`-guarded field is safe as long as
+/// all access happens on that queue.
+struct VmSocketDevice {
+    inner: Option<Retained<VZSocketDevice>>,
+}
+
+unsafe impl Send for VmSocketDevice {}
+
+impl Deref for VmSocketDevice {
+    type Target = Option<Retained<VZSocketDevice>>;
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl DerefMut for VmSocketDevice {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
+    }
+}
+
 pub(crate) enum VmCommand {
-    /// Boot the micro-VM with the given guest configuration.
     Start {
         config: GuestConfig,
         reply: oneshot::Sender<std::result::Result<InternalState, Error>>,
     },
-
-    /// Gracefully stop the running VM.
     Stop {
+        stop_timeout: Duration,
         reply: oneshot::Sender<std::result::Result<InternalState, Error>>,
     },
-
-    /// Snapshot the current internal state without side effects.
     State {
         reply: oneshot::Sender<InternalState>,
     },
-
-    /// Drain signal — the thread exits after processing this.
+    VsockConnect {
+        port: u32,
+        reply: oneshot::Sender<std::result::Result<VzSocket, Error>>,
+    },
     Shutdown,
 }
 
-/// Lifecycle state of the micro-VM.
-///
-/// This mirrors [`speck_core::VmState`] but is kept separate so the
-/// VM thread can transition through states without depending on the
-/// presentation layer.  Conversion helpers are provided.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InternalState {
     Stopped,
@@ -72,69 +110,69 @@ impl From<InternalState> for speck_core::VmState {
     }
 }
 
-// ---------------------------------------------------------------------------
-// VmThread
-// ---------------------------------------------------------------------------
+struct VmControl {
+    state: InternalState,
+    machine: VmMachine,
+    socket_device: VmSocketDevice,
+}
 
-/// A thread-safe handle to the dedicated VM worker thread.
-///
-/// Dropping the handle without calling [`join`](VmThread::join) will
-/// close the command channel, causing the worker thread to exit
-/// gracefully on its own.
 pub struct VmThread {
-    /// Sender end of the command channel.
     sender: mpsc::Sender<VmCommand>,
-
-    /// Optional join handle — taken by [`join`](VmThread::join).
     thread: Option<JoinHandle<()>>,
 }
 
-// All fields are automatically `Send + Sync`; the unsafe impls are
-// provided explicitly to document that the type is designed to be
-// shared across threads.
 unsafe impl Send for VmThread {}
 unsafe impl Sync for VmThread {}
 
 impl VmThread {
-    /// Spawn the VM worker thread and return a handle.
-    ///
-    /// The thread creates a serial GCD dispatch queue named
-    /// `com.speck.vm` and blocks on the command channel.  All
-    /// commands are dispatched synchronously onto the serial queue,
-    /// satisfying the Virtualization.framework threading requirement.
     pub fn spawn() -> Self {
         let (tx, mut rx) = mpsc::channel::<VmCommand>(16);
-
-        // Serial GCD queue — every VZVirtualMachine call must happen
-        // on this queue.
         let queue = DispatchQueue::new("com.speck.vm", DispatchQueueAttr::SERIAL);
+        let control = Arc::new(Mutex::new(VmControl {
+            state: InternalState::Stopped,
+            machine: VmMachine { inner: None },
+            socket_device: VmSocketDevice { inner: None },
+        }));
 
         let thread = thread::Builder::new()
             .name("speck-vm".into())
             .spawn(move || {
-                // Keep the queue alive for the thread's entire lifetime.
-                let _queue = queue;
-
                 while let Some(cmd) = rx.blocking_recv() {
                     match cmd {
                         VmCommand::Start { config, reply } => {
-                            // Future: construct VZVirtualMachine, boot it.
-                            // For now the state machine is a placeholder
-                            // that transitions straight to Running.
-                            let _ = config; // consumed in 02-02
-                            _queue.exec_sync(move || {
-                                let _ = reply.send(Ok(InternalState::Running));
+                            let control = Arc::clone(&control);
+                            let reply = Arc::new(Mutex::new(Some(reply)));
+                            let q = queue.clone();
+                            queue.exec_sync(move || {
+                                if let Err(e) = Self::do_start(&control, &reply, &config, &q) {
+                                    let mut guard = reply.lock().unwrap_or_else(|e| e.into_inner());
+                                    if let Some(sender) = guard.take() {
+                                        let _ = sender.send(Err(e));
+                                    }
+                                }
                             });
                         }
-                        VmCommand::Stop { reply } => {
-                            _queue.exec_sync(move || {
-                                let _ = reply.send(Ok(InternalState::Stopped));
-                            });
+                        VmCommand::Stop {
+                            stop_timeout,
+                            reply,
+                        } => {
+                            let control = Arc::clone(&control);
+                            let q = queue.clone();
+                            let result = Self::do_stop(&control, &q, stop_timeout);
+                            let _ = reply.send(result);
                         }
                         VmCommand::State { reply } => {
-                            _queue.exec_sync(move || {
-                                let _ = reply.send(InternalState::Stopped);
+                            let control = Arc::clone(&control);
+                            queue.exec_sync(move || {
+                                let ctrl = control.lock().unwrap_or_else(|e| e.into_inner());
+                                let _ = reply.send(ctrl.state);
                             });
+                        }
+                        VmCommand::VsockConnect { port, reply } => {
+                            let control = Arc::clone(&control);
+                            let q = queue.clone();
+                            let result = Self::do_vsock_connect(&control, &q, port);
+                            let _ = reply.send(result);
                         }
                         VmCommand::Shutdown => break,
                     }
@@ -148,9 +186,290 @@ impl VmThread {
         }
     }
 
-    // -- internal helpers ------------------------------------------------
+    fn do_start(
+        control: &Arc<Mutex<VmControl>>,
+        reply: &Arc<Mutex<ReplySender>>,
+        config: &GuestConfig,
+        queue: &DispatchQueue,
+    ) -> Result<(), Error> {
+        let mut ctrl = control.lock().unwrap_or_else(|e| e.into_inner());
+        if ctrl.state != InternalState::Stopped {
+            return Err(Error::AlreadyRunning);
+        }
+        ctrl.state = InternalState::Starting;
+        ctrl.machine.inner = None;
+        drop(ctrl);
 
-    /// Send a command via the mpsc channel and await the oneshot reply.
+        let kernel_str = NSString::from_str(
+            config
+                .kernel_path
+                .to_str()
+                .ok_or_else(|| Error::VmFramework("non-UTF-8 kernel path".into()))?,
+        );
+        let bootloader = unsafe {
+            let kernel_url = NSURL::fileURLWithPath(&kernel_str);
+            let bl = VZLinuxBootLoader::initWithKernelURL(VZLinuxBootLoader::alloc(), &kernel_url);
+
+            if !config.cmdline.is_empty() {
+                let cmdline = NSString::from_str(&config.cmdline);
+                bl.setCommandLine(&cmdline);
+            }
+            if let Some(ref initrd) = config.initrd_path {
+                let initrd_str = NSString::from_str(
+                    initrd
+                        .to_str()
+                        .ok_or_else(|| Error::VmFramework("non-UTF-8 initrd path".into()))?,
+                );
+                let initrd_url = NSURL::fileURLWithPath(&initrd_str);
+                bl.setInitialRamdiskURL(Some(&initrd_url));
+            }
+
+            bl
+        };
+
+        let (vm_config, _platform, _entropy, _vsock_container) = unsafe {
+            let vm_config =
+                VZVirtualMachineConfiguration::init(VZVirtualMachineConfiguration::alloc());
+            vm_config.setBootLoader(Some(&bootloader));
+            vm_config.setCPUCount(
+                config
+                    .cpu_count
+                    .try_into()
+                    .map_err(|_| Error::VmFramework("CPU count overflow".into()))?,
+            );
+            vm_config.setMemorySize(config.memory_size_bytes);
+
+            let platform =
+                VZGenericPlatformConfiguration::init(VZGenericPlatformConfiguration::alloc());
+            vm_config.setPlatform(&platform);
+
+            let entropy = VZVirtioEntropyDeviceConfiguration::init(
+                VZVirtioEntropyDeviceConfiguration::alloc(),
+            );
+            let entropy_ref: &VZEntropyDeviceConfiguration = &entropy;
+            let entropy_array = NSArray::from_slice(&[entropy_ref]);
+            vm_config.setEntropyDevices(&entropy_array);
+
+            let vsock = VZVirtioSocketDeviceConfiguration::init(
+                VZVirtioSocketDeviceConfiguration::alloc(),
+            );
+            let vsock_ref: &VZSocketDeviceConfiguration = &vsock;
+            let socket_array = NSArray::from_slice(&[vsock_ref]);
+            vm_config.setSocketDevices(&socket_array);
+
+            Result::<_, Error>::Ok((vm_config, platform, entropy, vsock))
+        }?;
+
+        if let Err(error) = unsafe { vm_config.validateWithError() } {
+            let (mut ctrl, desc) = autoreleasepool(|pool| {
+                let ctrl = control.lock().unwrap_or_else(|e| e.into_inner());
+                let desc = error.localizedDescription();
+                let desc = unsafe { desc.to_str(pool).to_string() };
+                (ctrl, desc)
+            });
+            ctrl.state = InternalState::Stopped;
+            return Err(Error::VmFramework(format!("config validation: {desc}")));
+        }
+
+        let (delegate_tx, _delegate_rx) = std::sync::mpsc::channel::<VmStateEvent>();
+        let delegate = VmDelegate::create(delegate_tx);
+
+        let vm = unsafe {
+            VZVirtualMachine::initWithConfiguration_queue(
+                VZVirtualMachine::alloc(),
+                &vm_config,
+                queue,
+            )
+        };
+        unsafe {
+            vm.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
+        }
+
+        {
+            let mut ctrl = control.lock().unwrap_or_else(|e| e.into_inner());
+            ctrl.machine.inner = Some(vm);
+
+            // Extract the vsock socket device so we can connect to ports later
+            if let Some(ref vm) = *ctrl.machine {
+                let devices = unsafe { vm.socketDevices() };
+                if let Some(device) = devices.firstObject() {
+                    ctrl.socket_device.inner = Some(device);
+                }
+            }
+        }
+
+        let control_for_block = Arc::clone(control);
+        let reply_for_block = Arc::clone(reply);
+        let block = RcBlock::new(move |error: *mut NSError| {
+            autoreleasepool(|pool| {
+                if error.is_null() {
+                    let mut ctrl = control_for_block.lock().unwrap_or_else(|e| e.into_inner());
+                    ctrl.state = InternalState::Running;
+                    let mut guard = reply_for_block.lock().unwrap_or_else(|e| e.into_inner());
+                    if let Some(sender) = guard.take() {
+                        let _ = sender.send(Ok(InternalState::Running));
+                    }
+                } else {
+                    let ns_error = unsafe { &*error };
+                    let desc = ns_error.localizedDescription();
+                    let err_str = unsafe { desc.to_str(pool).to_string() };
+                    let mut ctrl = control_for_block.lock().unwrap_or_else(|e| e.into_inner());
+                    ctrl.state = InternalState::Stopped;
+                    let mut guard = reply_for_block.lock().unwrap_or_else(|e| e.into_inner());
+                    if let Some(sender) = guard.take() {
+                        let _ = sender.send(Err(Error::VmFramework(err_str)));
+                    }
+                }
+            });
+        });
+
+        if let Some(vm) = &*control.lock().unwrap_or_else(|e| e.into_inner()).machine {
+            unsafe { vm.startWithCompletionHandler(&block) };
+        }
+
+        Ok(())
+    }
+
+    fn do_stop(
+        control: &Arc<Mutex<VmControl>>,
+        queue: &DispatchQueue,
+        stop_timeout: Duration,
+    ) -> std::result::Result<InternalState, Error> {
+        {
+            let ctrl = control.lock().unwrap_or_else(|e| e.into_inner());
+            if ctrl.state != InternalState::Running {
+                return Err(Error::NotRunning);
+            }
+        }
+
+        let (done_tx, done_rx) = std::sync::mpsc::channel::<std::result::Result<(), Error>>();
+        let control_for_block = Arc::clone(control);
+        let done_tx_for_block = done_tx.clone();
+
+        queue.exec_sync(move || {
+            let machine = {
+                let mut ctrl = control_for_block.lock().unwrap_or_else(|e| e.into_inner());
+                ctrl.state = InternalState::Stopping;
+                ctrl.machine.inner.take()
+            };
+
+            let control_for_block2 = Arc::clone(&control_for_block);
+            let done_tx_block = done_tx_for_block.clone();
+            let block = RcBlock::new(move |error: *mut NSError| {
+                autoreleasepool(|pool| {
+                    let mut ctrl = control_for_block2.lock().unwrap_or_else(|e| e.into_inner());
+                    if error.is_null() {
+                        ctrl.state = InternalState::Stopped;
+                        let _ = done_tx_block.send(Ok(()));
+                    } else {
+                        let ns_error = unsafe { &*error };
+                        let desc = ns_error.localizedDescription();
+                        let err_str = unsafe { desc.to_str(pool).to_string() };
+                        ctrl.state = InternalState::Running;
+                        let _ = done_tx_block.send(Err(Error::VmFramework(err_str)));
+                    }
+                });
+            });
+
+            if let Some(vm) = &machine {
+                unsafe { vm.stopWithCompletionHandler(&block) };
+            } else {
+                let _ = done_tx_for_block.send(Err(Error::NotRunning));
+            }
+        });
+
+        match done_rx.recv_timeout(stop_timeout) {
+            Ok(Ok(())) => Ok(InternalState::Stopped),
+            Ok(Err(e)) => {
+                let mut ctrl = control.lock().unwrap_or_else(|e| e.into_inner());
+                ctrl.state = InternalState::Stopped;
+                Err(e)
+            }
+            Err(_) => {
+                let mut ctrl = control.lock().unwrap_or_else(|e| e.into_inner());
+                ctrl.state = InternalState::Stopped;
+                Err(Error::StopTimeout)
+            }
+        }
+    }
+
+    fn do_vsock_connect(
+        control: &Arc<Mutex<VmControl>>,
+        queue: &DispatchQueue,
+        port: u32,
+    ) -> Result<VzSocket, Error> {
+        // Quick check that a socket device exists before dispatching to the queue.
+        {
+            let ctrl = control.lock().unwrap_or_else(|e| e.into_inner());
+            if ctrl.socket_device.inner.is_none() {
+                return Err(Error::VsockConnect(
+                    "VM has no vsock socket device".into(),
+                ));
+            }
+        }
+
+        let (done_tx, done_rx) = std::sync::mpsc::channel::<Result<VzSocket, Error>>();
+
+        queue.exec_sync(move || {
+            let ctrl = control.lock().unwrap_or_else(|e| e.into_inner());
+            let device = ctrl.socket_device.inner.as_ref().expect("checked above");
+
+            // Clone so we can downcast without taking from ctrl.
+            let device_clone = device.clone();
+            match device_clone.downcast::<VZVirtioSocketDevice>() {
+                Ok(vsock) => {
+                    // Clone the sender for the block; the original stays for error path.
+                    let done_tx_for_block = done_tx.clone();
+                    let block = StackBlock::new(
+                        move |connection: *mut VZVirtioSocketConnection,
+                              error: *mut NSError| {
+                            if !connection.is_null() {
+                                let conn = unsafe { &*connection };
+                                let raw_fd = unsafe { conn.fileDescriptor() };
+                                // dup the fd — the connection owns the original and
+                                // will close it on dealloc.
+                                let dup_fd = unsafe { libc::dup(raw_fd) };
+                                if dup_fd < 0 {
+                                    let io_err = std::io::Error::last_os_error();
+                                    let _ = done_tx_for_block
+                                        .send(Err(Error::VsockIo(io_err)));
+                                } else {
+                                    let sock = unsafe { VzSocket::from_raw_fd(dup_fd) };
+                                    let _ = done_tx_for_block.send(Ok(sock));
+                                }
+                            } else if !error.is_null() {
+                                autoreleasepool(|pool| {
+                                    let ns_error = unsafe { &*error };
+                                    let desc = ns_error.localizedDescription();
+                                    let err_str =
+                                        unsafe { desc.to_str(pool).to_string() };
+                                    let _ = done_tx_for_block
+                                        .send(Err(Error::VsockConnect(err_str)));
+                                });
+                            } else {
+                                let _ = done_tx_for_block.send(Err(Error::VsockConnect(
+                                    "no connection and no error".into(),
+                                )));
+                            }
+                        },
+                    );
+
+                    unsafe { vsock.connectToPort_completionHandler(port, &block) };
+                }
+                Err(_) => {
+                    let _ = done_tx.send(Err(Error::VsockConnect(
+                        "socket device is not a VZVirtioSocketDevice".into(),
+                    )));
+                }
+            }
+        });
+
+        match done_rx.recv_timeout(Duration::from_secs(30)) {
+            Ok(result) => result,
+            Err(_) => Err(Error::VsockTimeout),
+        }
+    }
+
     fn send_blocking<T>(
         &self,
         cmd: VmCommand,
@@ -163,37 +482,44 @@ impl VmThread {
             .map_err(|_| Error::ChannelError("vm thread reply channel closed".into()))
     }
 
-    // -- public API -------------------------------------------------------
-
-    /// Start the VM with the given configuration.
-    ///
-    /// Returns the new state on success, or an error if the VM was
-    /// already running or the thread died.
-    #[allow(dead_code)]
     pub fn start(&self, config: GuestConfig) -> std::result::Result<InternalState, Error> {
         let (tx, rx) = oneshot::channel();
         self.send_blocking(VmCommand::Start { config, reply: tx }, rx)?
     }
 
-    /// Issue a graceful stop.
-    #[allow(dead_code)]
-    pub fn stop(&self) -> std::result::Result<InternalState, Error> {
+    pub fn stop(&self, stop_timeout: Duration) -> std::result::Result<InternalState, Error> {
         let (tx, rx) = oneshot::channel();
-        self.send_blocking(VmCommand::Stop { reply: tx }, rx)?
+        self.send_blocking(
+            VmCommand::Stop {
+                stop_timeout,
+                reply: tx,
+            },
+            rx,
+        )?
     }
 
-    /// Query the current lifecycle state.
-    #[allow(dead_code)]
+    pub(crate) fn send_shutdown(&self) -> std::result::Result<(), Error> {
+        self.sender
+            .blocking_send(VmCommand::Shutdown)
+            .map_err(|_| Error::ChannelError("vm thread channel closed".into()))
+    }
+
     pub fn state(&self) -> std::result::Result<InternalState, Error> {
         let (tx, rx) = oneshot::channel();
         self.send_blocking(VmCommand::State { reply: tx }, rx)
     }
 
-    /// Send the shutdown signal and block until the worker thread exits.
-    ///
-    /// After this returns the handle is consumed and the VM thread is
-    /// guaranteed to have stopped.
-    pub fn join(mut self) -> std::result::Result<(), Error> {
+    #[allow(dead_code)]
+    pub fn state_as_core(&self) -> std::result::Result<speck_core::VmState, Error> {
+        self.state().map(InternalState::into)
+    }
+
+    pub fn vsock_connect(&self, port: u32) -> std::result::Result<VzSocket, Error> {
+        let (tx, rx) = oneshot::channel();
+        self.send_blocking(VmCommand::VsockConnect { port, reply: tx }, rx)?
+    }
+
+    pub fn join(&mut self) -> std::result::Result<(), Error> {
         self.sender
             .blocking_send(VmCommand::Shutdown)
             .map_err(|_| Error::ChannelError("vm thread channel closed".into()))?;
@@ -202,5 +528,14 @@ impl VmThread {
             handle.join().map_err(|_| Error::ThreadJoin)?;
         }
         Ok(())
+    }
+}
+
+impl Drop for VmThread {
+    fn drop(&mut self) {
+        let _ = self.sender.blocking_send(VmCommand::Shutdown);
+        if let Some(handle) = self.thread.take() {
+            let _ = handle.join();
+        }
     }
 }
