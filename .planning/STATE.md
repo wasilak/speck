@@ -4,13 +4,13 @@ milestone: v1.0
 milestone_name: milestone
 current_phase: 05
 status: executing
-last_updated: "2026-06-26T15:45:00.000Z"
+last_updated: "2026-06-26T15:57:00.000Z"
 progress:
   total_phases: 6
   completed_phases: 4
   total_plans: 21
-  completed_plans: 17
-  percent: 81
+  completed_plans: 18
+  percent: 86
 ---
 
 # State
@@ -100,6 +100,26 @@ All crates compile cleanly: `speck-net`, `speck-core`, `speck-vz` (with tests), 
 - Error enum has DiskAttachment(String) and GuestReadyTimeout variants
 - objc2-virtualization features include VZStorageDeviceConfiguration, VZVirtioBlockDeviceConfiguration, VZStorageDeviceAttachment, VZDiskImageStorageDeviceAttachment
 - Commits: `6a55189`, `a074ed9`, `b1b3200`
+
+## Plan 05-02 Complete
+
+- New `sock_forwarder.rs` module: generic vsock→Unix socket bidirectional forwarder
+  - `pub fn serve(vsock_port, unix_path)` loops accepting vsock connections and proxying each to a Unix socket
+  - Private `fn unix_connect(path)` for AF_UNIX SOCK_STREAM connections
+  - Private `fn proxy_copy(read_fd, write_fd)` for bidirectional byte copy
+  - Per-connection: `dup()` all fds, spawn two threads (one per direction)
+- vminitd extended from 51→453 lines with full boot lifecycle:
+  - `mount_early_filesystems()` — /proc (procfs), /sys (sysfs), /dev (devtmpfs)
+  - `mount_disks()` — /dev/vda→/rootfs (ext4), /dev/vdb→/rootfs/var/lib/containerd (ext4, formats if needed)
+  - `spawn_service_with_restart()` for containerd + buildkitd with 1s backoff loop
+  - `wait_for_containerd_socket()` — polls /rootfs/run/containerd/containerd.sock (50x200ms)
+  - `send_ready_signal()` — vsock listen/accept on ready_port, writes b"READY\n"
+  - Two `sock_forwarder::serve()` threads for containerd (port 9001) and buildkitd (port 9002)
+  - 3 new cmdline parsers: `containerd_vsock_port`, `buildkitd_vsock_port`, `ready_vsock_port`
+  - Old `vsock_echo::serve(port)` call removed; PID 1 now loops on infinite sleep
+- `cargo check --target aarch64-unknown-linux-musl -p speck-guest` passes ✅
+- `cargo check --target aarch64-unknown-linux-musl --bin vminitd` passes ✅
+- Commits: `3864bca`, `6ccbc24`
 
 ## Phase 5 Planned
 
