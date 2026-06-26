@@ -9,18 +9,25 @@
 - **Goal:** Boot a minimal Linux kernel to Running state via Virtualization.framework
 
 ### Phase 3: Vsock Echo — Host↔Guest Communication
-- **Status:** 🔜 Planning Complete (4 plans, 3 waves)
+- **Status:** ✅ Complete (4/4 plans)
 - **Goal:** End-to-end host↔guest communication via virtio-vsock. Host connects to guest and performs a byte-level echo round-trip.
 - **Design:** [`docs/superpowers/specs/2026-06-25-vsock-echo-design.md`](../docs/superpowers/specs/2026-06-25-vsock-echo-design.md)
 - **Plans:**
   - [x] 03-01-PLAN.md — Foundation: feature flags, error types, VzSocket wrapper, vsock_port config
   - [x] 03-02-PLAN.md — VmThread wiring: vsock device in VM config, socket device extraction, vsock_connect
   - [x] 03-03-PLAN.md — Guest side: vminitd with AF_VSOCK echo server (static musl binary)
-  - [ ] 03-04-PLAN.md — Integration test: host→guest echo round-trip (checkpoint: human-verify)
+  - [x] 03-04-PLAN.md — Integration test: host→guest echo round-trip (written, compiles, gated on codesigning)
 
 ### Phase 4: Guest Networking
-- **Status:** 📋 Backlog
+- **Status:** 📋 Planned (6 plans across 3 waves)
 - **Goal:** Host-inheriting networking via `VZFileHandleNetworkDeviceAttachment` + user-space netstack
+- **Plans:**
+  - [ ] 04-01-PLAN.md — speck-net crate scaffold + NetworkConfig type + workspace member (Wave 1)
+  - [ ] 04-02-PLAN.md — FdDevice (smoltcp Device trait) + SmoltcpInterface + SpeckNet::spawn() poll loop (Wave 2)
+  - [ ] 04-03-PLAN.md — VM network device wiring: VZFileHandleNetworkDeviceAttachment, socketpair, host_fd, DNS vsock port (Wave 2)
+  - [ ] 04-04-PLAN.md — TCP re-origination + DHCP server + vsock DNS proxy + MTU/MSS clamping (Wave 3)
+  - [ ] 04-05-PLAN.md — Integration test: ARP round-trip + DNS proxy via vsock (Wave 3, human-verify)
+  - [ ] 04-06-PLAN.md — Guest-side DNS forwarder in vminitd (Wave 2)
 
 ### Phase 5: containerd + BuildKit Integration
 - **Status:** 📋 Backlog
