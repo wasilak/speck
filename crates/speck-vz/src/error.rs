@@ -42,6 +42,14 @@ pub enum Error {
     /// I/O error on vsock socket read/write.
     #[error("vsock I/O error: {0}")]
     VsockIo(#[source] std::io::Error),
+
+    /// Network device configuration or operation error.
+    #[error("Network error: {0}")]
+    Network(String),
+
+    /// Network I/O error (socketpair, dup, etc.).
+    #[error("Network I/O error: {0}")]
+    NetworkIo(#[source] std::io::Error),
 }
 
 /// Convenience alias for `std::result::Result<T, Error>`.
