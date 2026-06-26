@@ -1,5 +1,5 @@
 use std::os::unix::io::RawFd;
-use smoltcp::phy::{self, Device, DeviceCapabilities, Medium, RxToken, TxToken};
+use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::time::Instant;
 
 /// A wrapper around a raw file descriptor that implements `smoltcp::phy::Device`.
@@ -45,7 +45,7 @@ impl Drop for FdDevice {
 }
 
 /// Token that holds received frame data.
-struct FdRxToken(Vec<u8>);
+pub(crate) struct FdRxToken(Vec<u8>);
 
 impl RxToken for FdRxToken {
     fn consume<R, F>(self, f: F) -> R
@@ -57,7 +57,7 @@ impl RxToken for FdRxToken {
 }
 
 /// Token that holds the fd for writing outbound frames.
-struct FdTxToken {
+pub(crate) struct FdTxToken {
     fd: RawFd,
 }
 
