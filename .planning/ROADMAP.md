@@ -30,12 +30,12 @@
   - [x] 04-06-PLAN.md — Guest-side DNS forwarder in vminitd (Wave 3)
 
 ### Phase 5: containerd + BuildKit Integration
-- **Status:** 📋 Planned (5 plans, 3 waves)
+- **Status:** 🏗️ In Progress (1/5 plans)
 - **Goal:** Boot containerd + BuildKit inside the micro-VM supervised by vminitd (PID 1), reachable from the host via gRPC over vsock. Success = host pulls alpine image via containerd ImageService.
 - **Requirements:** RUN-06
 - **Plans:** 5 plans
 - Plans:
-  - [ ] 05-01-PLAN.md — GuestConfig extensions (5 new fields) + Error variants + objc2-vz feature flags (Wave 1)
+  - [x] 05-01-PLAN.md — GuestConfig extensions (5 new fields) + Error variants + objc2-vz feature flags (Wave 1)
   - [ ] 05-02-PLAN.md — Guest-side sock_forwarder + vminitd disk mounting + containerd/buildkitd supervision + READY signal (Wave 1)
   - [ ] 05-03-PLAN.md — scripts/fetch-rootfs.sh + xtask init extension + .github/workflows/build-rootfs.yml (Wave 1)
   - [ ] 05-04-PLAN.md — VmThread disk attachment (VZVirtioBlockDeviceConfiguration) + WaitForGuestReady command + containerd-client dev-dep (Wave 2, has checkpoint)

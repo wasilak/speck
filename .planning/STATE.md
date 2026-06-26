@@ -1,8 +1,23 @@
+---
+gsd_state_version: 1.0
+milestone: v1.0
+milestone_name: milestone
+current_phase: 05
+status: executing
+last_updated: "2026-06-26T15:45:00.000Z"
+progress:
+  total_phases: 6
+  completed_phases: 4
+  total_plans: 21
+  completed_plans: 17
+  percent: 81
+---
+
 # State
 
-**Current phase:** 04 — Guest Networking (✅ Complete)
-**Status:** Complete (6/6 plans)
-**Previous phase:** 03 — Vsock Echo (✅ Complete)
+**Current phase:** 05
+**Status:** Executing Phase 05
+**Previous phase:** 04 — Guest Networking (✅ Complete)
 
 ## Phase 04 Summary
 
@@ -76,3 +91,23 @@ All crates compile cleanly: `speck-net`, `speck-core`, `speck-vz` (with tests), 
 - Phase 4 Guest Networking context captured via discuss-phase
 - Decisions: smoltcp Rust-only netstack, 172.16.0.0/24 DHCP, vsock-based DNS proxy, MSS clamping, new speck-net crate
 - Context: `.planning/phases/04-guest-networking/04-CONTEXT.md`
+
+## Plan 05-01 Complete
+
+- GuestConfig extended with 5 new optional fields: rootfs_disk_path, data_disk_path, containerd_vsock_port, buildkitd_vsock_port, ready_vsock_port
+- GuestConfigBuilder has setter methods for all 5 new fields
+- GuestConfig::validate() rejects set-but-missing rootfs_disk_path and data_disk_path
+- Error enum has DiskAttachment(String) and GuestReadyTimeout variants
+- objc2-virtualization features include VZStorageDeviceConfiguration, VZVirtioBlockDeviceConfiguration, VZStorageDeviceAttachment, VZDiskImageStorageDeviceAttachment
+- Commits: `6a55189`, `a074ed9`, `b1b3200`
+
+## Phase 5 Planned
+
+- Phase 5 containerd + BuildKit Integration context captured via discuss-phase
+- 5 plans across 3 waves planned:
+  - **Wave 1** (parallel): ~~05-01 GuestConfig fields~~ ✅, 05-02 vminitd supervision, 05-03 rootfs CI + fetch
+  - **Wave 2**: 05-04 Host-side disk attach + WaitForGuestReady
+  - **Wave 3**: 05-05 Guest API + integration tests
+- Success criteria: containerd reachable via gRPC/vsock + alpine image pull succeeds
+- Plans: `.planning/phases/05-containerd-buildkit-integration/05-0[1-5]-PLAN.md`
+- Context: `.planning/phases/05-containerd-buildkit-integration/05-CONTEXT.md`
