@@ -32,7 +32,7 @@ objc2-virtualization = { version = "0.3", features = [
 block2 = "0.6"
 dispatch2 = "0.3"
 libc = "0.2"
-socket2 = "0.5"
+socket2 = { version = "0.5", features = ["all"] }
 thiserror = "2"
 tokio = { version = "1.52", features = ["sync"] }
 

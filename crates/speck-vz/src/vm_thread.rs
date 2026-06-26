@@ -1,4 +1,6 @@
 use std::ops::{Deref, DerefMut};
+use std::os::fd::AsRawFd;
+use std::os::unix::io::RawFd;
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -6,16 +8,20 @@ use tokio::sync::{mpsc, oneshot};
 
 use block2::{RcBlock, StackBlock};
 use dispatch2::{DispatchQueue, DispatchQueueAttr};
+use objc2::ffi::NSInteger;
 use objc2::AnyThread;
 use objc2::rc::{Retained, autoreleasepool};
 use objc2::runtime::ProtocolObject;
-use objc2_foundation::{NSArray, NSError, NSString, NSURL};
+use objc2_foundation::{NSArray, NSError, NSFileHandle, NSString, NSURL};
 use objc2_virtualization::{
     VZEntropyDeviceConfiguration, VZGenericPlatformConfiguration, VZLinuxBootLoader,
+    VZMACAddress, VZNetworkDeviceAttachment, VZNetworkDeviceConfiguration,
     VZSocketDevice, VZSocketDeviceConfiguration, VZVirtioEntropyDeviceConfiguration,
-    VZVirtioSocketConnection, VZVirtioSocketDevice, VZVirtioSocketDeviceConfiguration,
-    VZVirtualMachine, VZVirtualMachineConfiguration,
+    VZVirtioNetworkDeviceConfiguration, VZVirtioSocketConnection, VZVirtioSocketDevice,
+    VZVirtioSocketDeviceConfiguration, VZVirtualMachine, VZVirtualMachineConfiguration,
+    VZFileHandleNetworkDeviceAttachment,
 };
+use socket2::{Domain, Socket, Type};
 
 use crate::config::GuestConfig;
 use crate::delegate::{VmDelegate, VmStateEvent};
@@ -88,6 +94,12 @@ pub(crate) enum VmCommand {
         port: u32,
         reply: oneshot::Sender<std::result::Result<VzSocket, Error>>,
     },
+    NetstackFd {
+        reply: oneshot::Sender<std::result::Result<RawFd, Error>>,
+    },
+    DnsVsockFd {
+        reply: oneshot::Sender<std::result::Result<RawFd, Error>>,
+    },
     Shutdown,
 }
 
@@ -114,6 +126,8 @@ struct VmControl {
     state: InternalState,
     machine: VmMachine,
     socket_device: VmSocketDevice,
+    netstack_fd: Option<RawFd>,
+    dns_vsock_fd: Option<RawFd>,
 }
 
 pub struct VmThread {
@@ -132,6 +146,8 @@ impl VmThread {
             state: InternalState::Stopped,
             machine: VmMachine { inner: None },
             socket_device: VmSocketDevice { inner: None },
+            netstack_fd: None,
+            dns_vsock_fd: None,
         }));
 
         let thread = thread::Builder::new()
@@ -173,6 +189,40 @@ impl VmThread {
                             let q = queue.clone();
                             let result = Self::do_vsock_connect(&control, &q, port);
                             let _ = reply.send(result);
+                        }
+                        VmCommand::NetstackFd { reply } => {
+                            let ctrl = control.lock().unwrap_or_else(|e| e.into_inner());
+                            if let Some(fd) = ctrl.netstack_fd {
+                                let dup_fd = unsafe { libc::dup(fd) };
+                                if dup_fd < 0 {
+                                    let _ = reply.send(Err(Error::NetworkIo(
+                                        std::io::Error::last_os_error(),
+                                    )));
+                                } else {
+                                    let _ = reply.send(Ok(dup_fd));
+                                }
+                            } else {
+                                let _ = reply.send(Err(Error::Network(
+                                    "no netstack fd available".into(),
+                                )));
+                            }
+                        }
+                        VmCommand::DnsVsockFd { reply } => {
+                            let ctrl = control.lock().unwrap_or_else(|e| e.into_inner());
+                            if let Some(fd) = ctrl.dns_vsock_fd {
+                                let dup_fd = unsafe { libc::dup(fd) };
+                                if dup_fd < 0 {
+                                    let _ = reply.send(Err(Error::NetworkIo(
+                                        std::io::Error::last_os_error(),
+                                    )));
+                                } else {
+                                    let _ = reply.send(Ok(dup_fd));
+                                }
+                            } else {
+                                let _ = reply.send(Err(Error::Network(
+                                    "no dns vsock fd available".into(),
+                                )));
+                            }
                         }
                         VmCommand::Shutdown => break,
                     }
@@ -227,6 +277,9 @@ impl VmThread {
             bl
         };
 
+        let network = config.network.clone();
+        let mut dup_host_fd: Option<RawFd> = None;
+
         let (vm_config, _platform, _entropy, _vsock_container) = unsafe {
             let vm_config =
                 VZVirtualMachineConfiguration::init(VZVirtualMachineConfiguration::alloc());
@@ -256,6 +309,74 @@ impl VmThread {
             let vsock_ref: &VZSocketDeviceConfiguration = &vsock;
             let socket_array = NSArray::from_slice(&[vsock_ref]);
             vm_config.setSocketDevices(&socket_array);
+
+            // ── Network device (Virtio + file handle attachment) ──────────
+            if let Some(ref net) = network {
+                let sockets = Socket::pair(Domain::UNIX, Type::DGRAM, None)
+                    .map_err(Error::NetworkIo)?;
+                let (host_socket, vm_socket) = (sockets.0, sockets.1);
+
+                host_socket
+                    .set_nonblocking(true)
+                    .map_err(Error::NetworkIo)?;
+
+                // dup the vm-facing fd for the NSFileHandle
+                let vm_fd = vm_socket.as_raw_fd();
+                let dup_vm_fd = libc::dup(vm_fd);
+                if dup_vm_fd < 0 {
+                    return Err(Error::NetworkIo(std::io::Error::last_os_error()));
+                }
+
+                let file_handle = NSFileHandle::initWithFileDescriptor(
+                    NSFileHandle::alloc(),
+                    dup_vm_fd,
+                );
+
+                let attachment =
+                    VZFileHandleNetworkDeviceAttachment::initWithFileHandle(
+                        VZFileHandleNetworkDeviceAttachment::alloc(),
+                        &file_handle,
+                    );
+
+                // Only set the MTU when it differs from the default (1500)
+                if net.mtu > 1500 {
+                    attachment.setMaximumTransmissionUnit(net.mtu as NSInteger);
+                }
+
+                let virtio_net = VZVirtioNetworkDeviceConfiguration::init(
+                    VZVirtioNetworkDeviceConfiguration::alloc(),
+                );
+                let attachment_ref: &VZNetworkDeviceAttachment = &attachment;
+                virtio_net.setAttachment(Some(attachment_ref));
+
+                // Convert the raw MAC bytes to a VZMACAddress via string.
+                let mac_str = format!(
+                    "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+                    net.mac[0], net.mac[1], net.mac[2],
+                    net.mac[3], net.mac[4], net.mac[5],
+                );
+                let mac_ns = NSString::from_str(&mac_str);
+                let mac_addr = VZMACAddress::initWithString(
+                    VZMACAddress::alloc(),
+                    &mac_ns,
+                )
+                .ok_or_else(|| {
+                    Error::VmFramework("invalid MAC address".into())
+                })?;
+                virtio_net.setMACAddress(&mac_addr);
+
+                let net_ref: &VZNetworkDeviceConfiguration = &virtio_net;
+                let net_array = NSArray::from_slice(&[net_ref]);
+                vm_config.setNetworkDevices(&net_array);
+
+                // Dup the host-facing fd for storage (original closes on drop).
+                let host_fd = host_socket.as_raw_fd();
+                let d = libc::dup(host_fd);
+                if d < 0 {
+                    return Err(Error::NetworkIo(std::io::Error::last_os_error()));
+                }
+                dup_host_fd = Some(d);
+            }
 
             Result::<_, Error>::Ok((vm_config, platform, entropy, vsock))
         }?;
@@ -296,8 +417,14 @@ impl VmThread {
                     ctrl.socket_device.inner = Some(device);
                 }
             }
+
+            // Store the netstack fd so consumers can retrieve it
+            if network.is_some() {
+                ctrl.netstack_fd = dup_host_fd;
+            }
         }
 
+        let dns_vsock_port = config.dns_vsock_port;
         let control_for_block = Arc::clone(control);
         let reply_for_block = Arc::clone(reply);
         let block = RcBlock::new(move |error: *mut NSError| {
@@ -308,6 +435,45 @@ impl VmThread {
                     let mut guard = reply_for_block.lock().unwrap_or_else(|e| e.into_inner());
                     if let Some(sender) = guard.take() {
                         let _ = sender.send(Ok(InternalState::Running));
+                    }
+
+                    // ── vsock DNS connection (D-07) ────────────────────────
+                    let dns_device = ctrl.socket_device.inner.clone();
+                    drop(ctrl);
+                    if let Some(dns_port) = dns_vsock_port {
+                        let control_for_dns = Arc::clone(&control_for_block);
+                        if let Some(device) = dns_device {
+                            match device.downcast::<VZVirtioSocketDevice>() {
+                                Ok(vsock) => {
+                                    let dns_block = StackBlock::new(
+                                        move |conn: *mut VZVirtioSocketConnection,
+                                              _err: *mut NSError| {
+                                        if !conn.is_null() {
+                                            let raw_fd = unsafe { (*conn).fileDescriptor() };
+                                            let dup_fd = unsafe { libc::dup(raw_fd) };
+                                            if dup_fd < 0 {
+                                                // Best-effort; log skipped.
+                                            } else {
+                                                let mut c = control_for_dns
+                                                    .lock()
+                                                    .unwrap_or_else(|e| e.into_inner());
+                                                c.dns_vsock_fd = Some(dup_fd);
+                                            }
+                                        }
+                                    },
+                                    );
+                                    unsafe {
+                                        vsock.connectToPort_completionHandler(
+                                            dns_port,
+                                            &dns_block,
+                                        );
+                                    }
+                                }
+                                Err(_) => {
+                                    // Not a VZVirtioSocketDevice — best-effort skip.
+                                }
+                            }
+                        }
                     }
                 } else {
                     let ns_error = unsafe { &*error };
@@ -517,6 +683,26 @@ impl VmThread {
     pub fn vsock_connect(&self, port: u32) -> std::result::Result<VzSocket, Error> {
         let (tx, rx) = oneshot::channel();
         self.send_blocking(VmCommand::VsockConnect { port, reply: tx }, rx)?
+    }
+
+    /// Retrieve the raw file descriptor for the host side of the netstack socketpair.
+    ///
+    /// The returned fd is a **dup** of the internal one; the caller owns it and
+    /// must close it when done. Returns an error if networking was not configured
+    /// or the VM is not running.
+    pub fn netstack_fd(&self) -> std::result::Result<RawFd, Error> {
+        let (tx, rx) = oneshot::channel();
+        self.send_blocking(VmCommand::NetstackFd { reply: tx }, rx)?
+    }
+
+    /// Retrieve the raw file descriptor for the vsock DNS connection.
+    ///
+    /// The returned fd is a **dup** of the internal one; the caller owns it and
+    /// must close it when done. Returns an error if no DNS vsock connection was
+    /// established.
+    pub fn dns_vsock_fd(&self) -> std::result::Result<RawFd, Error> {
+        let (tx, rx) = oneshot::channel();
+        self.send_blocking(VmCommand::DnsVsockFd { reply: tx }, rx)?
     }
 
     pub fn join(&mut self) -> std::result::Result<(), Error> {
