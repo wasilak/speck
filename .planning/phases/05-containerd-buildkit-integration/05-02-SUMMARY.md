@@ -159,6 +159,18 @@ None.
 - vminitd has cmdline parsing for `containerd_vsock_port`, `buildkitd_vsock_port`, `ready_vsock_port` — the host must pass these as kernel cmdline arguments
 - All forwarder Unix socket paths use `/rootfs/...` prefix (no switch_root in Phase 5)
 
+## Self-Check: PASSED
+
+- ✅ `crates/speck-guest/src/sock_forwarder.rs` exists (5.3K)
+- ✅ `.planning/phases/05-containerd-buildkit-integration/05-02-SUMMARY.md` exists (8.5K)
+- ✅ Commit `3864bca` — feat(05-02): add generic vsock→Unix socket bidirectional forwarder
+- ✅ Commit `6ccbc24` — feat(05-02): extend vminitd with disk mounting, service supervision, READY signal, forwarders
+- ✅ Commit `f07b432` — docs(05-02): complete Phase 5 Plan 2
+- ✅ `cargo check --target aarch64-unknown-linux-musl -p speck-guest` passes
+- ✅ `cargo check --target aarch64-unknown-linux-musl --bin vminitd` passes
+- ✅ ROADMAP.md updated (05-02 marked complete, 2/5 plans)
+- ✅ STATE.md updated (completed_plans: 18, percent: 86)
+
 ---
 
 *Phase: 05-containerd-buildkit-integration*
