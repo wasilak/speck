@@ -1,0 +1,15 @@
+[package]
+name = "speck-net"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+
+[dependencies]
+speck-core = { path = "../speck-core" }
+tokio = { version = "1.52", features = ["io-util", "sync"] }
+socket2 = "0.5"
+libc = "0.2"
+thiserror = "2"
+smoltcp = "0.13.1"

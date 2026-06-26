@@ -1,0 +1,23 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/speck-core",
+    "crates/speck-cli",
+    "crates/speck-vz",
+    "crates/speck-dockerd",
+    "crates/speck-guest",
+    "crates/speck-net",
+    "xtask",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+authors = ["Piotr Boruc <piotr.m.boruc@gmail.com>"]
+license = "AGPL-3.0-only"
+repository = "https://github.com/speck-vm/speck"
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
