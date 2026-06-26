@@ -1,8 +1,18 @@
 # State
 
 **Current phase:** 03 — Vsock Echo
-**Status:** Executing (2/4 plans complete)
+**Status:** Executing (3/4 plans complete)
 **Previous phase:** 02 — FFI/Bridge + Bare VM Boot (✅ Complete)
+
+## Plan 03-02 Complete
+
+- `VZVirtioSocketDeviceConfiguration` wired into VM config in `do_start`
+- `VZSocketDevice` extracted from `vm.socketDevices()` after VM start, stored via `VmSocketDevice` Send wrapper
+- `VmCommand::VsockConnect{port, reply}` IPC variant + `do_vsock_connect` handler
+- `do_vsock_connect` calls `connectToPort_completionHandler` with `StackBlock`, `dup()`s fd, wraps in `VzSocket`
+- `Guest::vsock_connect(port)` public API delegating to `VmThread::vsock_connect(port)`
+- `cargo check -p speck-vz` passes ✅
+- Commit: `2f0cd5e`
 
 ## Plan 03-01 Complete
 

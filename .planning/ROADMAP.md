@@ -14,7 +14,7 @@
 - **Design:** [`docs/superpowers/specs/2026-06-25-vsock-echo-design.md`](../docs/superpowers/specs/2026-06-25-vsock-echo-design.md)
 - **Plans:**
   - [x] 03-01-PLAN.md — Foundation: feature flags, error types, VzSocket wrapper, vsock_port config
-  - [ ] 03-02-PLAN.md — VmThread wiring: vsock device in VM config, socket device extraction, vsock_connect
+  - [x] 03-02-PLAN.md — VmThread wiring: vsock device in VM config, socket device extraction, vsock_connect
   - [x] 03-03-PLAN.md — Guest side: vminitd with AF_VSOCK echo server (static musl binary)
   - [ ] 03-04-PLAN.md — Integration test: host→guest echo round-trip (checkpoint: human-verify)
 
