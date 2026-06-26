@@ -50,6 +50,14 @@ pub enum Error {
     /// Network I/O error (socketpair, dup, etc.).
     #[error("Network I/O error: {0}")]
     NetworkIo(#[source] std::io::Error),
+
+    /// Disk attachment error (virtio-blk attachment failure).
+    #[error("Disk attachment error: {0}")]
+    DiskAttachment(String),
+
+    /// Guest ready signal not received within the expected window.
+    #[error("Guest ready signal timed out")]
+    GuestReadyTimeout,
 }
 
 /// Convenience alias for `std::result::Result<T, Error>`.

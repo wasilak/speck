@@ -28,6 +28,10 @@ objc2-virtualization = { version = "0.3", features = [
     "VZMACAddress",
     "block2",
     "dispatch2",
+    "VZStorageDeviceConfiguration",
+    "VZVirtioBlockDeviceConfiguration",
+    "VZStorageDeviceAttachment",
+    "VZDiskImageStorageDeviceAttachment",
 ] }
 block2 = "0.6"
 dispatch2 = "0.3"
