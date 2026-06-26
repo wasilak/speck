@@ -1,0 +1,63 @@
+name: Build speck rootfs image
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Rootfs version (e.g. 0.1.0)
+        required: true
+        default: "0.1.0"
+  push:
+    tags: ["rootfs-v*"]
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create raw ext4 image (512 MB)
+        run: |
+          dd if=/dev/zero of=rootfs.img bs=1M count=512
+          mkfs.ext4 -O dir_index,extent -L speck-rootfs rootfs.img
+
+      - name: Mount and populate rootfs
+        run: |
+          mkdir -p /tmp/rootfs
+          sudo mount -o loop rootfs.img /tmp/rootfs
+          sudo mkdir -p /tmp/rootfs/{usr/bin,usr/local/bin,etc/containerd,run,tmp,proc,sys,var/lib/containerd}
+
+          # Install containerd 2.3.2 static arm64
+          curl -fsSL https://github.com/containerd/containerd/releases/download/v2.3.2/containerd-static-2.3.2-linux-arm64.tar.gz \
+            | sudo tar -C /tmp/rootfs/usr/local -xz
+
+          # Install runc 1.5.0
+          sudo curl -fsSL https://github.com/opencontainers/runc/releases/download/v1.5.0/runc.arm64 \
+            -o /tmp/rootfs/usr/bin/runc
+          sudo chmod +x /tmp/rootfs/usr/bin/runc
+
+          # Install buildkitd 0.31.1
+          curl -fsSL https://github.com/moby/buildkit/releases/download/v0.31.1/buildkit-v0.31.1.linux-arm64.tar.gz \
+            | sudo tar -C /tmp/rootfs/usr/local -xz
+
+          # Write containerd config.toml (version 3, overlayfs snapshotter)
+          sudo tee /tmp/rootfs/etc/containerd/config.toml <<'EOF'
+          version = 3
+          [plugins.'io.containerd.cri.v1.images']
+            snapshotter = "overlayfs"
+          EOF
+
+          sudo umount /tmp/rootfs
+
+      - name: Compress and compute checksum
+        run: |
+          gzip -9 -c rootfs.img > speck-rootfs-${{ github.event.inputs.version || github.ref_name }}-arm64.img.gz
+          shasum -a 256 rootfs.img > speck-rootfs-${{ github.event.inputs.version || github.ref_name }}-arm64.img.sha256
+
+      - name: Upload as GitHub Release artifact
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: rootfs-${{ github.event.inputs.version || github.ref_name }}
+          files: |
+            speck-rootfs-*.img.gz
+            speck-rootfs-*.img.sha256
