@@ -4,13 +4,13 @@ milestone: v1.0
 milestone_name: milestone
 current_phase: 05
 status: executing
-last_updated: "2026-06-26T15:57:00.000Z"
+last_updated: "2026-06-26T18:07:30.000Z"
 progress:
   total_phases: 6
   completed_phases: 4
   total_plans: 21
-  completed_plans: 18
-  percent: 86
+  completed_plans: 19
+  percent: 90
 ---
 
 # State
@@ -121,11 +121,19 @@ All crates compile cleanly: `speck-net`, `speck-core`, `speck-vz` (with tests), 
 - `cargo check --target aarch64-unknown-linux-musl --bin vminitd` passes ✅
 - Commits: `3864bca`, `6ccbc24`
 
+## Plan 05-03 Complete
+
+- `scripts/fetch-rootfs.sh` — download + SHA256 verify + data.img stub creation
+- `xtask/src/main.rs` — `task_init()` extended to call `fetch-rootfs.sh` alongside `fetch-kernel.sh`
+- `.github/workflows/build-rootfs.yml` — CI arm64 ext4 image builder with containerd 2.3.2 + runc 1.5.0 + buildkitd 0.31.1
+- All verifications pass: bash -n, cargo build, YAML validation
+- Commits: `e434612`, `9d510e3`, `7710689`
+
 ## Phase 5 Planned
 
 - Phase 5 containerd + BuildKit Integration context captured via discuss-phase
 - 5 plans across 3 waves planned:
-  - **Wave 1** (parallel): ~~05-01 GuestConfig fields~~ ✅, 05-02 vminitd supervision, 05-03 rootfs CI + fetch
+  - **Wave 1** (parallel): ~~05-01 GuestConfig fields~~ ✅, ~~05-02 vminitd supervision~~ ✅, ~~05-03 rootfs CI + fetch~~ ✅
   - **Wave 2**: 05-04 Host-side disk attach + WaitForGuestReady
   - **Wave 3**: 05-05 Guest API + integration tests
 - Success criteria: containerd reachable via gRPC/vsock + alpine image pull succeeds
