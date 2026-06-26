@@ -56,6 +56,38 @@ pub struct GuestConfig {
     /// When set, the host connects to this port after the VM starts
     /// to forward DNS queries to the host's system resolver.
     pub dns_vsock_port: Option<u32>,
+
+    /// Absolute path to the ext4 rootfs disk image.
+    ///
+    /// The rootfs disk will appear as `/dev/vda` inside the guest.
+    /// Must point to a valid ext4 filesystem image; the path must
+    /// exist at VM start time.
+    pub rootfs_disk_path: Option<PathBuf>,
+
+    /// Absolute path to the ext4 data disk image.
+    ///
+    /// The data disk will appear as `/dev/vdb` inside the guest and
+    /// is mounted at `/var/lib/containerd`.  Must point to a valid
+    /// ext4 filesystem image; the path must exist at VM start time.
+    pub data_disk_path: Option<PathBuf>,
+
+    /// Vsock port for the containerd gRPC forwarder inside the guest.
+    ///
+    /// The host connects to this vsock port to forward containerd's
+    /// gRPC Unix socket to the host.  Recommended: 9001.
+    pub containerd_vsock_port: Option<u32>,
+
+    /// Vsock port for the BuildKit gRPC forwarder inside the guest.
+    ///
+    /// The host connects to this vsock port to forward BuildKit's
+    /// gRPC Unix socket to the host.  Recommended: 9002.
+    pub buildkitd_vsock_port: Option<u32>,
+
+    /// Vsock port for the vminitd READY signal.
+    ///
+    /// vminitd sends a one-byte READY signal on this port once
+    /// containerd and BuildKit are fully operational.  Recommended: 9000.
+    pub ready_vsock_port: Option<u32>,
 }
 
 impl Default for GuestConfig {
@@ -70,6 +102,11 @@ impl Default for GuestConfig {
             vsock_port: 1234,
             network: None,
             dns_vsock_port: None,
+            rootfs_disk_path: None,
+            data_disk_path: None,
+            containerd_vsock_port: None,
+            buildkitd_vsock_port: None,
+            ready_vsock_port: None,
         }
     }
 }
@@ -110,6 +147,16 @@ impl GuestConfig {
                 ));
             }
         }
+        if let Some(ref rootfs) = self.rootfs_disk_path
+            && !rootfs.exists()
+        {
+            return Err(format!("rootfs disk not found: {}", rootfs.display()));
+        }
+        if let Some(ref data) = self.data_disk_path
+            && !data.exists()
+        {
+            return Err(format!("data disk not found: {}", data.display()));
+        }
         Ok(())
     }
 }
@@ -142,6 +189,11 @@ pub struct GuestConfigBuilder {
     vsock_port: u32,
     network: Option<NetworkConfig>,
     dns_vsock_port: Option<u32>,
+    rootfs_disk_path: Option<PathBuf>,
+    data_disk_path: Option<PathBuf>,
+    containerd_vsock_port: Option<u32>,
+    buildkitd_vsock_port: Option<u32>,
+    ready_vsock_port: Option<u32>,
 }
 
 impl Default for GuestConfigBuilder {
@@ -156,6 +208,11 @@ impl Default for GuestConfigBuilder {
             vsock_port: 1234,
             network: None,
             dns_vsock_port: None,
+            rootfs_disk_path: None,
+            data_disk_path: None,
+            containerd_vsock_port: None,
+            buildkitd_vsock_port: None,
+            ready_vsock_port: None,
         }
     }
 }
@@ -218,6 +275,47 @@ impl GuestConfigBuilder {
         self
     }
 
+    /// Set the path to the rootfs ext4 disk image.
+    ///
+    /// This disk will appear as `/dev/vda` in the guest.
+    pub fn rootfs_disk_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.rootfs_disk_path = Some(path.into());
+        self
+    }
+
+    /// Set the path to the data ext4 disk image.
+    ///
+    /// This disk will appear as `/dev/vdb` in the guest and
+    /// is mounted at `/var/lib/containerd`.
+    pub fn data_disk_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.data_disk_path = Some(path.into());
+        self
+    }
+
+    /// Set the vsock port for the containerd gRPC forwarder.
+    ///
+    /// Recommended: 9001.
+    pub fn containerd_vsock_port(mut self, port: u32) -> Self {
+        self.containerd_vsock_port = Some(port);
+        self
+    }
+
+    /// Set the vsock port for the BuildKit gRPC forwarder.
+    ///
+    /// Recommended: 9002.
+    pub fn buildkitd_vsock_port(mut self, port: u32) -> Self {
+        self.buildkitd_vsock_port = Some(port);
+        self
+    }
+
+    /// Set the vsock port for the vminitd READY signal.
+    ///
+    /// Recommended: 9000.
+    pub fn ready_vsock_port(mut self, port: u32) -> Self {
+        self.ready_vsock_port = Some(port);
+        self
+    }
+
     /// Consume the builder and produce a [`GuestConfig`].
     ///
     /// # Panics
@@ -236,6 +334,11 @@ impl GuestConfigBuilder {
             vsock_port: self.vsock_port,
             network: self.network,
             dns_vsock_port: self.dns_vsock_port,
+            rootfs_disk_path: self.rootfs_disk_path,
+            data_disk_path: self.data_disk_path,
+            containerd_vsock_port: self.containerd_vsock_port,
+            buildkitd_vsock_port: self.buildkitd_vsock_port,
+            ready_vsock_port: self.ready_vsock_port,
         }
     }
 }
