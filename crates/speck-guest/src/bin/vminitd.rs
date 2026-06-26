@@ -8,6 +8,7 @@
 //! and buildkitd gRPC access.
 //!
 //! Built as a static musl binary, placed at /init in a cpio initrd.
+#![cfg(target_os = "linux")]
 
 use std::io;
 
