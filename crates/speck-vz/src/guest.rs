@@ -188,6 +188,7 @@ mod tests {
     use std::time::Duration;
 
     #[test]
+    #[ignore = "requires com.apple.security.virtualization entitlement + signed binary"]
     fn test_guest_boots_to_running() {
         let config = GuestConfig {
             kernel_path: std::path::PathBuf::from(
