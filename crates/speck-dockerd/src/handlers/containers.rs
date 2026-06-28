@@ -114,6 +114,7 @@ pub async fn create(
         labels.insert("speck.binds".into(), binds.join("\u{1f}"));
     }
 
+    let image_for_event = body.image.clone();
     let client = state.containerd_client().await?;
     let container_id = client
         .container_create(ContainerCreateSpec {
@@ -128,6 +129,10 @@ pub async fn create(
             cpu_shares: host_config.cpu_shares,
         })
         .await?;
+    crate::handlers::events::emit_event(
+        &state,
+        json!({"Type": "container", "Action": "create", "Actor": {"ID": container_id, "Attributes": {"image": image_for_event}}}),
+    );
 
     Ok((
         StatusCode::CREATED,
@@ -149,6 +154,10 @@ pub async fn start(State(state): State<AppState>, Path(id): Path<String>) -> Res
         })
         .await?;
     client.task_start(&id).await?;
+    crate::handlers::events::emit_event(
+        &state,
+        json!({"Type": "container", "Action": "start", "Actor": {"ID": id}}),
+    );
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -156,6 +165,10 @@ pub async fn stop(State(state): State<AppState>, Path(id): Path<String>) -> Resu
     let client = state.containerd_client().await?;
     client.task_stop(&id).await?;
     let _ = client.task_wait(&id).await;
+    crate::handlers::events::emit_event(
+        &state,
+        json!({"Type": "container", "Action": "stop", "Actor": {"ID": id}}),
+    );
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -214,6 +227,10 @@ pub async fn remove(State(state): State<AppState>, Path(id): Path<String>) -> Re
     let _ = client.task_kill(&id, 15).await;
     let _ = client.task_delete(&id).await;
     client.container_delete(&id).await?;
+    crate::handlers::events::emit_event(
+        &state,
+        json!({"Type": "container", "Action": "destroy", "Actor": {"ID": id}}),
+    );
     Ok(StatusCode::NO_CONTENT)
 }
 

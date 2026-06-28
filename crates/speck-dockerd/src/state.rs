@@ -1,6 +1,9 @@
-use std::path::PathBuf;
 use std::collections::{HashMap, VecDeque};
+use std::path::PathBuf;
 use std::sync::Arc;
+
+use speck_core::network::NetworkSummary;
+use speck_core::volume::VolumeSummary;
 
 use crate::containerd_client::ContainerdClient;
 use crate::error::{DockerApiError, Result};
@@ -10,6 +13,9 @@ pub struct AppState {
     pub guest: Arc<speck_vz::Guest>,
     pub containerd_proxy: Arc<tokio::sync::Mutex<Option<PathBuf>>>,
     pub exec_store: Arc<tokio::sync::Mutex<ExecStore>>,
+    pub network_store: Arc<tokio::sync::Mutex<HashMap<String, NetworkSummary>>>,
+    pub volume_store: Arc<tokio::sync::Mutex<HashMap<String, VolumeSummary>>>,
+    pub event_tx: Arc<tokio::sync::broadcast::Sender<serde_json::Value>>,
 }
 
 #[derive(Default)]
@@ -61,6 +67,9 @@ impl AppState {
             guest,
             containerd_proxy: Arc::new(tokio::sync::Mutex::new(None)),
             exec_store: Arc::new(tokio::sync::Mutex::new(ExecStore::default())),
+            network_store: Arc::new(tokio::sync::Mutex::new(default_networks())),
+            volume_store: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            event_tx: Arc::new(tokio::sync::broadcast::channel(256).0),
         }
     }
 
@@ -69,6 +78,9 @@ impl AppState {
             guest,
             containerd_proxy: Arc::new(tokio::sync::Mutex::new(Some(path))),
             exec_store: Arc::new(tokio::sync::Mutex::new(ExecStore::default())),
+            network_store: Arc::new(tokio::sync::Mutex::new(default_networks())),
+            volume_store: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            event_tx: Arc::new(tokio::sync::broadcast::channel(256).0),
         }
     }
 
@@ -91,4 +103,14 @@ impl AppState {
         let path = self.containerd_path().await?;
         ContainerdClient::connect(path).await
     }
+}
+
+fn default_networks() -> HashMap<String, NetworkSummary> {
+    let bridge = NetworkSummary {
+        id: "bridge".into(),
+        name: "bridge".into(),
+        driver: "bridge".into(),
+        scope: "local".into(),
+    };
+    HashMap::from([("bridge".into(), bridge)])
 }
