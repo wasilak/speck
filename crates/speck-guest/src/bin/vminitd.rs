@@ -34,6 +34,13 @@ mod linux {
         mount_early_filesystems();
         mount_disks();
 
+        // Mount VirtioFS volumes and Speck home for Ryuk socket access
+        mount_virtiofs_volumes("/proc/cmdline");
+        mount_speck_home("/proc/cmdline");
+        let vol_tags = parse_cmdline_volume_tags("/proc/cmdline");
+        create_named_volume_dirs(&vol_tags);
+        eprintln!("vminitd: mounted {} virtiofs devices", vol_tags.len());
+
         // If DNS proxy vsock port is configured, spawn the DNS forwarder
         if let Some(dns_vsock_port) = dns_port {
             std::thread::spawn(
@@ -428,6 +435,174 @@ mod linux {
 
         if written == msg.len() {
             eprintln!("vminitd: READY signal sent on vsock port {ready_vsock_port}");
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // VirtioFS mounting
+    // ---------------------------------------------------------------------------
+
+    /// Parse `speck_vol_tags=tag0:path0,tag1:path1` from the kernel cmdline.
+    ///
+    /// Returns a list of (tag, container_path) pairs that vminitd will mount.
+    fn parse_cmdline_volume_tags(path: &str) -> Vec<(String, String)> {
+        let content = match std::fs::read_to_string(path) {
+            Ok(c) => c,
+            Err(_) => return Vec::new(),
+        };
+        for word in content.split_whitespace() {
+            if let Some(val) = word.strip_prefix("speck_vol_tags=") {
+                return val
+                    .split(',')
+                    .filter_map(|pair| {
+                        let mut parts = pair.splitn(2, ':');
+                        let tag = parts.next()?.to_string();
+                        let cpath = parts.next()?.to_string();
+                        Some((tag, cpath))
+                    })
+                    .collect();
+            }
+        }
+        Vec::new()
+    }
+
+    /// Parse `speck_home_path=PATH` from the kernel cmdline.
+    fn parse_cmdline_speck_home(path: &str) -> Option<String> {
+        let content = std::fs::read_to_string(path).ok()?;
+        for word in content.split_whitespace() {
+            if let Some(val) = word.strip_prefix("speck_home_path=") {
+                // Reject empty paths
+                if !val.is_empty() {
+                    return Some(val.to_string());
+                }
+            }
+        }
+        None
+    }
+
+    /// Parse `speck_home_tag=TAG` from the kernel cmdline.
+    fn parse_cmdline_speck_home_tag(path: &str) -> Option<String> {
+        let content = std::fs::read_to_string(path).ok()?;
+        for word in content.split_whitespace() {
+            if let Some(val) = word.strip_prefix("speck_home_tag=") {
+                if !val.is_empty() {
+                    return Some(val.to_string());
+                }
+            }
+        }
+        None
+    }
+
+    /// Mount VirtioFS volumes for user-specified bind mounts.
+    ///
+    /// Parses `speck_vol_tags=` from the kernel cmdline and for each
+    /// (tag, container_path) pair, creates the target directory under
+    /// `/rootfs` and mounts the VirtioFS filesystem.
+    ///
+    /// Mount failures are non-fatal — a container simply won't see its
+    /// bind mount if the tag is invalid.
+    fn mount_virtiofs_volumes(cmdline_path: &str) {
+        let tags = parse_cmdline_volume_tags(cmdline_path);
+        for (tag, container_path) in &tags {
+            let target = format!("/rootfs{container_path}");
+            let _ = std::fs::create_dir_all(&target);
+
+            let tag_c = std::ffi::CString::new(tag.as_str()).unwrap_or_default();
+            let target_c = std::ffi::CString::new(target.as_str()).unwrap_or_default();
+
+            let ret = unsafe {
+                libc::mount(
+                    tag_c.as_ptr(),
+                    target_c.as_ptr(),
+                    b"virtiofs\0".as_ptr() as *const libc::c_char,
+                    0,
+                    std::ptr::null(),
+                )
+            };
+            if ret < 0 {
+                eprintln!(
+                    "vminitd: failed to mount VirtioFS {tag} at {target}: {:?}",
+                    io::Error::last_os_error()
+                );
+            } else {
+                eprintln!("vminitd: mounted VirtioFS {tag} at {target}");
+            }
+        }
+    }
+
+    /// Mount the Speck home directory at `/rootfs/var/run/` and create the
+    /// Docker socket symlink for Ryuk.
+    ///
+    /// The Speck Docker socket is exposed to containers via
+    /// `/var/run/docker.sock → /var/run/speck.sock`. If the host has a
+    /// `docker.sock` file inside `$SPECK_HOME`, Ryuk and testcontainers
+    /// can use it.
+    ///
+    /// Non-fatal on error — Ryuk will simply not have Docker socket access.
+    fn mount_speck_home(cmdline_path: &str) {
+        let tag = match parse_cmdline_speck_home_tag(cmdline_path) {
+            Some(t) => t,
+            None => return,
+        };
+        let _ = std::fs::create_dir_all("/rootfs/var/run");
+
+        let tag_c = std::ffi::CString::new(tag.as_str()).unwrap_or_default();
+        let target_c = std::ffi::CString::new("/rootfs/var/run").unwrap_or_default();
+
+        let ret = unsafe {
+            libc::mount(
+                tag_c.as_ptr(),
+                target_c.as_ptr(),
+                b"virtiofs\0".as_ptr() as *const libc::c_char,
+                0,
+                std::ptr::null(),
+            )
+        };
+        if ret < 0 {
+            eprintln!(
+                "vminitd: failed to mount Speck home at /rootfs/var/run: {:?}",
+                io::Error::last_os_error()
+            );
+            return;
+        }
+
+        // Create symlink docker.sock → speck.sock for Ryuk
+        let ret = unsafe {
+            libc::symlink(
+                b"/var/run/speck.sock\0".as_ptr() as *const libc::c_char,
+                b"/rootfs/var/run/docker.sock\0".as_ptr() as *const libc::c_char,
+            )
+        };
+        if ret < 0 {
+            eprintln!(
+                "vminitd: failed to create docker.sock symlink: {:?}",
+                io::Error::last_os_error()
+            );
+        } else {
+            eprintln!("vminitd: created /var/run/docker.sock → /var/run/speck.sock");
+        }
+    }
+
+    /// Create named volume directories under `/rootfs/var/lib/speck/volumes/`.
+    ///
+    /// These directories back Docker named volumes on the data disk. The mount
+    /// function matches container_path entries that live under the volume
+    /// store path (e.g., `/var/lib/speck/volumes/myvolume`).
+    fn create_named_volume_dirs(tags: &[(String, String)]) {
+        for (_tag, container_path) in tags {
+            if container_path.starts_with("/var/lib/speck/volumes/") {
+                let target = format!("/rootfs{container_path}");
+                match std::fs::create_dir_all(&target) {
+                    Ok(()) => {
+                        eprintln!("vminitd: created named volume directory {target}");
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "vminitd: failed to create named volume dir {target}: {e}"
+                        );
+                    }
+                }
+            }
         }
     }
 

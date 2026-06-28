@@ -306,12 +306,24 @@ impl VmThread {
                 .to_str()
                 .ok_or_else(|| Error::VmFramework("non-UTF-8 kernel path".into()))?,
         );
+        let virtiofs_cmdline = crate::virtiofs::cmdline_virtiofs_arg(
+            &config.volume_mounts,
+            &config.speck_home,
+        );
+
         let bootloader = unsafe {
             let kernel_url = NSURL::fileURLWithPath(&kernel_str);
             let bl = VZLinuxBootLoader::initWithKernelURL(VZLinuxBootLoader::alloc(), &kernel_url);
 
-            if !config.cmdline.is_empty() {
-                let cmdline = NSString::from_str(&config.cmdline);
+            let full_cmdline = if config.cmdline.is_empty() {
+                virtiofs_cmdline.clone()
+            } else if virtiofs_cmdline.is_empty() {
+                config.cmdline.clone()
+            } else {
+                format!("{} {}", config.cmdline, virtiofs_cmdline)
+            };
+            if !full_cmdline.is_empty() {
+                let cmdline = NSString::from_str(&full_cmdline);
                 bl.setCommandLine(&cmdline);
             }
             if let Some(ref initrd) = config.initrd_path {
@@ -432,6 +444,15 @@ impl VmThread {
             } else {
                 (None, None)
             };
+
+            // ── VirtioFS directory sharing devices ──────────────────────
+            if !config.volume_mounts.is_empty() || config.network.is_some() {
+                crate::virtiofs::configure_virtiofs_devices(
+                    &vm_config,
+                    &config.volume_mounts,
+                    &config.speck_home,
+                )?;
+            }
 
             Result::<_, Error>::Ok((vm_config, platform, entropy, vsock))
         }?;
