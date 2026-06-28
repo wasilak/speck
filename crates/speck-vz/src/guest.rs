@@ -93,6 +93,39 @@ impl Guest {
     /// `/tmp/speck-containerd-<pid>-<port>.sock`, spawns a bridge thread that copies bytes
     /// bidirectionally between the VzSocket and the first UnixStream connection, and returns
     /// the path to the Unix socket. Callers can then pass that path to `containerd_client::connect()`.
+    /// Connect the in-guest BuildKit gRPC socket to a temporary Unix socket on the host.
+    ///
+    /// Mirrors [`Guest::containerd_unix_proxy`] but uses `buildkitd_vsock_port` (default 9002)
+    /// and formats the temp socket path as `speck-buildkitd-<pid>-<port>.sock`.
+    pub fn buildkitd_unix_proxy(&self) -> Result<PathBuf, Error> {
+        let buildkitd_vsock_port = self
+            .config
+            .buildkitd_vsock_port
+            .ok_or_else(|| Error::VsockConnect("buildkitd_vsock_port not configured".into()))?;
+
+        let vsock = self.vsock_connect(buildkitd_vsock_port)?;
+
+        let sock_path = std::env::temp_dir().join(format!(
+            "speck-buildkitd-{}-{}.sock",
+            std::process::id(),
+            buildkitd_vsock_port,
+        ));
+
+        // Remove stale socket file if it exists.
+        let _ = std::fs::remove_file(&sock_path);
+
+        let listener =
+            std::os::unix::net::UnixListener::bind(&sock_path).map_err(Error::NetworkIo)?;
+
+        std::thread::spawn(move || {
+            if let Ok((stream, _)) = listener.accept() {
+                bridge_vsock_unix(vsock, stream);
+            }
+        });
+
+        Ok(sock_path)
+    }
+
     pub fn containerd_unix_proxy(&self) -> Result<PathBuf, Error> {
         let containerd_vsock_port = self
             .config

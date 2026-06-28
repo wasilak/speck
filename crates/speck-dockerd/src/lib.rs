@@ -5,6 +5,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+pub mod buildkit;
 pub mod containerd_client;
 pub mod error;
 pub mod handlers;

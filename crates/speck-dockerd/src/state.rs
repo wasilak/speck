@@ -5,6 +5,7 @@ use std::sync::Arc;
 use speck_core::network::NetworkSummary;
 use speck_core::volume::VolumeSummary;
 
+use crate::buildkit::BuildkitClient;
 use crate::containerd_client::ContainerdClient;
 use crate::error::{DockerApiError, Result};
 
@@ -97,6 +98,21 @@ impl AppState {
         *guard = Some(path.clone());
 
         Ok(path)
+    }
+
+    pub async fn buildkitd_path(&self) -> Result<PathBuf> {
+        let proxy = self
+            .guest
+            .buildkitd_unix_proxy()
+            .map_err(|err| DockerApiError::Internal(err.to_string()))?;
+        Ok(proxy)
+    }
+
+    pub async fn buildkit_client(&self) -> Result<BuildkitClient> {
+        let path = self.buildkitd_path().await?;
+        BuildkitClient::connect_unix(path)
+            .await
+            .map_err(|e| DockerApiError::Internal(e.to_string()))
     }
 
     pub async fn containerd_client(&self) -> Result<ContainerdClient> {
