@@ -51,11 +51,11 @@
 - **Status:** 🔄 In Planning (11 plans)
 - **Goal:** Full Speck v1 product — Docker-compatible API socket, container lifecycle, full CLI, VirtioFS volumes, spk build via BuildKit, distribution signing
 - **Requirements:** DOCKER-01, DOCKER-02, DOCKER-03, DOCKER-04, DOCKER-05, RUN-01, RUN-02, RUN-03, RUN-04, RUN-05, RUN-07, RUN-08, CLI-01, CLI-02, CLI-03, CLI-04, CLI-05, CLI-06, STORAGE-01, STORAGE-02, STORAGE-03, STORAGE-04, BUILD-01, BUILD-02, BUILD-03, DIST-01, DIST-02, DIST-03
-- **Plans:** 11 plans
+- **Plans:** 3/11 plans executed
 - Plans:
-  - [ ] 06-01-PLAN.md — speck-core types: Container, Image, Volume, Network domain types (Wave 1)
-  - [ ] 06-02-PLAN.md — speck-dockerd scaffold: axum server, hyper_util Unix socket + upgrades, stream.rs frame encode/decode, router + handler stubs (Wave 1)
-  - [ ] 06-03-PLAN.md — Docker API: system (/_ping, /version, /info) + container lifecycle + exec (Wave 2)
+  - [x] 06-01-PLAN.md — speck-core types: Container, Image, Volume, Network domain types (Wave 1)
+  - [x] 06-02-PLAN.md — speck-dockerd scaffold: axum server, hyper_util Unix socket + upgrades, stream.rs frame encode/decode, router + handler stubs (Wave 1)
+  - [x] 06-03-PLAN.md — Docker API: system (/_ping, /version, /info) + container lifecycle + exec (Wave 2)
   - [ ] 06-04-PLAN.md — Docker API: attach hijack, logs streaming, image pull/push with registry auth, events SSE, networks + volumes (Wave 2)
   - [ ] 06-05-PLAN.md — Port publishing: PortPublishBridge in speck-net + smoltcp active-connect to guest IP (Wave 2)
   - [ ] 06-06-PLAN.md — VirtioFS volumes: multi-device VZVirtioFileSystemDeviceConfiguration + vminitd auto-mount + Ryuk docker.sock symlink (Wave 3)
