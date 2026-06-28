@@ -383,4 +383,40 @@ mod tests {
         // Clean up
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn test_guest_config_port_maps() {
+        let dir = std::env::temp_dir().join("speck-test-port-maps");
+        std::fs::create_dir_all(&dir).unwrap();
+        let kernel = dir.join("Image");
+        std::fs::write(&kernel, b"dummy kernel").unwrap();
+
+        let config = GuestConfig::builder()
+            .kernel_path(&kernel)
+            .add_port_map(PortMapConfig {
+                host_port: 8080,
+                container_port: 80,
+            })
+            .build();
+
+        assert_eq!(
+            config.port_maps,
+            vec![PortMapConfig {
+                host_port: 8080,
+                container_port: 80,
+            }]
+        );
+        assert!(config.validate().is_ok());
+
+        let privileged = GuestConfig::builder()
+            .kernel_path(&kernel)
+            .add_port_map(PortMapConfig {
+                host_port: 1024,
+                container_port: 80,
+            })
+            .build();
+
+        let err = privileged.validate().unwrap_err();
+        assert!(err.contains("privileged"), "unexpected error: {err}");
+    }
 }
