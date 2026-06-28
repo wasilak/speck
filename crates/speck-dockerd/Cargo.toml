@@ -1,0 +1,31 @@
+[package]
+name = "speck-dockerd"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+
+[dependencies]
+axum = "0.8.9"
+containerd-client = "0.9.0"
+hyper = { version = "1.10.1", features = ["full"] }
+hyper-util = { version = "0.1.20", features = ["server-auto", "tokio", "service"] }
+prost = "0.14.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+speck-core = { path = "../speck-core" }
+speck-vz = { path = "../speck-vz" }
+thiserror = "2"
+tokio = { version = "1.52.3", features = ["full"] }
+tonic = "0.14.6"
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.7.0", features = ["trace"] }
+tracing = "0.1.44"
+
+[dev-dependencies]
+bollard = "0.21.0"
+tokio-test = "0.4"
+
+[build-dependencies]
+tonic-build = "0.14"
