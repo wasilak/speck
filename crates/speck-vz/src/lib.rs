@@ -7,6 +7,7 @@ pub mod config;
 mod delegate;
 pub mod error;
 pub mod guest;
+mod virtiofs;
 mod vm_thread;
 mod vsock;
 

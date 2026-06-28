@@ -58,6 +58,10 @@ pub enum Error {
     /// Guest ready signal not received within the expected window.
     #[error("Guest ready signal timed out")]
     GuestReadyTimeout,
+
+    /// VirtioFS mount configuration error.
+    #[error("VirtioFS mount error: {0}")]
+    VirtioFsMount(String),
 }
 
 /// Convenience alias for `std::result::Result<T, Error>`.

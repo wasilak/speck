@@ -4,6 +4,19 @@ use std::time::Duration;
 pub use speck_net::PortMapConfig;
 use speck_net::config::NetworkConfig;
 
+/// Configuration for a single VirtioFS volume mount.
+#[derive(Debug, Clone)]
+pub struct VolumeMountConfig {
+    /// Path on the host filesystem.
+    pub host_path: PathBuf,
+    /// Mount point inside the VM guest (/rootfs{container_path}).
+    pub container_path: PathBuf,
+    /// Mount read-only.
+    pub read_only: bool,
+    /// Optional named volume name. `None` for bind mounts.
+    pub volume_name: Option<String>,
+}
+
 /// Configuration for a micro-VM guest.
 ///
 /// This is the primary input to [`Guest::start`](crate::Guest::start).
@@ -94,6 +107,17 @@ pub struct GuestConfig {
     ///
     /// Each entry spawns a host TcpListener in speck-net after VM start.
     pub port_maps: Vec<PortMapConfig>,
+
+    /// VirtioFS volume mounts.
+    ///
+    /// Each entry creates a `VZVirtioFileSystemDeviceConfiguration` and
+    /// vminitd auto-mounts it at the container path inside the guest.
+    pub volume_mounts: Vec<VolumeMountConfig>,
+
+    /// Path to the Speck home directory (for VirtioFS-based Ryuk socket access).
+    ///
+    /// Defaults to `<data_local_dir>/speck`.
+    pub speck_home: PathBuf,
 }
 
 impl Default for GuestConfig {
@@ -114,6 +138,8 @@ impl Default for GuestConfig {
             buildkitd_vsock_port: None,
             ready_vsock_port: None,
             port_maps: Vec::new(),
+            volume_mounts: Vec::new(),
+            speck_home: default_speck_home(),
         }
     }
 }
@@ -172,6 +198,25 @@ impl GuestConfig {
                 return Err("container port must be greater than 0".into());
             }
         }
+        for (i, mount) in self.volume_mounts.iter().enumerate() {
+            if !mount.host_path.exists() {
+                return Err(format!(
+                    "volume mount host path does not exist: {}",
+                    mount.host_path.display()
+                ));
+            }
+            let container_str = mount.container_path.to_string_lossy();
+            if container_str.contains("..") {
+                return Err(format!(
+                    "container_path must not contain '..': {}",
+                    mount.container_path.display()
+                ));
+            }
+            let tag = format!("speck-vol-{i}");
+            if !crate::virtiofs::validate_virtiofs_tag(&tag) {
+                return Err(format!("invalid VirtioFS tag at index {i}: {tag}"));
+            }
+        }
         Ok(())
     }
 }
@@ -210,6 +255,8 @@ pub struct GuestConfigBuilder {
     buildkitd_vsock_port: Option<u32>,
     ready_vsock_port: Option<u32>,
     port_maps: Vec<PortMapConfig>,
+    volume_mounts: Vec<VolumeMountConfig>,
+    speck_home: PathBuf,
 }
 
 impl Default for GuestConfigBuilder {
@@ -230,6 +277,8 @@ impl Default for GuestConfigBuilder {
             buildkitd_vsock_port: None,
             ready_vsock_port: None,
             port_maps: Vec::new(),
+            volume_mounts: Vec::new(),
+            speck_home: default_speck_home(),
         }
     }
 }
@@ -339,6 +388,18 @@ impl GuestConfigBuilder {
         self
     }
 
+    /// Add a VirtioFS volume mount.
+    pub fn add_volume_mount(mut self, config: VolumeMountConfig) -> Self {
+        self.volume_mounts.push(config);
+        self
+    }
+
+    /// Set the Speck home directory path.
+    pub fn speck_home(mut self, path: impl Into<PathBuf>) -> Self {
+        self.speck_home = path.into();
+        self
+    }
+
     /// Consume the builder and produce a [`GuestConfig`].
     ///
     /// # Panics
@@ -363,8 +424,15 @@ impl GuestConfigBuilder {
             buildkitd_vsock_port: self.buildkitd_vsock_port,
             ready_vsock_port: self.ready_vsock_port,
             port_maps: self.port_maps,
+            volume_mounts: self.volume_mounts,
+            speck_home: self.speck_home,
         }
     }
+}
+
+fn default_speck_home() -> PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+    PathBuf::from(home).join(".local/share/speck")
 }
 
 #[cfg(test)]
