@@ -67,14 +67,23 @@
 
 ### Phase 06.1: Fix 5 integration blockers — Unix socket, netstack wiring, proxy loop, port map, virtiofs (INSERTED)
 
-- **Status:** 🔧 In Progress (0/3 plans)
+- **Status:** 🔧 In Progress (3/5 plans — gap closure in progress)
 - **Goal:** Fix five verified wiring gaps in Phase 6 code that prevent the system from running end-to-end: proxy loop exits after one client, netstack never spawned, speck_home not created, port bindings never applied, VirtioFS unconditionally skipped.
 - **Requirements:** NET-01, NET-02, NET-03, RUN-04, DOCKER-02, DOCKER-04
 - **Depends on:** Phase 6
-- **Plans:** 3 plans
+- **Plans:** 5 plans
 
 Plans:
+**Wave 1**
 
-- [ ] 06.1-01-PLAN.md — Fix proxy loop (Bug 1) + VmThread helpers for netstack wiring (Bug 2-vz) + remove VirtioFS gate (Bug 5): vm_thread.rs + guest.rs (Wave 1)
-- [ ] 06.1-02-PLAN.md — Wire SpeckNet in run_up: create_dir_all + GuestConfig network/dns/speck_home + SpeckNet::spawn + set_port_map_channel (Bugs 2-cli + 3): up.rs (Wave 1)
-- [ ] 06.1-03-PLAN.md — Apply port bindings in container start() handler (Bug 4): containers.rs (Wave 2)
+- [x] 06.1-01-PLAN.md — Fix proxy loop (Bug 1) + VmThread helpers for netstack wiring (Bug 2-vz) + remove VirtioFS gate (Bug 5): vm_thread.rs + guest.rs (Wave 1)
+- [ ] 06.1-04-PLAN.md — CR-01 gap closure: wrap Guest control sequence in tokio::task::spawn_blocking to fix runtime panic in run_up (Wave 1)
+- [ ] 06.1-05-PLAN.md — CR-02+CR-03 gap closure: delegate_rx drain thread (VM death → state=Stopped) + missing objc2-vz feature flags (Wave 1)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 06.1-02-PLAN.md — Wire SpeckNet in run_up: create_dir_all + GuestConfig network/dns/speck_home + SpeckNet::spawn + set_port_map_channel (Bugs 2-cli + 3): up.rs (Wave 1)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [x] 06.1-03-PLAN.md — Apply port bindings in container start() handler (Bug 4): containers.rs (Wave 2)
