@@ -3,32 +3,35 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 current_phase: 06
-status: executing
-last_updated: "2026-06-28T09:53:26.254Z"
+status: completed
+last_updated: "2026-06-28T18:00:00.000Z"
 progress:
   total_phases: 6
-  completed_phases: 5
+  completed_phases: 6
   total_plans: 32
-  completed_plans: 27
-  percent: 84
+  completed_plans: 32
+  percent: 100
 ---
 
-# State
+# State — 🎉 Phase 6 Complete — Milestone v1.0 Complete
 
-**Current phase:** 06
-**Status:** Executing Phase 06
-**Previous phase:** 04 — Guest Networking (✅ Complete)
+**Status:** All 32 plans across 6 phases are complete.
 
-## Phase 04 Summary
+## Phase 06 Complete — Docker API Compat Layer
 
-Phase 04 (Guest Networking) is complete across 3 waves and 6 plans:
+Phase 06 (Docker API Compat Layer) is complete across 5 waves and 11 plans:
 
-- **04-01** — `speck-net` crate scaffold + shared `NetworkConfig` type
-- **04-02** — `FdDevice` (smoltcp Device trait) + `SmoltcpInterface` + `SpeckNet::spawn()` poll loop
-- **04-03** — VM network device wiring (`VZFileHandleNetworkDeviceAttachment`) + vsock DNS port config
-- **04-04** — TCP re-origination bridge, DHCP server, vsock DNS proxy, host MTU detection
-- **04-05** — Integration tests for netstack (ARP, DNS proxy, FD lifecycle) — `#[ignore]`d
-- **04-06** — Guest-side DNS forwarder in vminitd (AF_VSOCK → UDP:53)
+- **06-01** — speck-core types: Container, Image, Volume, Network domain types
+- **06-02** — speck-dockerd scaffold: axum server, hyper_util Unix socket + upgrades, stream.rs frame encode/decode, router + handler stubs
+- **06-03** — Docker API: system (/_ping, /version, /info) + container lifecycle + exec
+- **06-04** — Docker API: attach hijack, logs streaming, image pull/push with registry auth, events SSE, networks + volumes
+- **06-05** — Port publishing: PortPublishBridge in speck-net + smoltcp active-connect to guest IP
+- **06-06** — VirtioFS volumes: multi-device VZVirtioFileSystemDeviceConfiguration + vminitd auto-mount + Ryuk docker.sock symlink
+- **06-07** — BuildKit: vendored proto + tonic codegen + POST /build handler + Guest::buildkitd_unix_proxy()
+- **06-08** — CLI: full speck-cli with clap v4, indicatif, anstream theme, DockerClient, all subcommands
+- **06-09** — spk dashboard: ratatui TUI with container list + log tail + keyboard navigation
+- **06-10** — Codesigning + CI: xtask codesign-dev, release.yml Developer ID + notarytool, Homebrew Formula
+- **06-11** — testcontainers conformance: bollard api_conformance.rs + integration_06.rs end-to-end
 
 All crates compile cleanly: `speck-net`, `speck-core`, `speck-vz` (with tests), `speck-cli`, and `speck-guest` (cross-compiled).
 

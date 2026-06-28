@@ -29,6 +29,7 @@ tracing = "0.1.44"
 
 [dev-dependencies]
 bollard = "0.21.0"
+futures-util = "0.3"
 tokio-test = "0.4"
 
 [build-dependencies]

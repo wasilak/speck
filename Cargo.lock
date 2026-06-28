@@ -2358,6 +2358,7 @@ dependencies = [
  "base64",
  "bollard",
  "containerd-client",
+ "futures-util",
  "hyper",
  "hyper-util",
  "prost",

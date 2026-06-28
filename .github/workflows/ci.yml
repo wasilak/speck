@@ -5,6 +5,16 @@ on:
     branches: [main]
   pull_request:
 
+# Docker API Conformance Tests (DOCKER-05)
+# These tests require a signed binary and a running 'spk up' session.
+# To run conformance tests manually:
+#   1. Run: cargo xtask codesign-dev
+#   2. Run: spk up  (in a separate terminal)
+#   3. Run: cargo test -p speck-dockerd --test api_conformance -- --include-ignored
+#   4. Run: cargo test -p speck-vz --test integration_06 -- --include-ignored
+# These tests are NOT run in automated CI due to the codesigning requirement.
+# See DIST-01, DIST-02 for the signing prerequisites.
+
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: "-Dwarnings"

@@ -4,19 +4,21 @@ fn main() -> ExitCode {
     let Some(subcommand) = std::env::args().nth(1) else {
         eprintln!("Usage: cargo xtask <command>");
         eprintln!("Commands:");
-        eprintln!("  ci     Run all CI checks locally");
-        eprintln!("  sign   Codesign the release binary with virtualization entitlement");
-        eprintln!("  init   Download kernel + initrd for VM boot");
+        eprintln!("  ci            Run all CI checks locally");
+        eprintln!("  sign          Codesign the release binary with virtualization entitlement");
+        eprintln!("  codesign-dev  Ad-hoc codesign debug binary with virtualization entitlement");
+        eprintln!("  init          Download kernel + initrd for VM boot");
         return ExitCode::from(1);
     };
 
     match subcommand.as_str() {
         "ci" => task_ci(),
         "sign" => task_sign(),
+        "codesign-dev" => task_codesign_dev(),
         "init" => task_init(),
         other => {
             eprintln!("Unknown command: {other}");
-            eprintln!("Usage: cargo xtask <ci|sign|init>");
+            eprintln!("Usage: cargo xtask <ci|sign|codesign-dev|init>");
             ExitCode::from(1)
         }
     }
@@ -49,6 +51,33 @@ fn task_ci() -> ExitCode {
     }
     println!("ok");
 
+    if std::env::consts::OS == "macos" {
+        let debug_binary = "target/aarch64-apple-darwin/debug/spk";
+        let needs_build = !std::path::Path::new(debug_binary).exists();
+        if needs_build {
+            print!("Building debug binary for codesigning... ");
+            if run("cargo", &["build", "-p", "speck-cli", "--target", "aarch64-apple-darwin"]).is_err() {
+                eprintln!("FAILED");
+                return ExitCode::from(1);
+            }
+            println!("ok");
+        }
+
+        print!("Signing with ad-hoc entitlement... ");
+        if task_codesign_dev() != ExitCode::from(0) {
+            eprintln!("FAILED");
+            return ExitCode::from(1);
+        }
+        println!("ok");
+
+        print!("Verifying virtualization entitlement... ");
+        if task_check_entitlement() != ExitCode::from(0) {
+            eprintln!("FAILED");
+            return ExitCode::from(1);
+        }
+        println!("ok");
+    }
+
     print!("Running tests... ");
     if run("cargo", &["test", "--workspace"]).is_err() {
         eprintln!("FAILED");
@@ -70,6 +99,69 @@ fn task_ci() -> ExitCode {
 
     println!("All CI checks passed.");
     ExitCode::from(0)
+}
+
+fn task_codesign_dev() -> ExitCode {
+    if std::env::consts::OS != "macos" {
+        eprintln!("codesign-dev: skipping (not macOS)");
+        return ExitCode::from(0);
+    }
+
+    let binary = "target/aarch64-apple-darwin/debug/spk";
+    if !std::path::Path::new(binary).exists() {
+        eprintln!("Binary not found: {binary}");
+        eprintln!("Build first: cargo build -p speck-cli --target aarch64-apple-darwin");
+        return ExitCode::from(1);
+    }
+
+    if !std::path::Path::new("speck.entitlements").exists() {
+        eprintln!("Entitlements file not found: speck.entitlements");
+        return ExitCode::from(1);
+    }
+
+    let status = Command::new("codesign")
+        .args([
+            "-s",
+            "-",
+            "--entitlements",
+            "speck.entitlements",
+            "--force",
+            binary,
+        ])
+        .status()
+        .expect("failed to run codesign");
+
+    if !status.success() {
+        eprintln!("codesign-dev FAILED");
+        return ExitCode::from(1);
+    }
+
+    println!("codesign-dev: signed {binary} with ad-hoc signature + virtualization entitlement");
+    ExitCode::from(0)
+}
+
+fn task_check_entitlement() -> ExitCode {
+    let binary = "target/aarch64-apple-darwin/debug/spk";
+    let output = Command::new("codesign")
+        .args(["-d", "--entitlements", "-", binary])
+        .output()
+        .expect("failed to run codesign -d");
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        eprintln!("entitlement check FAILED: {stderr}");
+        return ExitCode::from(1);
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    if stdout.contains("com.apple.security.virtualization") {
+        println!("entitlement OK: com.apple.security.virtualization present");
+        ExitCode::from(0)
+    } else {
+        eprintln!("entitlement MISSING: com.apple.security.virtualization not found in binary");
+        eprintln!("stdout: {stdout}");
+        ExitCode::from(1)
+    }
 }
 
 fn task_init() -> ExitCode {
