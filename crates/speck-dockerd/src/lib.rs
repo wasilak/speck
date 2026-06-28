@@ -8,6 +8,7 @@ use std::sync::Arc;
 pub mod error;
 pub mod containerd_client;
 pub mod handlers;
+pub mod registry_auth;
 pub mod router;
 pub mod server;
 pub mod state;
