@@ -2,21 +2,21 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_phase: 05
+current_phase: 06
 status: executing
-last_updated: "2026-06-26T18:07:30.000Z"
+last_updated: "2026-06-28T09:53:26.254Z"
 progress:
   total_phases: 6
-  completed_phases: 4
-  total_plans: 21
-  completed_plans: 19
-  percent: 90
+  completed_phases: 5
+  total_plans: 32
+  completed_plans: 27
+  percent: 84
 ---
 
 # State
 
-**Current phase:** 05
-**Status:** Executing Phase 05
+**Current phase:** 06
+**Status:** Executing Phase 06
 **Previous phase:** 04 — Guest Networking (✅ Complete)
 
 ## Phase 04 Summary
@@ -129,13 +129,33 @@ All crates compile cleanly: `speck-net`, `speck-core`, `speck-vz` (with tests), 
 - All verifications pass: bash -n, cargo build, YAML validation
 - Commits: `e434612`, `9d510e3`, `7710689`
 
-## Phase 5 Planned
+## Phase 5 Complete
 
-- Phase 5 containerd + BuildKit Integration context captured via discuss-phase
-- 5 plans across 3 waves planned:
-  - **Wave 1** (parallel): ~~05-01 GuestConfig fields~~ ✅, ~~05-02 vminitd supervision~~ ✅, ~~05-03 rootfs CI + fetch~~ ✅
-  - **Wave 2**: 05-04 Host-side disk attach + WaitForGuestReady
-  - **Wave 3**: 05-05 Guest API + integration tests
-- Success criteria: containerd reachable via gRPC/vsock + alpine image pull succeeds
-- Plans: `.planning/phases/05-containerd-buildkit-integration/05-0[1-5]-PLAN.md`
-- Context: `.planning/phases/05-containerd-buildkit-integration/05-CONTEXT.md`
+Phase 05 (containerd + BuildKit Integration) is complete across 3 waves and 5 plans:
+
+- **05-01** — GuestConfig: 5 new optional fields + DiskAttachment error variant + objc2-vz features
+- **05-02** — vminitd: sock_forwarder, disk mounting, containerd supervision, READY signal
+- **05-03** — scripts/fetch-rootfs.sh + xtask init extension + .github/workflows/build-rootfs.yml
+- **05-04** — VmThread: disk attachment (VZVirtioBlockDeviceConfiguration) + WaitForGuestReady command + containerd-client dev-dep
+- **05-05** — Guest::wait_for_ready() + Guest::containerd_unix_proxy() + bridge_vsock_unix + integration_05.rs (#[ignore]'d RUN-06 tests)
+
+## Plan 05-05 Complete
+
+- Guest::wait_for_ready() delegates to VmThread::wait_for_ready(ready_vsock_port)
+- Guest::containerd_unix_proxy() bridges vsock port 9001 to temp Unix socket (PID+port unique path)
+- bridge_vsock_unix() copies bytes bidirectionally with dup'd fds for independent ownership
+- integration_05.rs: 3 #[ignore]'d tests — test_vm_boots_with_disks, test_containerd_ready, test_image_pull_alpine
+- cargo test -p speck-vz --test integration_05 passes with 0 passed, 3 ignored
+- Commits: a71d3e7, 65db917
+
+## Decisions
+
+- [Phase ?]: do_wait_for_ready: VsockConnect and VsockTimeout are retriable (ECONNREFUSED expected until vminitd binds port); all other errors propagate immediately
+- [Phase ?]: Disk attachment requires both paths set together (rootfs_disk_path + data_disk_path); if either is None, no storage devices are attached
+
+## Performance Metrics
+
+| Phase | Plan | Duration | Notes |
+|-------|------|----------|-------|
+| Phase 06 P04 | 26 min | 2 tasks | 12 files |
+| Phase 06 P05 | 17min | 2 tasks | 7 files |
