@@ -14,6 +14,7 @@ pub use mtu::{detect_host_mtu, mss_for_mtu};
 pub use port_publish::{PortMapConfig, PortPublishBridge};
 
 use std::os::unix::io::RawFd;
+use tokio::sync::mpsc;
 
 /// Minimal wrapper around `RawFd` that implements `AsRawFd` for use with
 /// `tokio::io::unix::AsyncFd`.
@@ -52,6 +53,8 @@ impl SpeckNet {
         self,
         fd: RawFd,
         vsock_fd: Option<RawFd>,
+        port_maps: Vec<PortMapConfig>,
+        mut port_map_rx: Option<mpsc::Receiver<PortMapConfig>>,
     ) -> Vec<tokio::task::JoinHandle<std::result::Result<(), Error>>> {
         let mut handles = Vec::new();
 
@@ -81,6 +84,12 @@ impl SpeckNet {
 
             // Re-origination bridge and DHCP server
             let mut reorigin = reorigin::ReoriginBridge::new(self.config.mtu);
+            let mut port_publish = PortPublishBridge::new(self.config.mtu);
+            for port_map in port_maps {
+                if let Err(e) = port_publish.add_port_map(port_map) {
+                    tracing::warn!(host_port = port_map.host_port, error = %e, "failed to add initial port map");
+                }
+            }
             let mut dhcp = dhcp::DhcpServer::new(&self.config);
             dhcp.add_to_set(net.sockets_mut());
 
@@ -100,6 +109,18 @@ impl SpeckNet {
                 // Handle new TCP connections from the guest and bridge data
                 reorigin.handle_new_connections(net.sockets_mut());
                 reorigin.poll_bridges(net.sockets_mut());
+
+                if let Some(rx) = port_map_rx.as_mut() {
+                    while let Ok(port_map) = rx.try_recv() {
+                        if let Err(e) = port_publish.add_port_map(port_map) {
+                            tracing::warn!(host_port = port_map.host_port, error = %e, "failed to add dynamic port map");
+                        }
+                    }
+                }
+
+                // Handle host TCP connections for published ports and bridge data.
+                net.poll_port_publish(&mut port_publish);
+                port_publish.poll_bridges(net.sockets_mut());
 
                 // Process DHCP requests
                 dhcp.poll(net.sockets_mut());

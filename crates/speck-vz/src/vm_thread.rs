@@ -26,6 +26,7 @@ use objc2_virtualization::{
 use socket2::{Domain, Socket, Type};
 
 use crate::config::GuestConfig;
+use crate::config::PortMapConfig;
 use crate::delegate::{VmDelegate, VmStateEvent};
 use crate::error::Error;
 use crate::vsock::VzSocket;
@@ -106,6 +107,11 @@ pub(crate) enum VmCommand {
         ready_vsock_port: u32,
         reply: oneshot::Sender<std::result::Result<(), Error>>,
     },
+    AddPortMap {
+        host_port: u16,
+        container_port: u16,
+        reply: oneshot::Sender<std::result::Result<(), Error>>,
+    },
     Shutdown,
 }
 
@@ -134,6 +140,8 @@ struct VmControl {
     socket_device: VmSocketDevice,
     netstack_fd: Option<RawFd>,
     dns_vsock_fd: Option<RawFd>,
+    port_maps: Vec<PortMapConfig>,
+    port_map_tx: Option<mpsc::Sender<PortMapConfig>>,
 }
 
 pub struct VmThread {
@@ -154,6 +162,8 @@ impl VmThread {
             socket_device: VmSocketDevice { inner: None },
             netstack_fd: None,
             dns_vsock_fd: None,
+            port_maps: Vec::new(),
+            port_map_tx: None,
         }));
 
         let thread = thread::Builder::new()
@@ -239,6 +249,34 @@ impl VmThread {
                             let result =
                                 Self::do_wait_for_ready(&control, &q, ready_vsock_port);
                             let _ = reply.send(result);
+                        }
+                        VmCommand::AddPortMap {
+                            host_port,
+                            container_port,
+                            reply,
+                        } => {
+                            let port_map = PortMapConfig {
+                                host_port,
+                                container_port,
+                            };
+                            let sender = {
+                                let mut ctrl = control.lock().unwrap_or_else(|e| e.into_inner());
+                                if ctrl.state != InternalState::Running {
+                                    let _ = reply.send(Err(Error::NotRunning));
+                                    continue;
+                                }
+                                ctrl.port_maps.push(port_map);
+                                ctrl.port_map_tx.clone()
+                            };
+
+                            if let Some(tx) = sender {
+                                let result = tx.blocking_send(port_map).map_err(|_| {
+                                    Error::Network("netstack port-map channel closed".into())
+                                });
+                                let _ = reply.send(result);
+                            } else {
+                                let _ = reply.send(Ok(()));
+                            }
                         }
                         VmCommand::Shutdown => break,
                     }
@@ -458,6 +496,7 @@ impl VmThread {
         }
 
         let dns_vsock_port = config.dns_vsock_port;
+        let initial_port_maps = config.port_maps.clone();
         let control_for_block = Arc::clone(control);
         let reply_for_block = Arc::clone(reply);
         let block = RcBlock::new(move |error: *mut NSError| {
@@ -465,6 +504,7 @@ impl VmThread {
                 if error.is_null() {
                     let mut ctrl = control_for_block.lock().unwrap_or_else(|e| e.into_inner());
                     ctrl.state = InternalState::Running;
+                    ctrl.port_maps = initial_port_maps.clone();
                     let mut guard = reply_for_block.lock().unwrap_or_else(|e| e.into_inner());
                     if let Some(sender) = guard.take() {
                         let _ = sender.send(Ok(InternalState::Running));
@@ -817,6 +857,22 @@ impl VmThread {
         self.send_blocking(
             VmCommand::WaitForGuestReady {
                 ready_vsock_port,
+                reply: tx,
+            },
+            rx,
+        )?
+    }
+
+    pub fn add_port_map(
+        &self,
+        host_port: u16,
+        container_port: u16,
+    ) -> std::result::Result<(), Error> {
+        let (tx, rx) = oneshot::channel();
+        self.send_blocking(
+            VmCommand::AddPortMap {
+                host_port,
+                container_port,
                 reply: tx,
             },
             rx,

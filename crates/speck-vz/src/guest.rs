@@ -72,6 +72,10 @@ impl Guest {
         self.thread.dns_vsock_fd()
     }
 
+    pub fn add_port_map(&self, host_port: u16, container_port: u16) -> Result<(), Error> {
+        self.thread.add_port_map(host_port, container_port)
+    }
+
     /// Block until vminitd sends the READY signal on the configured vsock port.
     ///
     /// Delegates to [`VmThread::wait_for_ready`] using `ready_vsock_port` from the config.

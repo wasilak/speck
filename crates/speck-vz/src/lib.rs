@@ -10,7 +10,7 @@ pub mod guest;
 mod vm_thread;
 mod vsock;
 
-pub use config::GuestConfig;
+pub use config::{GuestConfig, PortMapConfig};
 pub use error::{Error, Result};
 pub use guest::Guest;
 pub use speck_core::{EngineEvent, EventSink, VmState};

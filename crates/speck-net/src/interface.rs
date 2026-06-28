@@ -79,4 +79,10 @@ impl SmoltcpInterface {
     pub fn sockets_mut(&mut self) -> &mut SocketSet<'static> {
         &mut self.sockets
     }
+
+    /// Poll published-port listeners and active-connect accepted host streams.
+    pub fn poll_port_publish(&mut self, bridge: &mut crate::port_publish::PortPublishBridge) {
+        let cx = self.iface.context();
+        bridge.poll_new_host_connections(&mut self.sockets, cx);
+    }
 }
