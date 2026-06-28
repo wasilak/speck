@@ -2330,6 +2330,7 @@ dependencies = [
  "serde_json",
  "speck-core",
  "speck-dockerd",
+ "speck-net",
  "speck-vz",
  "tar",
  "tokio",
