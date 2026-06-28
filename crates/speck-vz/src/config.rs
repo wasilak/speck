@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use speck_net::config::NetworkConfig;
+pub use speck_net::PortMapConfig;
 
 /// Configuration for a micro-VM guest.
 ///
@@ -88,6 +89,11 @@ pub struct GuestConfig {
     /// vminitd sends a one-byte READY signal on this port once
     /// containerd and BuildKit are fully operational.  Recommended: 9000.
     pub ready_vsock_port: Option<u32>,
+
+    /// Published TCP port maps (`-p host:container`).
+    ///
+    /// Each entry spawns a host TcpListener in speck-net after VM start.
+    pub port_maps: Vec<PortMapConfig>,
 }
 
 impl Default for GuestConfig {
@@ -107,6 +113,7 @@ impl Default for GuestConfig {
             containerd_vsock_port: None,
             buildkitd_vsock_port: None,
             ready_vsock_port: None,
+            port_maps: Vec::new(),
         }
     }
 }
@@ -157,6 +164,17 @@ impl GuestConfig {
         {
             return Err(format!("data disk not found: {}", data.display()));
         }
+        for port_map in &self.port_maps {
+            if port_map.host_port <= 1024 {
+                return Err(format!(
+                    "privileged host port {} is not allowed in port map; use a port > 1024",
+                    port_map.host_port
+                ));
+            }
+            if port_map.container_port == 0 {
+                return Err("container port must be greater than 0".into());
+            }
+        }
         Ok(())
     }
 }
@@ -194,6 +212,7 @@ pub struct GuestConfigBuilder {
     containerd_vsock_port: Option<u32>,
     buildkitd_vsock_port: Option<u32>,
     ready_vsock_port: Option<u32>,
+    port_maps: Vec<PortMapConfig>,
 }
 
 impl Default for GuestConfigBuilder {
@@ -213,6 +232,7 @@ impl Default for GuestConfigBuilder {
             containerd_vsock_port: None,
             buildkitd_vsock_port: None,
             ready_vsock_port: None,
+            port_maps: Vec::new(),
         }
     }
 }
@@ -316,6 +336,12 @@ impl GuestConfigBuilder {
         self
     }
 
+    /// Add a published TCP port map (`-p host:container`).
+    pub fn add_port_map(mut self, config: PortMapConfig) -> Self {
+        self.port_maps.push(config);
+        self
+    }
+
     /// Consume the builder and produce a [`GuestConfig`].
     ///
     /// # Panics
@@ -339,6 +365,7 @@ impl GuestConfigBuilder {
             containerd_vsock_port: self.containerd_vsock_port,
             buildkitd_vsock_port: self.buildkitd_vsock_port,
             ready_vsock_port: self.ready_vsock_port,
+            port_maps: self.port_maps,
         }
     }
 }
