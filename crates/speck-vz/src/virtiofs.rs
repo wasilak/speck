@@ -26,7 +26,8 @@ pub fn validate_virtiofs_tag(tag: &str) -> bool {
     if tag.len() > 36 {
         return false;
     }
-    tag.bytes().all(|b| b.is_ascii_graphic() || b == b'-' || b == b'_')
+    tag.bytes()
+        .all(|b| b.is_ascii_graphic() || b == b'-' || b == b'_')
 }
 
 /// Generate the kernel cmdline fragment for VirtioFS mounts.
@@ -97,10 +98,7 @@ pub fn configure_virtiofs_devices(
             )
         };
         let share = unsafe {
-            VZSingleDirectoryShare::initWithDirectory(
-                VZSingleDirectoryShare::alloc(),
-                &shared_dir,
-            )
+            VZSingleDirectoryShare::initWithDirectory(VZSingleDirectoryShare::alloc(), &shared_dir)
         };
 
         let tag_ns = NSString::from_str(&tag);
@@ -110,17 +108,17 @@ pub fn configure_virtiofs_devices(
                 &tag_ns,
             )
         };
-        unsafe { fs_dev.setShare(Some(&share)); }
+        unsafe {
+            fs_dev.setShare(Some(&share));
+        }
         fs_devices.push(fs_dev);
     }
 
     // Add the speck-home device for Ryuk access
     {
-        let speck_home_str = NSString::from_str(
-            speck_home.to_str().ok_or_else(|| {
-                crate::error::Error::VirtioFsMount("non-UTF-8 speck_home path".into())
-            })?,
-        );
+        let speck_home_str = NSString::from_str(speck_home.to_str().ok_or_else(|| {
+            crate::error::Error::VirtioFsMount("non-UTF-8 speck_home path".into())
+        })?);
         let speck_home_url = NSURL::fileURLWithPath(&speck_home_str);
 
         let shared_dir = unsafe {
@@ -131,10 +129,7 @@ pub fn configure_virtiofs_devices(
             )
         };
         let share = unsafe {
-            VZSingleDirectoryShare::initWithDirectory(
-                VZSingleDirectoryShare::alloc(),
-                &shared_dir,
-            )
+            VZSingleDirectoryShare::initWithDirectory(VZSingleDirectoryShare::alloc(), &shared_dir)
         };
 
         let tag_ns = NSString::from_str(SPECK_HOME_TAG);
@@ -144,13 +139,17 @@ pub fn configure_virtiofs_devices(
                 &tag_ns,
             )
         };
-        unsafe { fs_dev.setShare(Some(&share)); }
+        unsafe {
+            fs_dev.setShare(Some(&share));
+        }
         fs_devices.push(fs_dev);
     }
 
     // Build reference slice for NSArray (coerces via Deref)
-    let refs: Vec<&VZDirectorySharingDeviceConfiguration> =
-        fs_devices.iter().map(|d| d as &VZDirectorySharingDeviceConfiguration).collect();
+    let refs: Vec<&VZDirectorySharingDeviceConfiguration> = fs_devices
+        .iter()
+        .map(|d| d as &VZDirectorySharingDeviceConfiguration)
+        .collect();
 
     unsafe {
         vm_config.setDirectorySharingDevices(&NSArray::from_slice(&refs));

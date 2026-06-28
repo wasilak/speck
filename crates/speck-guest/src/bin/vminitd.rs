@@ -597,9 +597,7 @@ mod linux {
                         eprintln!("vminitd: created named volume directory {target}");
                     }
                     Err(e) => {
-                        eprintln!(
-                            "vminitd: failed to create named volume dir {target}: {e}"
-                        );
+                        eprintln!("vminitd: failed to create named volume dir {target}: {e}");
                     }
                 }
             }

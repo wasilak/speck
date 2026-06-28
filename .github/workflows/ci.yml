@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-Dwarnings"
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          targets: aarch64-apple-darwin
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: cargo fmt
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy
+        run: cargo clippy --all-targets -- -Dwarnings
+
+      # Phase 1 uses cargo check (no Apple framework linkage in stubs yet).
+      # Phase 2 upgrades to cargo build on a macOS runner per D-10.
+      - name: cargo check (aarch64 cross-compile)
+        run: cargo check --target aarch64-apple-darwin --workspace
+
+      - name: No-print lint (hard gate)
+        run: |
+          if rg --type rust '(print!|println!|eprint!|eprintln!)\s*\(' crates/speck-core/src/; then
+            echo "FAIL: print macros found in speck-core. Use the EventSink trait instead."
+            exit 1
+          fi
+          echo "OK: no print macros in speck-core"
+
+      - name: cargo test
+        run: cargo test --workspace

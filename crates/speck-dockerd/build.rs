@@ -6,10 +6,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     tonic_prost_build::configure()
         .build_server(false)
         .build_client(true)
-        .compile_protos(
-            &[&proto_dir.join("buildkit/control.proto")],
-            &[&proto_dir],
-        )
+        .compile_protos(&[&proto_dir.join("buildkit/control.proto")], &[&proto_dir])
         .unwrap();
 
     Ok(())

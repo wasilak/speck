@@ -306,10 +306,8 @@ impl VmThread {
                 .to_str()
                 .ok_or_else(|| Error::VmFramework("non-UTF-8 kernel path".into()))?,
         );
-        let virtiofs_cmdline = crate::virtiofs::cmdline_virtiofs_arg(
-            &config.volume_mounts,
-            &config.speck_home,
-        );
+        let virtiofs_cmdline =
+            crate::virtiofs::cmdline_virtiofs_arg(&config.volume_mounts, &config.speck_home);
 
         let bootloader = unsafe {
             let kernel_url = NSURL::fileURLWithPath(&kernel_str);

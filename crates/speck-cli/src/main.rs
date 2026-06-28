@@ -1,0 +1,141 @@
+use std::path::PathBuf;
+
+use clap::Parser;
+use tracing_subscriber::EnvFilter;
+
+mod commands;
+mod docker_client;
+mod theme;
+
+#[derive(Parser)]
+#[command(
+    name = "spk",
+    version,
+    about = "Ultra-fast container runtime for Apple Silicon"
+)]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Parser)]
+enum Commands {
+    /// Start the Speck VM and Docker API server
+    Up(UpArgs),
+    /// Stop the Speck VM
+    Down,
+    /// Pull an image and run a container
+    Run(RunArgs),
+    /// List running containers
+    Ps,
+    /// Execute a command in a running container
+    Exec(ExecArgs),
+    /// Stop a running container
+    Stop(StopArgs),
+    /// Remove a container
+    Rm(RmArgs),
+    /// Build an image from a Dockerfile
+    Build(BuildArgs),
+    /// Open the interactive dashboard TUI
+    Dashboard,
+    /// Generate shell completions
+    Completion(CompletionArgs),
+}
+
+#[derive(Parser)]
+struct UpArgs {
+    #[arg(long)]
+    kernel: Option<PathBuf>,
+    #[arg(long)]
+    initrd: Option<PathBuf>,
+    #[arg(long)]
+    rootfs: Option<PathBuf>,
+    #[arg(long)]
+    data_disk: Option<PathBuf>,
+}
+
+#[derive(Parser)]
+struct RunArgs {
+    image: String,
+    #[arg(trailing_var_arg = true)]
+    cmd: Vec<String>,
+    #[arg(short = 'p')]
+    port: Vec<String>,
+    #[arg(short = 'v')]
+    volume: Vec<String>,
+    #[arg(short = 'e')]
+    env: Vec<String>,
+    #[arg(short = 'd')]
+    detach: bool,
+}
+
+#[derive(Parser)]
+struct ExecArgs {
+    container: String,
+    #[arg(trailing_var_arg = true)]
+    cmd: Vec<String>,
+    #[arg(long)]
+    tty: bool,
+}
+
+#[derive(Parser)]
+struct StopArgs {
+    container: String,
+}
+
+#[derive(Parser)]
+struct RmArgs {
+    container: String,
+}
+
+#[derive(Parser)]
+struct BuildArgs {
+    #[arg(default_value = ".")]
+    context: PathBuf,
+    #[arg(long)]
+    tag: Option<String>,
+    #[arg(long)]
+    dockerfile: Option<String>,
+    #[arg(long)]
+    target: Option<String>,
+    #[arg(long)]
+    no_cache: bool,
+}
+
+#[derive(Parser)]
+struct CompletionArgs {
+    shell: clap_complete::Shell,
+}
+
+fn resolve_speck_home() -> PathBuf {
+    if let Ok(home) = std::env::var("SPECK_HOME") {
+        return PathBuf::from(home);
+    }
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+    PathBuf::from(home).join(".local/share/speck")
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::from_default_env())
+        .init();
+
+    let cli = Cli::parse();
+    let speck_home = resolve_speck_home();
+
+    match cli.command {
+        Commands::Up(args) => commands::up::run_up(args, &speck_home).await?,
+        Commands::Down => commands::down::run_down(&speck_home).await?,
+        Commands::Run(args) => commands::run::run_run(args, &speck_home).await?,
+        Commands::Ps => commands::ps::run_ps(&speck_home).await?,
+        Commands::Exec(args) => commands::exec::run_exec(args, &speck_home).await?,
+        Commands::Stop(args) => commands::stop::run_stop(args, &speck_home).await?,
+        Commands::Rm(args) => commands::rm::run_rm(args, &speck_home).await?,
+        Commands::Build(args) => commands::build::run_build(args, &speck_home).await?,
+        Commands::Dashboard => commands::dashboard::run_dashboard(&speck_home).await?,
+        Commands::Completion(args) => commands::completion::run_completion(args),
+    }
+
+    Ok(())
+}

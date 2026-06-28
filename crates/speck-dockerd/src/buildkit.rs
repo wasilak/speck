@@ -45,10 +45,7 @@ impl BuildkitClient {
         })
     }
 
-    pub async fn solve(
-        &self,
-        req: proto::SolveRequest,
-    ) -> Result<proto::SolveResponse, Error> {
+    pub async fn solve(&self, req: proto::SolveRequest) -> Result<proto::SolveResponse, Error> {
         let mut client = self.inner.lock().await;
         client
             .solve(req)
