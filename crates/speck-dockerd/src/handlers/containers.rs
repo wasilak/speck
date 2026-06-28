@@ -165,6 +165,60 @@ pub async fn start(State(state): State<AppState>, Path(id): Path<String>) -> Res
         })
         .await?;
     client.task_start(&id).await?;
+
+    // Apply port bindings from the speck.port_bindings label stored during create().
+    // Malformed or missing labels are silently skipped — port map failures must not
+    // cause the container start to fail.
+    if let Some(pb_json) = info.labels.get("speck.port_bindings") {
+        match serde_json::from_str::<HashMap<String, Vec<PortBindingBody>>>(pb_json) {
+            Err(e) => {
+                tracing::warn!(
+                    label = pb_json,
+                    error = %e,
+                    "failed to deserialize speck.port_bindings; skipping port maps"
+                );
+            }
+            Ok(port_bindings) => {
+                for (port_proto, host_bindings) in &port_bindings {
+                    let cp: u16 = match port_proto.split('/').next().and_then(|s| s.parse().ok()) {
+                        Some(p) => p,
+                        None => {
+                            tracing::warn!(
+                                port_proto = port_proto.as_str(),
+                                "invalid container port in speck.port_bindings; skipping"
+                            );
+                            continue;
+                        }
+                    };
+                    for hb in host_bindings {
+                        let Some(hp_str) = hb.host_port.as_deref() else {
+                            continue;
+                        };
+                        let hp: u16 = match hp_str.parse() {
+                            Ok(p) => p,
+                            Err(_) => {
+                                tracing::warn!(
+                                    host_port = hp_str,
+                                    container_port = cp,
+                                    "invalid host port in speck.port_bindings; skipping"
+                                );
+                                continue;
+                            }
+                        };
+                        if let Err(e) = state.guest.add_port_map(hp, cp) {
+                            tracing::warn!(
+                                host_port = hp,
+                                container_port = cp,
+                                error = %e,
+                                "failed to add port map"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     crate::handlers::events::emit_event(
         &state,
         json!({"Type": "container", "Action": "start", "Actor": {"ID": id}}),
