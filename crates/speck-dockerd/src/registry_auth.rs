@@ -39,7 +39,8 @@ pub fn decode_registry_auth_header(header_value: &str) -> Option<RegistryCredent
         .decode(header_value)
         .ok()?;
     let auth: HeaderAuth = serde_json::from_slice(&decoded).ok()?;
-    if auth.username.is_empty() || auth.password.is_empty() { // secret field, not logged
+    if auth.username.is_empty() || auth.password.is_empty() {
+        // secret field, not logged
         return None;
     }
 
@@ -55,9 +56,13 @@ pub fn parse_docker_config(server: &str) -> Option<RegistryCredentials> {
     let path = docker_config_path()?;
     let contents = fs::read(path).ok()?;
     let config: DockerConfig = serde_json::from_slice(&contents).ok()?;
-    let entry = config.auths.get(server).or_else(|| config.auths.get(&normalize_docker_hub_server(server)))?;
+    let entry = config
+        .auths
+        .get(server)
+        .or_else(|| config.auths.get(&normalize_docker_hub_server(server)))?;
 
-    if let (Some(username), Some(password)) = (&entry.username, &entry.password) { // secret field, not logged
+    if let (Some(username), Some(password)) = (&entry.username, &entry.password) {
+        // secret field, not logged
         tracing::debug!(username = %username, server = %server, "loaded registry credentials from Docker config");
         return Some(RegistryCredentials {
             username: username.clone(),
@@ -67,10 +72,13 @@ pub fn parse_docker_config(server: &str) -> Option<RegistryCredentials> {
     }
 
     let encoded = entry.auth.as_deref()?;
-    let decoded = base64::engine::general_purpose::STANDARD.decode(encoded).ok()?;
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .ok()?;
     let decoded = String::from_utf8(decoded).ok()?;
     let (username, password) = decoded.split_once(':')?; // secret field, not logged
-    if username.is_empty() || password.is_empty() { // secret field, not logged
+    if username.is_empty() || password.is_empty() {
+        // secret field, not logged
         return None;
     }
 

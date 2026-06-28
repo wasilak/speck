@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use speck_net::config::NetworkConfig;
 pub use speck_net::PortMapConfig;
+use speck_net::config::NetworkConfig;
 
 /// Configuration for a micro-VM guest.
 ///
@@ -148,10 +148,7 @@ impl GuestConfig {
         }
         if let Some(ref net) = self.network {
             if net.mtu < 1500 {
-                return Err(format!(
-                    "network MTU must be >= 1500, got {}",
-                    net.mtu
-                ));
+                return Err(format!("network MTU must be >= 1500, got {}", net.mtu));
             }
         }
         if let Some(ref rootfs) = self.rootfs_disk_path

@@ -40,7 +40,10 @@ pub fn build_router(state: AppState) -> Router {
             get(networks::network_inspect).delete(networks::network_remove),
         )
         .route("/networks/{id}/connect", post(networks::network_connect))
-        .route("/networks/{id}/disconnect", post(networks::network_disconnect))
+        .route(
+            "/networks/{id}/disconnect",
+            post(networks::network_disconnect),
+        )
         .route("/volumes", get(volumes::volume_list))
         .route("/volumes/create", post(volumes::volume_create))
         .route(

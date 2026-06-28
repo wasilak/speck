@@ -36,34 +36,36 @@ pub fn serve(port: u32) -> io::Result<()> {
 
     let ret = unsafe { libc::bind(fd, addr_ptr, addr_len) };
     if ret < 0 {
-        unsafe { libc::close(fd); }
+        unsafe {
+            libc::close(fd);
+        }
         return Err(io::Error::last_os_error());
     }
 
     let ret = unsafe { libc::listen(fd, 1) };
     if ret < 0 {
-        unsafe { libc::close(fd); }
+        unsafe {
+            libc::close(fd);
+        }
         return Err(io::Error::last_os_error());
     }
 
     let client = unsafe { libc::accept(fd, std::ptr::null_mut(), std::ptr::null_mut()) };
     if client < 0 {
-        unsafe { libc::close(fd); }
+        unsafe {
+            libc::close(fd);
+        }
         return Err(io::Error::last_os_error());
     }
 
     // Close listen fd — we only handle one connection
-    unsafe { libc::close(fd); }
+    unsafe {
+        libc::close(fd);
+    }
 
     let mut buf = [0u8; BUF_SIZE];
     loop {
-        let n = unsafe {
-            libc::read(
-                client,
-                buf.as_mut_ptr() as *mut libc::c_void,
-                BUF_SIZE,
-            )
-        };
+        let n = unsafe { libc::read(client, buf.as_mut_ptr() as *mut libc::c_void, BUF_SIZE) };
         if n <= 0 {
             break;
         }
@@ -77,13 +79,17 @@ pub fn serve(port: u32) -> io::Result<()> {
                 )
             };
             if w < 0 {
-                unsafe { libc::close(client); }
+                unsafe {
+                    libc::close(client);
+                }
                 return Err(io::Error::last_os_error());
             }
             written += w as usize;
         }
     }
 
-    unsafe { libc::close(client); }
+    unsafe {
+        libc::close(client);
+    }
     Ok(())
 }

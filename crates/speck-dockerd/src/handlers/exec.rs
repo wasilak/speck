@@ -39,7 +39,9 @@ pub async fn create(
     Json(body): Json<ExecCreateBody>,
 ) -> Result<impl IntoResponse> {
     if body.cmd.is_empty() {
-        return Err(DockerApiError::BadRequest("exec Cmd cannot be empty".into()));
+        return Err(DockerApiError::BadRequest(
+            "exec Cmd cannot be empty".into(),
+        ));
     }
 
     let exec_id = generated_exec_id(&container_id);
@@ -94,7 +96,11 @@ pub async fn start(
 
     let mut running_spec = spec.clone();
     running_spec.running = true;
-    state.exec_store.lock().await.update(&id, running_spec.clone());
+    state
+        .exec_store
+        .lock()
+        .await
+        .update(&id, running_spec.clone());
 
     tokio::spawn(async move {
         match upgrade.await {
@@ -102,7 +108,11 @@ pub async fn start(
                 let mut io = TokioIo::new(upgraded);
                 if running_spec.attach_stdout {
                     let payload = Vec::new();
-                    let data = if running_spec.tty { payload } else { encode_frame(1, &payload) };
+                    let data = if running_spec.tty {
+                        payload
+                    } else {
+                        encode_frame(1, &payload)
+                    };
                     let _ = io.write_all(&data).await;
                 }
                 if running_spec.attach_stderr && !running_spec.tty {
@@ -110,7 +120,9 @@ pub async fn start(
                 }
                 let _ = io.shutdown().await;
             }
-            Err(err) => tracing::warn!(?err, exec_id = %running_spec.id, "Docker exec HTTP upgrade failed"),
+            Err(err) => {
+                tracing::warn!(?err, exec_id = %running_spec.id, "Docker exec HTTP upgrade failed")
+            }
         }
     });
 
@@ -123,7 +135,10 @@ pub async fn start(
         .expect("valid switching protocols response"))
 }
 
-pub async fn inspect(State(state): State<AppState>, Path(id): Path<String>) -> Result<impl IntoResponse> {
+pub async fn inspect(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse> {
     let spec = state
         .exec_store
         .lock()

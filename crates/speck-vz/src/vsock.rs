@@ -24,9 +24,7 @@ impl VzSocket {
     /// Read up to `buf.len()` bytes. Returns the number of bytes read.
     /// On EOF (read returns 0), returns `Ok(0)`.
     pub fn read(&self, buf: &mut [u8]) -> io::Result<usize> {
-        let ret = unsafe {
-            libc::read(self.fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len())
-        };
+        let ret = unsafe { libc::read(self.fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len()) };
         if ret < 0 {
             Err(io::Error::last_os_error())
         } else {
@@ -36,9 +34,7 @@ impl VzSocket {
 
     /// Write up to `buf.len()` bytes. Returns the number of bytes written.
     pub fn write(&self, buf: &[u8]) -> io::Result<usize> {
-        let ret = unsafe {
-            libc::write(self.fd, buf.as_ptr() as *const libc::c_void, buf.len())
-        };
+        let ret = unsafe { libc::write(self.fd, buf.as_ptr() as *const libc::c_void, buf.len()) };
         if ret < 0 {
             Err(io::Error::last_os_error())
         } else {
@@ -55,6 +51,8 @@ impl AsRawFd for VzSocket {
 
 impl Drop for VzSocket {
     fn drop(&mut self) {
-        unsafe { libc::close(self.fd); }
+        unsafe {
+            libc::close(self.fd);
+        }
     }
 }

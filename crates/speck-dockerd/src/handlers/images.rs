@@ -53,7 +53,10 @@ pub async fn image_list(State(state): State<AppState>) -> Result<impl IntoRespon
     Ok(Json(images))
 }
 
-pub async fn image_inspect(State(state): State<AppState>, Path(name): Path<String>) -> Result<impl IntoResponse> {
+pub async fn image_inspect(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<impl IntoResponse> {
     let client = state.containerd_client().await?;
     let image = client.image_get(&name).await?;
     Ok(Json(speck_core::image::ImageInspect {
@@ -75,10 +78,15 @@ pub async fn image_push(
     let credentials = registry_credentials(&headers, &server);
     let client = state.containerd_client().await?;
     client.image_push(&name, credentials).await?;
-    Ok(json_progress_stream(vec![json!({"status": format!("Pushed {name}")})]))
+    Ok(json_progress_stream(vec![
+        json!({"status": format!("Pushed {name}")}),
+    ]))
 }
 
-pub async fn image_remove(State(state): State<AppState>, Path(name): Path<String>) -> Result<impl IntoResponse> {
+pub async fn image_remove(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<impl IntoResponse> {
     let client = state.containerd_client().await?;
     client.image_delete(&name).await?;
     Ok(Json(vec![json!({"Untagged": name})]))
@@ -110,10 +118,17 @@ fn registry_server(image: &str) -> String {
 
 fn validate_image_ref(image: &str) -> Result<()> {
     if image.trim().is_empty() {
-        return Err(DockerApiError::BadRequest("image reference cannot be empty".into()));
+        return Err(DockerApiError::BadRequest(
+            "image reference cannot be empty".into(),
+        ));
     }
-    if image.chars().any(|ch| matches!(ch, ';' | '&' | '|' | '`' | '$' | '<' | '>' | '\n' | '\r')) {
-        return Err(DockerApiError::BadRequest("image reference contains shell metacharacters".into()));
+    if image
+        .chars()
+        .any(|ch| matches!(ch, ';' | '&' | '|' | '`' | '$' | '<' | '>' | '\n' | '\r'))
+    {
+        return Err(DockerApiError::BadRequest(
+            "image reference contains shell metacharacters".into(),
+        ));
     }
     Ok(())
 }
@@ -124,5 +139,10 @@ fn json_progress_stream(values: Vec<serde_json::Value>) -> Response {
         line.push(b'\n');
         Ok::<Bytes, Infallible>(Bytes::from(line))
     }));
-    (StatusCode::OK, [(header::CONTENT_TYPE, "application/json")], Body::from_stream(stream)).into_response()
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "application/json")],
+        Body::from_stream(stream),
+    )
+        .into_response()
 }

@@ -8,20 +8,19 @@ use tokio::sync::{mpsc, oneshot};
 
 use block2::{RcBlock, StackBlock};
 use dispatch2::{DispatchQueue, DispatchQueueAttr};
-use objc2::ffi::NSInteger;
 use objc2::AnyThread;
+use objc2::ffi::NSInteger;
 use objc2::rc::{Retained, autoreleasepool};
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::{NSArray, NSError, NSFileHandle, NSString, NSURL};
 use objc2_virtualization::{
-    VZEntropyDeviceConfiguration, VZGenericPlatformConfiguration, VZLinuxBootLoader,
-    VZMACAddress, VZNetworkDeviceAttachment, VZNetworkDeviceConfiguration,
-    VZSocketDevice, VZSocketDeviceConfiguration, VZStorageDeviceAttachment,
-    VZStorageDeviceConfiguration, VZVirtioBlockDeviceConfiguration,
-    VZVirtioEntropyDeviceConfiguration, VZVirtioNetworkDeviceConfiguration,
-    VZVirtioSocketConnection, VZVirtioSocketDevice, VZVirtioSocketDeviceConfiguration,
-    VZVirtualMachine, VZVirtualMachineConfiguration, VZFileHandleNetworkDeviceAttachment,
-    VZDiskImageStorageDeviceAttachment,
+    VZDiskImageStorageDeviceAttachment, VZEntropyDeviceConfiguration,
+    VZFileHandleNetworkDeviceAttachment, VZGenericPlatformConfiguration, VZLinuxBootLoader,
+    VZMACAddress, VZNetworkDeviceAttachment, VZNetworkDeviceConfiguration, VZSocketDevice,
+    VZSocketDeviceConfiguration, VZStorageDeviceAttachment, VZStorageDeviceConfiguration,
+    VZVirtioBlockDeviceConfiguration, VZVirtioEntropyDeviceConfiguration,
+    VZVirtioNetworkDeviceConfiguration, VZVirtioSocketConnection, VZVirtioSocketDevice,
+    VZVirtioSocketDeviceConfiguration, VZVirtualMachine, VZVirtualMachineConfiguration,
 };
 use socket2::{Domain, Socket, Type};
 
@@ -218,9 +217,8 @@ impl VmThread {
                                     let _ = reply.send(Ok(dup_fd));
                                 }
                             } else {
-                                let _ = reply.send(Err(Error::Network(
-                                    "no netstack fd available".into(),
-                                )));
+                                let _ = reply
+                                    .send(Err(Error::Network("no netstack fd available".into())));
                             }
                         }
                         VmCommand::DnsVsockFd { reply } => {
@@ -235,9 +233,8 @@ impl VmThread {
                                     let _ = reply.send(Ok(dup_fd));
                                 }
                             } else {
-                                let _ = reply.send(Err(Error::Network(
-                                    "no dns vsock fd available".into(),
-                                )));
+                                let _ = reply
+                                    .send(Err(Error::Network("no dns vsock fd available".into())));
                             }
                         }
                         VmCommand::WaitForGuestReady {
@@ -246,8 +243,7 @@ impl VmThread {
                         } => {
                             let control = Arc::clone(&control);
                             let q = queue.clone();
-                            let result =
-                                Self::do_wait_for_ready(&control, &q, ready_vsock_port);
+                            let result = Self::do_wait_for_ready(&control, &q, ready_vsock_port);
                             let _ = reply.send(result);
                         }
                         VmCommand::AddPortMap {
@@ -357,17 +353,16 @@ impl VmThread {
             let entropy_array = NSArray::from_slice(&[entropy_ref]);
             vm_config.setEntropyDevices(&entropy_array);
 
-            let vsock = VZVirtioSocketDeviceConfiguration::init(
-                VZVirtioSocketDeviceConfiguration::alloc(),
-            );
+            let vsock =
+                VZVirtioSocketDeviceConfiguration::init(VZVirtioSocketDeviceConfiguration::alloc());
             let vsock_ref: &VZSocketDeviceConfiguration = &vsock;
             let socket_array = NSArray::from_slice(&[vsock_ref]);
             vm_config.setSocketDevices(&socket_array);
 
             // ── Network device (Virtio + file handle attachment) ──────────
             if let Some(ref net) = network {
-                let sockets = Socket::pair(Domain::UNIX, Type::DGRAM, None)
-                    .map_err(Error::NetworkIo)?;
+                let sockets =
+                    Socket::pair(Domain::UNIX, Type::DGRAM, None).map_err(Error::NetworkIo)?;
                 let (host_socket, vm_socket) = (sockets.0, sockets.1);
 
                 host_socket
@@ -381,16 +376,13 @@ impl VmThread {
                     return Err(Error::NetworkIo(std::io::Error::last_os_error()));
                 }
 
-                let file_handle = NSFileHandle::initWithFileDescriptor(
-                    NSFileHandle::alloc(),
-                    dup_vm_fd,
-                );
+                let file_handle =
+                    NSFileHandle::initWithFileDescriptor(NSFileHandle::alloc(), dup_vm_fd);
 
-                let attachment =
-                    VZFileHandleNetworkDeviceAttachment::initWithFileHandle(
-                        VZFileHandleNetworkDeviceAttachment::alloc(),
-                        &file_handle,
-                    );
+                let attachment = VZFileHandleNetworkDeviceAttachment::initWithFileHandle(
+                    VZFileHandleNetworkDeviceAttachment::alloc(),
+                    &file_handle,
+                );
 
                 // Only set the MTU when it differs from the default (1500)
                 if net.mtu > 1500 {
@@ -406,17 +398,11 @@ impl VmThread {
                 // Convert the raw MAC bytes to a VZMACAddress via string.
                 let mac_str = format!(
                     "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-                    net.mac[0], net.mac[1], net.mac[2],
-                    net.mac[3], net.mac[4], net.mac[5],
+                    net.mac[0], net.mac[1], net.mac[2], net.mac[3], net.mac[4], net.mac[5],
                 );
                 let mac_ns = NSString::from_str(&mac_str);
-                let mac_addr = VZMACAddress::initWithString(
-                    VZMACAddress::alloc(),
-                    &mac_ns,
-                )
-                .ok_or_else(|| {
-                    Error::VmFramework("invalid MAC address".into())
-                })?;
+                let mac_addr = VZMACAddress::initWithString(VZMACAddress::alloc(), &mac_ns)
+                    .ok_or_else(|| Error::VmFramework("invalid MAC address".into()))?;
                 virtio_net.setMACAddress(&mac_addr);
 
                 let net_ref: &VZNetworkDeviceConfiguration = &virtio_net;
@@ -434,20 +420,18 @@ impl VmThread {
 
             // ── Storage devices: rootfs (/dev/vda) first, data disk (/dev/vdb) second
             //    — ordering determines guest device names (Pitfall 4) ─────────────
-            let (_rootfs_block, _data_block) =
-                if let (Some(rootfs_path), Some(data_path)) =
-                    (&config.rootfs_disk_path, &config.data_disk_path)
-                {
-                    let rootfs_block = Self::make_block_device(rootfs_path, false)?;
-                    let data_block = Self::make_block_device(data_path, false)?;
-                    let disks: &[&VZStorageDeviceConfiguration] =
-                        &[&rootfs_block, &data_block];
-                    let storage_array = NSArray::from_slice(disks);
-                    vm_config.setStorageDevices(&storage_array);
-                    (Some(rootfs_block), Some(data_block))
-                } else {
-                    (None, None)
-                };
+            let (_rootfs_block, _data_block) = if let (Some(rootfs_path), Some(data_path)) =
+                (&config.rootfs_disk_path, &config.data_disk_path)
+            {
+                let rootfs_block = Self::make_block_device(rootfs_path, false)?;
+                let data_block = Self::make_block_device(data_path, false)?;
+                let disks: &[&VZStorageDeviceConfiguration] = &[&rootfs_block, &data_block];
+                let storage_array = NSArray::from_slice(disks);
+                vm_config.setStorageDevices(&storage_array);
+                (Some(rootfs_block), Some(data_block))
+            } else {
+                (None, None)
+            };
 
             Result::<_, Error>::Ok((vm_config, platform, entropy, vsock))
         }?;
@@ -536,10 +520,7 @@ impl VmThread {
                                     },
                                     );
                                     unsafe {
-                                        vsock.connectToPort_completionHandler(
-                                            dns_port,
-                                            &dns_block,
-                                        );
+                                        vsock.connectToPort_completionHandler(dns_port, &dns_block);
                                     }
                                 }
                                 Err(_) => {
@@ -673,9 +654,7 @@ impl VmThread {
         {
             let ctrl = control.lock().unwrap_or_else(|e| e.into_inner());
             if ctrl.socket_device.inner.is_none() {
-                return Err(Error::VsockConnect(
-                    "VM has no vsock socket device".into(),
-                ));
+                return Err(Error::VsockConnect("VM has no vsock socket device".into()));
             }
         }
 
@@ -692,8 +671,7 @@ impl VmThread {
                     // Clone the sender for the block; the original stays for error path.
                     let done_tx_for_block = done_tx.clone();
                     let block = StackBlock::new(
-                        move |connection: *mut VZVirtioSocketConnection,
-                              error: *mut NSError| {
+                        move |connection: *mut VZVirtioSocketConnection, error: *mut NSError| {
                             if !connection.is_null() {
                                 let conn = unsafe { &*connection };
                                 let raw_fd = unsafe { conn.fileDescriptor() };
@@ -702,8 +680,7 @@ impl VmThread {
                                 let dup_fd = unsafe { libc::dup(raw_fd) };
                                 if dup_fd < 0 {
                                     let io_err = std::io::Error::last_os_error();
-                                    let _ = done_tx_for_block
-                                        .send(Err(Error::VsockIo(io_err)));
+                                    let _ = done_tx_for_block.send(Err(Error::VsockIo(io_err)));
                                 } else {
                                     let sock = unsafe { VzSocket::from_raw_fd(dup_fd) };
                                     let _ = done_tx_for_block.send(Ok(sock));
@@ -712,10 +689,9 @@ impl VmThread {
                                 autoreleasepool(|pool| {
                                     let ns_error = unsafe { &*error };
                                     let desc = ns_error.localizedDescription();
-                                    let err_str =
-                                        unsafe { desc.to_str(pool).to_string() };
-                                    let _ = done_tx_for_block
-                                        .send(Err(Error::VsockConnect(err_str)));
+                                    let err_str = unsafe { desc.to_str(pool).to_string() };
+                                    let _ =
+                                        done_tx_for_block.send(Err(Error::VsockConnect(err_str)));
                                 });
                             } else {
                                 let _ = done_tx_for_block.send(Err(Error::VsockConnect(
@@ -765,9 +741,7 @@ impl VmThread {
                     if &buf == b"READY\n" {
                         return Ok(());
                     } else {
-                        return Err(Error::VsockConnect(
-                            "unexpected READY signal".into(),
-                        ));
+                        return Err(Error::VsockConnect("unexpected READY signal".into()));
                     }
                 }
                 Err(Error::VsockConnect(_)) | Err(Error::VsockTimeout) => {

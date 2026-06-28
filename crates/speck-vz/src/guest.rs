@@ -81,10 +81,9 @@ impl Guest {
     /// Delegates to [`VmThread::wait_for_ready`] using `ready_vsock_port` from the config.
     /// Returns an error if `ready_vsock_port` is not set in the config.
     pub fn wait_for_ready(&self) -> Result<(), Error> {
-        let ready_vsock_port = self
-            .config
-            .ready_vsock_port
-            .ok_or_else(|| Error::VsockConnect("ready_vsock_port not configured in GuestConfig".into()))?;
+        let ready_vsock_port = self.config.ready_vsock_port.ok_or_else(|| {
+            Error::VsockConnect("ready_vsock_port not configured in GuestConfig".into())
+        })?;
         self.thread.wait_for_ready(ready_vsock_port)
     }
 

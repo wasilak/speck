@@ -42,29 +42,39 @@ pub fn serve(dns_vsock_port: u32) -> io::Result<()> {
 
     let ret = unsafe { libc::bind(listen_fd, addr_ptr, addr_len) };
     if ret < 0 {
-        unsafe { libc::close(listen_fd); }
+        unsafe {
+            libc::close(listen_fd);
+        }
         return Err(io::Error::last_os_error());
     }
 
     let ret = unsafe { libc::listen(listen_fd, 1) };
     if ret < 0 {
-        unsafe { libc::close(listen_fd); }
+        unsafe {
+            libc::close(listen_fd);
+        }
         return Err(io::Error::last_os_error());
     }
 
     let vsock_fd = unsafe { libc::accept(listen_fd, std::ptr::null_mut(), std::ptr::null_mut()) };
     if vsock_fd < 0 {
-        unsafe { libc::close(listen_fd); }
+        unsafe {
+            libc::close(listen_fd);
+        }
         return Err(io::Error::last_os_error());
     }
 
     // Close listen fd — we only handle one vsock connection
-    unsafe { libc::close(listen_fd); }
+    unsafe {
+        libc::close(listen_fd);
+    }
 
     // --- Step 2: Create UDP socket bound to 0.0.0.0:53 ---
     let udp_fd = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM, 0) };
     if udp_fd < 0 {
-        unsafe { libc::close(vsock_fd); }
+        unsafe {
+            libc::close(vsock_fd);
+        }
         return Err(io::Error::last_os_error());
     }
 
@@ -76,10 +86,20 @@ pub fn serve(dns_vsock_port: u32) -> io::Result<()> {
     };
 
     let udp_addr_ptr = &udp_addr as *const libc::sockaddr_in as *const libc::sockaddr;
-    let ret = unsafe { libc::bind(udp_fd, udp_addr_ptr, std::mem::size_of::<libc::sockaddr_in>() as u32) };
+    let ret = unsafe {
+        libc::bind(
+            udp_fd,
+            udp_addr_ptr,
+            std::mem::size_of::<libc::sockaddr_in>() as u32,
+        )
+    };
     if ret < 0 {
-        unsafe { libc::close(vsock_fd); }
-        unsafe { libc::close(udp_fd); }
+        unsafe {
+            libc::close(vsock_fd);
+        }
+        unsafe {
+            libc::close(udp_fd);
+        }
         return Err(io::Error::last_os_error());
     }
 
@@ -88,8 +108,16 @@ pub fn serve(dns_vsock_port: u32) -> io::Result<()> {
 
     loop {
         let mut fds = [
-            libc::pollfd { fd: udp_fd, events: libc::POLLIN, revents: 0 },
-            libc::pollfd { fd: vsock_fd, events: libc::POLLIN, revents: 0 },
+            libc::pollfd {
+                fd: udp_fd,
+                events: libc::POLLIN,
+                revents: 0,
+            },
+            libc::pollfd {
+                fd: vsock_fd,
+                events: libc::POLLIN,
+                revents: 0,
+            },
         ];
 
         let ret = unsafe { libc::poll(fds.as_mut_ptr(), 2, -1) };

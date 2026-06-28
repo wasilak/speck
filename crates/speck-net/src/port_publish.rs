@@ -39,7 +39,11 @@ impl PortPublishBridge {
     }
 
     pub fn add_port_map(&mut self, config: PortMapConfig) -> std::io::Result<()> {
-        if self.listeners.iter().any(|(_, existing)| *existing == config) {
+        if self
+            .listeners
+            .iter()
+            .any(|(_, existing)| *existing == config)
+        {
             return Ok(());
         }
 
@@ -67,7 +71,11 @@ impl PortPublishBridge {
 
         for (stream, config) in accepted {
             let Some(ephemeral_port) = self.allocate_ephemeral_port() else {
-                tracing::warn!(host_port = config.host_port, container_port = config.container_port, "no ephemeral ports available for published connection");
+                tracing::warn!(
+                    host_port = config.host_port,
+                    container_port = config.container_port,
+                    "no ephemeral ports available for published connection"
+                );
                 let _ = stream.shutdown(Shutdown::Both);
                 continue;
             };

@@ -1,0 +1,10 @@
+[build]
+target = "aarch64-apple-darwin"
+rustc = "/Users/piotrek/.rustup/toolchains/stable-aarch64-apple-darwin/bin/rustc"
+rustdoc = "/Users/piotrek/.rustup/toolchains/stable-aarch64-apple-darwin/bin/rustdoc"
+
+[alias]
+xtask = "run --package xtask --"
+
+[target.aarch64-unknown-linux-musl]
+linker = "aarch64-linux-musl-gcc"

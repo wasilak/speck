@@ -24,25 +24,23 @@ impl SmoltcpInterface {
 
         // Set the guest IP address and prefix from NetworkConfig
         let ip_octets = config.guest_ip.octets();
-        iface
-            .update_ip_addrs(|addrs| {
-                addrs
-                    .push(IpCidr::new(
-                        IpAddress::v4(
-                            ip_octets[0],
-                            ip_octets[1],
-                            ip_octets[2],
-                            ip_octets[3],
-                        ),
-                        config.subnet_prefix,
-                    ))
-                    .unwrap();
-            });
+        iface.update_ip_addrs(|addrs| {
+            addrs
+                .push(IpCidr::new(
+                    IpAddress::v4(ip_octets[0], ip_octets[1], ip_octets[2], ip_octets[3]),
+                    config.subnet_prefix,
+                ))
+                .unwrap();
+        });
 
         // Empty socket set — sockets are added by re-origination and DNS modules later
         let sockets = SocketSet::new(vec![]);
 
-        Self { iface, device, sockets }
+        Self {
+            iface,
+            device,
+            sockets,
+        }
     }
 
     /// Poll the interface, processing inbound and outbound packets.

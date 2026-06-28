@@ -17,7 +17,10 @@ pub struct EventsQuery {
     filters: Option<String>,
 }
 
-pub async fn events_stream(State(state): State<AppState>, Query(_query): Query<EventsQuery>) -> Response {
+pub async fn events_stream(
+    State(state): State<AppState>,
+    Query(_query): Query<EventsQuery>,
+) -> Response {
     tracing::debug!("opening Docker events broadcast stream");
     let rx = state.event_tx.subscribe();
     let stream = BroadcastStream::new(rx).filter_map(|event| match event {
@@ -32,7 +35,11 @@ pub async fn events_stream(State(state): State<AppState>, Query(_query): Query<E
         }
     });
 
-    ([(header::CONTENT_TYPE, "application/json")], Body::from_stream(stream)).into_response()
+    (
+        [(header::CONTENT_TYPE, "application/json")],
+        Body::from_stream(stream),
+    )
+        .into_response()
 }
 
 pub fn emit_event(state: &AppState, event: Value) {

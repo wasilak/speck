@@ -41,12 +41,25 @@ pub async fn network_create(
         driver: body.driver.unwrap_or_else(|| "bridge".into()),
         scope: "local".into(),
     };
-    state.network_store.lock().await.insert(id.clone(), network.clone());
-    crate::handlers::events::emit_event(&state, json!({"Type": "network", "Action": "create", "Actor": {"ID": id, "Attributes": {"name": network.name}}}));
-    Ok((StatusCode::CREATED, Json(json!({"Id": network.id, "Warning": ""}))))
+    state
+        .network_store
+        .lock()
+        .await
+        .insert(id.clone(), network.clone());
+    crate::handlers::events::emit_event(
+        &state,
+        json!({"Type": "network", "Action": "create", "Actor": {"ID": id, "Attributes": {"name": network.name}}}),
+    );
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({"Id": network.id, "Warning": ""})),
+    ))
 }
 
-pub async fn network_inspect(State(state): State<AppState>, Path(id): Path<String>) -> Result<impl IntoResponse> {
+pub async fn network_inspect(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse> {
     let networks = state.network_store.lock().await;
     let network = networks
         .get(&id)
@@ -61,7 +74,11 @@ pub async fn network_remove(State(state): State<AppState>, Path(id): Path<String
     let remove_id = networks
         .contains_key(&id)
         .then_some(id.clone())
-        .or_else(|| networks.iter().find_map(|(key, network)| (network.name == id).then(|| key.clone())));
+        .or_else(|| {
+            networks
+                .iter()
+                .find_map(|(key, network)| (network.name == id).then(|| key.clone()))
+        });
     if let Some(remove_id) = remove_id {
         networks.remove(&remove_id);
     }
@@ -85,14 +102,26 @@ pub async fn network_disconnect(Path(id): Path<String>) -> Result<StatusCode> {
 
 fn validate_network_name(name: &str) -> Result<()> {
     if name.trim().is_empty() {
-        return Err(DockerApiError::BadRequest("network name cannot be empty".into()));
+        return Err(DockerApiError::BadRequest(
+            "network name cannot be empty".into(),
+        ));
     }
-    if name.chars().any(|ch| matches!(ch, '/' | '\\' | ';' | '&' | '|' | '`' | '$' | '<' | '>' | '\n' | '\r')) {
-        return Err(DockerApiError::BadRequest("network name contains invalid characters".into()));
+    if name.chars().any(|ch| {
+        matches!(
+            ch,
+            '/' | '\\' | ';' | '&' | '|' | '`' | '$' | '<' | '>' | '\n' | '\r'
+        )
+    }) {
+        return Err(DockerApiError::BadRequest(
+            "network name contains invalid characters".into(),
+        ));
     }
     Ok(())
 }
 
 fn now_nanos() -> u128 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|duration| duration.as_nanos()).unwrap_or_default()
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default()
 }

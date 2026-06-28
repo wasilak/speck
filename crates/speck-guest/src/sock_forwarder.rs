@@ -45,21 +45,24 @@ pub fn serve(vsock_port: u32, unix_path: &'static str) -> io::Result<()> {
 
     let ret = unsafe { libc::bind(listen_fd, addr_ptr, addr_len) };
     if ret < 0 {
-        unsafe { libc::close(listen_fd); }
+        unsafe {
+            libc::close(listen_fd);
+        }
         return Err(io::Error::last_os_error());
     }
 
     let ret = unsafe { libc::listen(listen_fd, 1) };
     if ret < 0 {
-        unsafe { libc::close(listen_fd); }
+        unsafe {
+            libc::close(listen_fd);
+        }
         return Err(io::Error::last_os_error());
     }
 
     // --- Accept loop ---
     loop {
-        let vsock_fd = unsafe {
-            libc::accept(listen_fd, std::ptr::null_mut(), std::ptr::null_mut())
-        };
+        let vsock_fd =
+            unsafe { libc::accept(listen_fd, std::ptr::null_mut(), std::ptr::null_mut()) };
         if vsock_fd < 0 {
             let err = io::Error::last_os_error();
             eprintln!("sock_forwarder: accept failed: {err}");
@@ -70,7 +73,9 @@ pub fn serve(vsock_port: u32, unix_path: &'static str) -> io::Result<()> {
             Ok(fd) => fd,
             Err(e) => {
                 eprintln!("sock_forwarder: unix_connect({unix_path}) failed: {e}");
-                unsafe { libc::close(vsock_fd); }
+                unsafe {
+                    libc::close(vsock_fd);
+                }
                 continue;
             }
         };
@@ -82,21 +87,33 @@ pub fn serve(vsock_port: u32, unix_path: &'static str) -> io::Result<()> {
         let unix_b = unsafe { libc::dup(unix_fd) };
 
         // Close originals — threads have their copies.
-        unsafe { libc::close(vsock_fd); }
-        unsafe { libc::close(unix_fd); }
+        unsafe {
+            libc::close(vsock_fd);
+        }
+        unsafe {
+            libc::close(unix_fd);
+        }
 
         // Thread A: vsock → unix
         std::thread::spawn(move || {
             proxy_copy(vsock_a, unix_a);
-            unsafe { libc::close(vsock_a); }
-            unsafe { libc::close(unix_a); }
+            unsafe {
+                libc::close(vsock_a);
+            }
+            unsafe {
+                libc::close(unix_a);
+            }
         });
 
         // Thread B: unix → vsock
         std::thread::spawn(move || {
             proxy_copy(unix_b, vsock_b);
-            unsafe { libc::close(unix_b); }
-            unsafe { libc::close(vsock_b); }
+            unsafe {
+                libc::close(unix_b);
+            }
+            unsafe {
+                libc::close(vsock_b);
+            }
         });
     }
 }
@@ -105,9 +122,7 @@ pub fn serve(vsock_port: u32, unix_path: &'static str) -> io::Result<()> {
 fn proxy_copy(read_fd: libc::c_int, write_fd: libc::c_int) {
     let mut buf = [0u8; 16384];
     loop {
-        let n = unsafe {
-            libc::read(read_fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len())
-        };
+        let n = unsafe { libc::read(read_fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len()) };
         if n <= 0 {
             break; // EOF or error
         }
@@ -139,8 +154,13 @@ fn unix_connect(path: &str) -> io::Result<libc::c_int> {
 
     let path_bytes = path.as_bytes();
     if path_bytes.len() >= 108 {
-        unsafe { libc::close(fd); }
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "unix socket path too long"));
+        unsafe {
+            libc::close(fd);
+        }
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "unix socket path too long",
+        ));
     }
 
     let mut addr: libc::sockaddr_un = unsafe { std::mem::zeroed() };
@@ -156,7 +176,9 @@ fn unix_connect(path: &str) -> io::Result<libc::c_int> {
 
     let ret = unsafe { libc::connect(fd, addr_ptr, addr_len) };
     if ret < 0 {
-        unsafe { libc::close(fd); }
+        unsafe {
+            libc::close(fd);
+        }
         return Err(io::Error::last_os_error());
     }
 

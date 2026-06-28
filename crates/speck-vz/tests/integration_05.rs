@@ -56,11 +56,7 @@ fn make_phase5_config() -> GuestConfig {
 fn test_vm_boots_with_disks() {
     let guest = Guest::new(make_phase5_config());
     let result = guest.start();
-    assert!(
-        result.is_ok(),
-        "VM with disks should boot: {:?}",
-        result
-    );
+    assert!(result.is_ok(), "VM with disks should boot: {:?}", result);
     assert_eq!(
         result.unwrap(),
         speck_vz::VmState::Running,
@@ -100,10 +96,10 @@ fn test_containerd_ready() {
 #[tokio::test]
 #[ignore = "requires com.apple.security.virtualization entitlement + signed binary + rootfs.img"]
 async fn test_image_pull_alpine() {
-    use containerd_client::services::v1::images_client::ImagesClient;
     use containerd_client::services::v1::ListImagesRequest;
-    use containerd_client::with_namespace;
+    use containerd_client::services::v1::images_client::ImagesClient;
     use containerd_client::tonic::Request;
+    use containerd_client::with_namespace;
 
     let guest = Guest::new(make_phase5_config());
     guest.start().expect("start");
@@ -118,9 +114,7 @@ async fn test_image_pull_alpine() {
     // Full alpine pull requires network egress via Phase 4 smoltcp netstack; test is #[ignore]'d
     // until codesigned binary is available. Connectivity proof: list() returns Ok from guest.
     let mut client = ImagesClient::new(channel);
-    let request = ListImagesRequest {
-        filters: vec![],
-    };
+    let request = ListImagesRequest { filters: vec![] };
     let images_response = client.list(with_namespace!(request, "default")).await;
     assert!(
         images_response.is_ok(),

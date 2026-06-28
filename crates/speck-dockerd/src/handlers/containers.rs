@@ -95,7 +95,9 @@ pub async fn create(
         validate_container_name(name)?;
     }
 
-    let id = query.name.unwrap_or_else(|| generated_container_id(&body.image));
+    let id = query
+        .name
+        .unwrap_or_else(|| generated_container_id(&body.image));
     validate_container_name(&id)?;
 
     let host_config = body.host_config.unwrap_or_default();
@@ -105,10 +107,16 @@ pub async fn create(
     labels.insert("speck.tty".into(), body.tty.unwrap_or(false).to_string());
 
     if let Some(exposed_ports) = body.exposed_ports {
-        labels.insert("speck.exposed_ports".into(), join_map_keys(exposed_ports.keys()));
+        labels.insert(
+            "speck.exposed_ports".into(),
+            join_map_keys(exposed_ports.keys()),
+        );
     }
     if let Some(port_bindings) = host_config.port_bindings {
-        labels.insert("speck.port_bindings".into(), serialize_json(&port_bindings)?);
+        labels.insert(
+            "speck.port_bindings".into(),
+            serialize_json(&port_bindings)?,
+        );
     }
     if let Some(binds) = host_config.binds {
         labels.insert("speck.binds".into(), binds.join("\u{1f}"));
@@ -146,7 +154,10 @@ pub async fn create(
 pub async fn start(State(state): State<AppState>, Path(id): Path<String>) -> Result<StatusCode> {
     let client = state.containerd_client().await?;
     let info = client.container_get(&id).await?;
-    let terminal = info.labels.get("speck.tty").is_some_and(|value| value == "true");
+    let terminal = info
+        .labels
+        .get("speck.tty")
+        .is_some_and(|value| value == "true");
     client
         .task_create(TaskSpec {
             container_id: id.clone(),
@@ -183,7 +194,10 @@ pub async fn kill(
     Ok(StatusCode::NO_CONTENT)
 }
 
-pub async fn wait(State(state): State<AppState>, Path(id): Path<String>) -> Result<impl IntoResponse> {
+pub async fn wait(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse> {
     let client = state.containerd_client().await?;
     let exit_code = client.task_wait(&id).await?;
     Ok(Json(json!({ "StatusCode": exit_code })))
@@ -195,7 +209,10 @@ pub async fn inspect(
 ) -> Result<impl IntoResponse> {
     let client = state.containerd_client().await?;
     let info = client.container_get(&id).await?;
-    let task = client.task_get(&id).await?.unwrap_or_else(|| stopped_task(&id));
+    let task = client
+        .task_get(&id)
+        .await?
+        .unwrap_or_else(|| stopped_task(&id));
     Ok(Json(container_inspect_json(info, task)))
 }
 
@@ -247,29 +264,43 @@ pub async fn put_archive() -> StatusCode {
 }
 
 pub async fn exec() -> Response {
-    crate::error::DockerApiError::Internal("route should be handled by exec::create".into()).into_response()
+    crate::error::DockerApiError::Internal("route should be handled by exec::create".into())
+        .into_response()
 }
 
 fn validate_container_name(name: &str) -> Result<()> {
     let mut chars = name.chars();
     let Some(first) = chars.next() else {
-        return Err(DockerApiError::BadRequest("container name cannot be empty".into()));
+        return Err(DockerApiError::BadRequest(
+            "container name cannot be empty".into(),
+        ));
     };
     if !first.is_ascii_alphanumeric() {
-        return Err(DockerApiError::BadRequest("container name must start with an ASCII letter or digit".into()));
+        return Err(DockerApiError::BadRequest(
+            "container name must start with an ASCII letter or digit".into(),
+        ));
     }
     if !chars.all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '.' | '-')) {
-        return Err(DockerApiError::BadRequest("container name contains invalid characters".into()));
+        return Err(DockerApiError::BadRequest(
+            "container name contains invalid characters".into(),
+        ));
     }
     Ok(())
 }
 
 fn validate_image_ref(image: &str) -> Result<()> {
     if image.trim().is_empty() {
-        return Err(DockerApiError::BadRequest("image reference cannot be empty".into()));
+        return Err(DockerApiError::BadRequest(
+            "image reference cannot be empty".into(),
+        ));
     }
-    if image.chars().any(|ch| matches!(ch, ';' | '&' | '|' | '`' | '$' | '<' | '>' | '\n' | '\r')) {
-        return Err(DockerApiError::BadRequest("image reference contains shell metacharacters".into()));
+    if image
+        .chars()
+        .any(|ch| matches!(ch, ';' | '&' | '|' | '`' | '$' | '<' | '>' | '\n' | '\r'))
+    {
+        return Err(DockerApiError::BadRequest(
+            "image reference contains shell metacharacters".into(),
+        ));
     }
     Ok(())
 }
@@ -279,7 +310,9 @@ fn parse_signal(signal: &str) -> Result<u32> {
         "SIGTERM" | "TERM" | "15" => Ok(15),
         "SIGKILL" | "KILL" | "9" => Ok(9),
         "SIGINT" | "INT" | "2" => Ok(2),
-        other => Err(DockerApiError::BadRequest(format!("unsupported signal {other}"))),
+        other => Err(DockerApiError::BadRequest(format!(
+            "unsupported signal {other}"
+        ))),
     }
 }
 
@@ -293,7 +326,14 @@ fn generated_container_id(image: &str) -> String {
         .filter(|ch| ch.is_ascii_alphanumeric())
         .take(12)
         .collect::<String>();
-    format!("{}-{nanos:x}", if safe_image.is_empty() { "speck" } else { &safe_image })
+    format!(
+        "{}-{nanos:x}",
+        if safe_image.is_empty() {
+            "speck"
+        } else {
+            &safe_image
+        }
+    )
 }
 
 fn join_map_keys<'a>(keys: impl Iterator<Item = &'a String>) -> String {
@@ -327,7 +367,10 @@ fn container_summary_json(container: ContainerInfo, running_ids: &HashSet<String
     })
 }
 
-fn container_inspect_json(container: ContainerInfo, task: crate::containerd_client::TaskInfo) -> Value {
+fn container_inspect_json(
+    container: ContainerInfo,
+    task: crate::containerd_client::TaskInfo,
+) -> Value {
     let running = task.status == TaskStatus::Running;
     json!({
         "Id": container.id,

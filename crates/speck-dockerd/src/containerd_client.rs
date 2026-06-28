@@ -189,7 +189,11 @@ impl ContainerdClient {
             .await
             .map_err(map_status)?
             .into_inner();
-        Ok(response.tasks.into_iter().map(process_to_task_info).collect())
+        Ok(response
+            .tasks
+            .into_iter()
+            .map(process_to_task_info)
+            .collect())
     }
 
     pub async fn container_create(&self, spec: ContainerCreateSpec) -> Result<String> {
@@ -201,7 +205,10 @@ impl ContainerdClient {
             labels.insert("speck.restart_policy".into(), policy);
         }
         if let Some(count) = spec.restart_maximum_retry_count {
-            labels.insert("speck.restart_maximum_retry_count".into(), count.to_string());
+            labels.insert(
+                "speck.restart_maximum_retry_count".into(),
+                count.to_string(),
+            );
         }
         if let Some(memory) = spec.memory {
             labels.insert("speck.memory".into(), memory.to_string());
@@ -235,7 +242,9 @@ impl ContainerdClient {
         response
             .container
             .map(|container| container.id)
-            .ok_or_else(|| DockerApiError::Internal("containerd returned empty create response".into()))
+            .ok_or_else(|| {
+                DockerApiError::Internal("containerd returned empty create response".into())
+            })
     }
 
     pub async fn container_get(&self, id: &str) -> Result<ContainerInfo> {
@@ -254,11 +263,17 @@ impl ContainerdClient {
     pub async fn container_list(&self) -> Result<Vec<ContainerInfo>> {
         let mut client = containerd_client::Client::from(self.channel.clone()).containers();
         let response = client
-            .list(with_namespace(ListContainersRequest { filters: Vec::new() }))
+            .list(with_namespace(ListContainersRequest {
+                filters: Vec::new(),
+            }))
             .await
             .map_err(map_status)?
             .into_inner();
-        Ok(response.containers.into_iter().map(container_to_info).collect())
+        Ok(response
+            .containers
+            .into_iter()
+            .map(container_to_info)
+            .collect())
     }
 
     pub async fn container_delete(&self, id: &str) -> Result<()> {
@@ -299,7 +314,11 @@ impl ContainerdClient {
         Ok(())
     }
 
-    pub async fn image_pull(&self, image_ref: &str, credentials: Option<RegistryCredentials>) -> Result<()> {
+    pub async fn image_pull(
+        &self,
+        image_ref: &str,
+        credentials: Option<RegistryCredentials>,
+    ) -> Result<()> {
         if let Some(credentials) = credentials.as_ref() {
             tracing::debug!(username = %credentials.username, server = %credentials.server, "using registry credentials for image pull");
         }
@@ -311,7 +330,11 @@ impl ContainerdClient {
         Ok(())
     }
 
-    pub async fn image_push(&self, image_ref: &str, credentials: Option<RegistryCredentials>) -> Result<()> {
+    pub async fn image_push(
+        &self,
+        image_ref: &str,
+        credentials: Option<RegistryCredentials>,
+    ) -> Result<()> {
         if let Some(credentials) = credentials.as_ref() {
             tracing::debug!(username = %credentials.username, server = %credentials.server, "using registry credentials for image push");
         }
@@ -321,7 +344,9 @@ impl ContainerdClient {
     pub async fn image_list(&self) -> Result<Vec<ImageRecord>> {
         let mut client = containerd_client::Client::from(self.channel.clone()).images();
         let response = client
-            .list(with_namespace(ListImagesRequest { filters: Vec::new() }))
+            .list(with_namespace(ListImagesRequest {
+                filters: Vec::new(),
+            }))
             .await
             .map_err(map_status)?
             .into_inner();
@@ -331,7 +356,9 @@ impl ContainerdClient {
     pub async fn image_get(&self, name: &str) -> Result<ImageRecord> {
         let mut client = containerd_client::Client::from(self.channel.clone()).images();
         let response = client
-            .get(with_namespace(GetImageRequest { name: name.to_owned() }))
+            .get(with_namespace(GetImageRequest {
+                name: name.to_owned(),
+            }))
             .await
             .map_err(map_status)?
             .into_inner();
@@ -357,9 +384,10 @@ impl ContainerdClient {
 
 fn with_namespace<T>(message: T) -> tonic::Request<T> {
     let mut request = tonic::Request::new(message);
-    request
-        .metadata_mut()
-        .insert("containerd-namespace", NAMESPACE.parse().expect("valid namespace"));
+    request.metadata_mut().insert(
+        "containerd-namespace",
+        NAMESPACE.parse().expect("valid namespace"),
+    );
     request
 }
 
@@ -395,14 +423,19 @@ fn container_to_info(container: Container) -> ContainerInfo {
         id: container.id,
         image: container.image,
         labels: container.labels,
-        created_at_seconds: container.created_at.map(|ts| ts.seconds).unwrap_or_default(),
+        created_at_seconds: container
+            .created_at
+            .map(|ts| ts.seconds)
+            .unwrap_or_default(),
     }
 }
 
 fn image_to_record(image: containerd_client::services::v1::Image) -> ImageRecord {
     let target = image.target.as_ref();
     ImageRecord {
-        id: target.map(|target| target.digest.clone()).unwrap_or_else(|| image.name.clone()),
+        id: target
+            .map(|target| target.digest.clone())
+            .unwrap_or_else(|| image.name.clone()),
         size: target.map(|target| target.size).unwrap_or_default(),
         created_at_seconds: image.created_at.map(|ts| ts.seconds).unwrap_or_default(),
         name: image.name,

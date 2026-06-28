@@ -61,7 +61,9 @@ pub async fn container_attach(
                 let mut io = TokioIo::new(upgraded);
                 let _ = bridge_attach_stream(&state, &id, &query, &mut io).await;
             }
-            Err(err) => tracing::error!(container_id = %id, error = %err, "Docker attach upgrade failed"),
+            Err(err) => {
+                tracing::error!(container_id = %id, error = %err, "Docker attach upgrade failed")
+            }
         }
     });
 
@@ -80,9 +82,15 @@ pub async fn container_logs(
     Query(query): Query<LogsQuery>,
 ) -> Result<impl IntoResponse> {
     let client = state.containerd_client().await?;
-    let task = client.task_get(&id).await?.ok_or_else(|| DockerApiError::NotFound(format!("container {id}")))?;
+    let task = client
+        .task_get(&id)
+        .await?
+        .ok_or_else(|| DockerApiError::NotFound(format!("container {id}")))?;
     let line = if query.timestamps {
-        format!("1970-01-01T00:00:00Z container {} status {:?}\n", task.container_id, task.status)
+        format!(
+            "1970-01-01T00:00:00Z container {} status {:?}\n",
+            task.container_id, task.status
+        )
     } else {
         format!("container {} status {:?}\n", task.container_id, task.status)
     };
@@ -96,13 +104,21 @@ pub async fn container_logs(
 
     if query.follow {
         let stream = tokio_stream::iter(frames.into_iter().map(Ok::<Bytes, Infallible>));
-        Ok(([(header::CONTENT_TYPE, "application/vnd.docker.raw-stream")], Body::from_stream(stream)).into_response())
+        Ok((
+            [(header::CONTENT_TYPE, "application/vnd.docker.raw-stream")],
+            Body::from_stream(stream),
+        )
+            .into_response())
     } else {
         let body = frames.into_iter().fold(Vec::new(), |mut acc, frame| {
             acc.extend_from_slice(&frame);
             acc
         });
-        Ok(([(header::CONTENT_TYPE, "application/vnd.docker.raw-stream")], body).into_response())
+        Ok((
+            [(header::CONTENT_TYPE, "application/vnd.docker.raw-stream")],
+            body,
+        )
+            .into_response())
     }
 }
 
@@ -112,9 +128,19 @@ pub async fn container_archive_get(
 ) -> Result<impl IntoResponse> {
     validate_archive_path(&query.path)?;
     let stat = serde_json::json!({"name": query.path, "size": 0, "mode": 0, "mtime": "1970-01-01T00:00:00Z", "linkTarget": ""});
-    let stat = base64::engine::general_purpose::STANDARD.encode(serde_json::to_vec(&stat).expect("stat json serializes"));
+    let stat = base64::engine::general_purpose::STANDARD
+        .encode(serde_json::to_vec(&stat).expect("stat json serializes"));
     let body = Bytes::from(format!("tar archive for {id}:{}\n", query.path));
-    Ok(([("X-Docker-Container-Path-Stat", stat), (header::CONTENT_TYPE.as_str(), "application/x-tar".to_owned())], body))
+    Ok((
+        [
+            ("X-Docker-Container-Path-Stat", stat),
+            (
+                header::CONTENT_TYPE.as_str(),
+                "application/x-tar".to_owned(),
+            ),
+        ],
+        body,
+    ))
 }
 
 pub async fn container_archive_put(
@@ -134,10 +160,15 @@ async fn bridge_attach_stream(
     io: &mut TokioIo<hyper::upgrade::Upgraded>,
 ) -> Result<()> {
     let client = state.containerd_client().await?;
-    let task = client.task_get(id).await?.ok_or_else(|| DockerApiError::NotFound(format!("container {id}")))?;
+    let task = client
+        .task_get(id)
+        .await?
+        .ok_or_else(|| DockerApiError::NotFound(format!("container {id}")))?;
     let banner = format!("container {} status {:?}\n", task.container_id, task.status);
     if query.tty {
-        io.write_all(banner.as_bytes()).await.map_err(|err| DockerApiError::Internal(err.to_string()))?;
+        io.write_all(banner.as_bytes())
+            .await
+            .map_err(|err| DockerApiError::Internal(err.to_string()))?;
         let _ = query.stdin;
     } else {
         let stream_type = if query.stderr && !query.stdout { 2 } else { 1 };
@@ -149,7 +180,9 @@ async fn bridge_attach_stream(
         }
     }
     if query.logs || query.stream {
-        io.flush().await.map_err(|err| DockerApiError::Internal(err.to_string()))?;
+        io.flush()
+            .await
+            .map_err(|err| DockerApiError::Internal(err.to_string()))?;
     }
     Ok(())
 }

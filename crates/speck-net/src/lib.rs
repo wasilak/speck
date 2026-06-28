@@ -1,11 +1,11 @@
 pub mod config;
 pub mod device;
+pub(crate) mod dhcp;
+pub(crate) mod dns;
 pub mod error;
 pub mod interface;
 pub mod mtu;
 pub mod port_publish;
-pub(crate) mod dhcp;
-pub(crate) mod dns;
 pub(crate) mod reorigin;
 
 pub use dns::spawn_dns_proxy;

@@ -46,14 +46,14 @@ fn build_arp_request() -> Vec<u8> {
     // ARP header (28 bytes)
     frame.extend_from_slice(&[0x00, 0x01]); // HTYPE: Ethernet
     frame.extend_from_slice(&[0x08, 0x00]); // PTYPE: IPv4
-    frame.extend_from_slice(&[0x06]);        // HLEN: 6
-    frame.extend_from_slice(&[0x04]);        // PLEN: 4
+    frame.extend_from_slice(&[0x06]); // HLEN: 6
+    frame.extend_from_slice(&[0x04]); // PLEN: 4
     frame.extend_from_slice(&[0x00, 0x01]); // OPER: Request
 
     frame.extend_from_slice(&[0x02, 0x00, 0x00, 0x00, 0x00, 0x02]); // sender MAC: guest
-    frame.extend_from_slice(&[172, 16, 0, 2]);                       // sender IP: guest
+    frame.extend_from_slice(&[172, 16, 0, 2]); // sender IP: guest
     frame.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 0x00, 0x00]); // target MAC: unknown
-    frame.extend_from_slice(&[172, 16, 0, 1]);                       // target IP: gateway
+    frame.extend_from_slice(&[172, 16, 0, 1]); // target IP: gateway
 
     frame
 }
@@ -158,9 +158,7 @@ fn test_netstack_arp() {
 #[test]
 #[ignore = "requires VM entitlement"]
 fn test_netstack_no_fd_before_start() {
-    let config = GuestConfig::builder()
-        .kernel_path(kernel_path())
-        .build();
+    let config = GuestConfig::builder().kernel_path(kernel_path()).build();
     let guest = Guest::new(config);
     let result = guest.netstack_fd();
     assert!(
@@ -173,12 +171,12 @@ fn test_netstack_no_fd_before_start() {
 fn build_dns_query(domain: &str, id: u16) -> Vec<u8> {
     let mut msg = Vec::with_capacity(512);
 
-    msg.extend_from_slice(&id.to_be_bytes());     // ID
-    msg.extend_from_slice(&[0x01, 0x00]);         // flags: RD=1
-    msg.extend_from_slice(&[0x00, 0x01]);         // QDCOUNT = 1
-    msg.extend_from_slice(&[0x00, 0x00]);         // ANCOUNT = 0
-    msg.extend_from_slice(&[0x00, 0x00]);         // NSCOUNT = 0
-    msg.extend_from_slice(&[0x00, 0x00]);         // ARCOUNT = 0
+    msg.extend_from_slice(&id.to_be_bytes()); // ID
+    msg.extend_from_slice(&[0x01, 0x00]); // flags: RD=1
+    msg.extend_from_slice(&[0x00, 0x01]); // QDCOUNT = 1
+    msg.extend_from_slice(&[0x00, 0x00]); // ANCOUNT = 0
+    msg.extend_from_slice(&[0x00, 0x00]); // NSCOUNT = 0
+    msg.extend_from_slice(&[0x00, 0x00]); // ARCOUNT = 0
 
     for label in domain.split('.') {
         msg.push(label.len() as u8);

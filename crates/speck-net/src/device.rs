@@ -1,6 +1,6 @@
-use std::os::unix::io::RawFd;
 use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::time::Instant;
+use std::os::unix::io::RawFd;
 
 /// A wrapper around a raw file descriptor that implements `smoltcp::phy::Device`.
 ///
@@ -40,7 +40,9 @@ impl FdDevice {
 
 impl Drop for FdDevice {
     fn drop(&mut self) {
-        unsafe { libc::close(self.fd); }
+        unsafe {
+            libc::close(self.fd);
+        }
     }
 }
 
@@ -82,7 +84,11 @@ impl Device for FdDevice {
     fn receive(&mut self, _timestamp: Instant) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
         let mut rx_buf = vec![0u8; self.mtu + 14]; // MTU + Ethernet header
         match unsafe {
-            libc::read(self.fd, rx_buf.as_mut_ptr() as *mut libc::c_void, rx_buf.len())
+            libc::read(
+                self.fd,
+                rx_buf.as_mut_ptr() as *mut libc::c_void,
+                rx_buf.len(),
+            )
         } {
             n if n > 0 => {
                 rx_buf.truncate(n as usize);

@@ -91,11 +91,7 @@ fn extract_qname(data: &[u8]) -> Option<String> {
             return None;
         }
         let label = data.get(pos + 1..pos + 1 + label_len as usize)?;
-        labels.push(
-            std::str::from_utf8(label)
-                .ok()?
-                .to_lowercase(),
-        );
+        labels.push(std::str::from_utf8(label).ok()?.to_lowercase());
         pos += 1 + label_len as usize;
     }
     if labels.is_empty() {
@@ -184,9 +180,7 @@ fn find_qname_end(data: &[u8], mut start: usize) -> Option<usize> {
 fn build_servfail_response(query_header: &[u8]) -> Vec<u8> {
     let id = query_header.get(..2).unwrap_or(&[0, 0]);
     vec![
-        id[0],
-        id[1],
-        0x81, // flags: QR, RD, RA
+        id[0], id[1], 0x81, // flags: QR, RD, RA
         0x82, // flags: RCODE=SERVFAIL(2)
         0x00, 0x00, // QDCOUNT = 0
         0x00, 0x00, // ANCOUNT = 0

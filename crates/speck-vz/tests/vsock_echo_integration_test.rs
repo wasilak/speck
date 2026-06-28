@@ -1,4 +1,4 @@
-use speck_vz::{Guest, GuestConfig, Error};
+use speck_vz::{Error, Guest, GuestConfig};
 use std::path::PathBuf;
 use std::time::Duration;
 

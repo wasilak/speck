@@ -5,8 +5,8 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-pub mod error;
 pub mod containerd_client;
+pub mod error;
 pub mod handlers;
 pub mod registry_auth;
 pub mod router;

@@ -49,14 +49,8 @@ impl DhcpServer {
     }
 
     pub fn add_to_set(&mut self, sockets: &mut SocketSet) {
-        let rx_buffer = PacketBuffer::new(
-            vec![PacketMetadata::EMPTY],
-            vec![0u8; 548],
-        );
-        let tx_buffer = PacketBuffer::new(
-            vec![PacketMetadata::EMPTY],
-            vec![0u8; 548],
-        );
+        let rx_buffer = PacketBuffer::new(vec![PacketMetadata::EMPTY], vec![0u8; 548]);
+        let tx_buffer = PacketBuffer::new(vec![PacketMetadata::EMPTY], vec![0u8; 548]);
         let mut socket = udp::Socket::new(rx_buffer, tx_buffer);
         let _ = socket.bind(DHCP_SERVER_PORT);
         let handle = sockets.add(socket);
