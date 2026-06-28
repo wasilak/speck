@@ -64,3 +64,17 @@
   - [x] 06-09-PLAN.md — spk dashboard: ratatui TUI with container list + log tail + keyboard navigation (Wave 5)
   - [x] 06-10-PLAN.md — Codesigning + CI: xtask codesign-dev, release.yml Developer ID + notarytool, Homebrew Formula (Wave 5)
   - [x] 06-11-PLAN.md — testcontainers conformance: bollard api_conformance.rs + integration_06.rs end-to-end (Wave 5)
+
+### Phase 06.1: Fix 5 integration blockers — Unix socket, netstack wiring, proxy loop, port map, virtiofs (INSERTED)
+
+- **Status:** 🔧 In Progress (0/3 plans)
+- **Goal:** Fix five verified wiring gaps in Phase 6 code that prevent the system from running end-to-end: proxy loop exits after one client, netstack never spawned, speck_home not created, port bindings never applied, VirtioFS unconditionally skipped.
+- **Requirements:** NET-01, NET-02, NET-03, RUN-04, DOCKER-02, DOCKER-04
+- **Depends on:** Phase 6
+- **Plans:** 3 plans
+
+Plans:
+
+- [ ] 06.1-01-PLAN.md — Fix proxy loop (Bug 1) + VmThread helpers for netstack wiring (Bug 2-vz) + remove VirtioFS gate (Bug 5): vm_thread.rs + guest.rs (Wave 1)
+- [ ] 06.1-02-PLAN.md — Wire SpeckNet in run_up: create_dir_all + GuestConfig network/dns/speck_home + SpeckNet::spawn + set_port_map_channel (Bugs 2-cli + 3): up.rs (Wave 1)
+- [ ] 06.1-03-PLAN.md — Apply port bindings in container start() handler (Bug 4): containers.rs (Wave 2)
