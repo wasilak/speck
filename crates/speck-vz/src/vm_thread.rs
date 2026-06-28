@@ -111,6 +111,10 @@ pub(crate) enum VmCommand {
         container_port: u16,
         reply: oneshot::Sender<std::result::Result<(), Error>>,
     },
+    SetPortMapChannel {
+        tx: mpsc::Sender<PortMapConfig>,
+        reply: oneshot::Sender<std::result::Result<(), Error>>,
+    },
     Shutdown,
 }
 
@@ -273,6 +277,13 @@ impl VmThread {
                             } else {
                                 let _ = reply.send(Ok(()));
                             }
+                        }
+                        VmCommand::SetPortMapChannel { tx, reply } => {
+                            let mut ctrl =
+                                control.lock().unwrap_or_else(|e| e.into_inner());
+                            ctrl.port_map_tx = Some(tx);
+                            drop(ctrl);
+                            let _ = reply.send(Ok(()));
                         }
                         VmCommand::Shutdown => break,
                     }
@@ -444,13 +455,14 @@ impl VmThread {
             };
 
             // ── VirtioFS directory sharing devices ──────────────────────
-            if !config.volume_mounts.is_empty() || config.network.is_some() {
-                crate::virtiofs::configure_virtiofs_devices(
-                    &vm_config,
-                    &config.volume_mounts,
-                    &config.speck_home,
-                )?;
-            }
+            // Always configure VirtioFS unconditionally: the speck-home device
+            // must be present on every VM start for Ryuk and testcontainers.
+            // configure_virtiofs_devices handles empty volume_mounts gracefully.
+            crate::virtiofs::configure_virtiofs_devices(
+                &vm_config,
+                &config.volume_mounts,
+                &config.speck_home,
+            )?;
 
             Result::<_, Error>::Ok((vm_config, platform, entropy, vsock))
         }?;
@@ -806,6 +818,14 @@ impl VmThread {
             .map_err(|_| Error::ChannelError("vm thread channel closed".into()))
     }
 
+    /// Clone the command sender so that closures on OS threads can send VmCommands.
+    ///
+    /// Used by `Guest::vsock_connector_for_port` to create per-client vsock connectors
+    /// that run on `std::thread::spawn` threads (not inside async tasks).
+    pub(crate) fn clone_cmd_sender(&self) -> mpsc::Sender<VmCommand> {
+        self.sender.clone()
+    }
+
     pub fn state(&self) -> std::result::Result<InternalState, Error> {
         let (tx, rx) = oneshot::channel();
         self.send_blocking(VmCommand::State { reply: tx }, rx)
@@ -870,6 +890,18 @@ impl VmThread {
             },
             rx,
         )?
+    }
+
+    /// Register a tokio channel that receives `PortMapConfig` entries as the netstack wires them.
+    ///
+    /// Called by `up.rs` (Plan 06.1-02) to hand the netstack's sender to the VM thread so that
+    /// subsequent `add_port_map` calls can forward entries in real time.
+    pub fn set_port_map_channel(
+        &self,
+        tx: mpsc::Sender<PortMapConfig>,
+    ) -> std::result::Result<(), Error> {
+        let (reply, rx) = oneshot::channel();
+        self.send_blocking(VmCommand::SetPortMapChannel { tx, reply }, rx)?
     }
 
     pub fn join(&mut self) -> std::result::Result<(), Error> {

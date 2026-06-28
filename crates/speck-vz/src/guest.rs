@@ -1,9 +1,9 @@
 use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
 
-use crate::config::GuestConfig;
+use crate::config::{GuestConfig, PortMapConfig};
 use crate::error::Error;
-use crate::vm_thread::VmThread;
+use crate::vm_thread::{VmCommand, VmThread};
 use crate::vsock::VzSocket;
 use speck_core::EventSink;
 
@@ -76,6 +76,38 @@ impl Guest {
         self.thread.add_port_map(host_port, container_port)
     }
 
+    /// Register the netstack port-map sender with the VM thread.
+    ///
+    /// Delegates to [`VmThread::set_port_map_channel`]. Required by `up.rs` (Plan 06.1-02)
+    /// to wire the netstack's receiver so that subsequent `add_port_map` calls are forwarded.
+    pub fn set_port_map_channel(
+        &self,
+        tx: tokio::sync::mpsc::Sender<PortMapConfig>,
+    ) -> Result<(), Error> {
+        self.thread.set_port_map_channel(tx)
+    }
+
+    /// Build a closure that creates a new vsock connection to `port` on demand.
+    ///
+    /// The returned closure captures a cloned `mpsc::Sender<VmCommand>` and is safe to call
+    /// from `std::thread::spawn` OS-thread context. It must NOT be called from an async task
+    /// because `blocking_send` / `blocking_recv` will panic inside a tokio executor
+    /// (T-06.1-02 threat model — vsock_connector_for_port called from tokio task).
+    fn vsock_connector_for_port(
+        &self,
+        port: u32,
+    ) -> impl Fn() -> Result<VzSocket, Error> + Send + 'static {
+        let sender = self.thread.clone_cmd_sender();
+        move || {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            sender
+                .blocking_send(VmCommand::VsockConnect { port, reply: tx })
+                .map_err(|_| Error::ChannelError("vm thread channel closed".into()))?;
+            rx.blocking_recv()
+                .map_err(|_| Error::ChannelError("vm thread reply channel closed".into()))?
+        }
+    }
+
     /// Block until vminitd sends the READY signal on the configured vsock port.
     ///
     /// Delegates to [`VmThread::wait_for_ready`] using `ready_vsock_port` from the config.
@@ -87,23 +119,18 @@ impl Guest {
         self.thread.wait_for_ready(ready_vsock_port)
     }
 
-    /// Connect the in-guest containerd gRPC socket to a temporary Unix socket on the host.
+    /// Connect the in-guest BuildKit gRPC socket to a persistent Unix socket on the host.
     ///
-    /// Opens a vsock connection to `containerd_vsock_port`, binds a temporary Unix socket at
-    /// `/tmp/speck-containerd-<pid>-<port>.sock`, spawns a bridge thread that copies bytes
-    /// bidirectionally between the VzSocket and the first UnixStream connection, and returns
-    /// the path to the Unix socket. Callers can then pass that path to `containerd_client::connect()`.
-    /// Connect the in-guest BuildKit gRPC socket to a temporary Unix socket on the host.
-    ///
-    /// Mirrors [`Guest::containerd_unix_proxy`] but uses `buildkitd_vsock_port` (default 9002)
-    /// and formats the temp socket path as `speck-buildkitd-<pid>-<port>.sock`.
+    /// Binds a temporary Unix socket at `/tmp/speck-buildkitd-<pid>-<port>.sock` and spawns
+    /// a persistent proxy thread that accepts multiple sequential Unix clients, creating a
+    /// fresh vsock connection for each one. Returns the path to the Unix socket.
     pub fn buildkitd_unix_proxy(&self) -> Result<PathBuf, Error> {
         let buildkitd_vsock_port = self
             .config
             .buildkitd_vsock_port
             .ok_or_else(|| Error::VsockConnect("buildkitd_vsock_port not configured".into()))?;
 
-        let vsock = self.vsock_connect(buildkitd_vsock_port)?;
+        let connector = self.vsock_connector_for_port(buildkitd_vsock_port);
 
         let sock_path = std::env::temp_dir().join(format!(
             "speck-buildkitd-{}-{}.sock",
@@ -117,22 +144,48 @@ impl Guest {
         let listener =
             std::os::unix::net::UnixListener::bind(&sock_path).map_err(Error::NetworkIo)?;
 
+        // Persistent proxy thread: accepts multiple clients, each gets its own vsock connection.
         std::thread::spawn(move || {
-            if let Ok((stream, _)) = listener.accept() {
-                bridge_vsock_unix(vsock, stream);
+            loop {
+                match listener.accept() {
+                    Ok((stream, _)) => match connector() {
+                        Ok(vsock) => {
+                            std::thread::spawn(move || bridge_vsock_unix(vsock, stream));
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                error = %e,
+                                "vsock connect failed for buildkitd proxy client"
+                            );
+                        }
+                    },
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            "buildkitd unix listener accept error; proxy exiting"
+                        );
+                        break;
+                    }
+                }
             }
         });
 
         Ok(sock_path)
     }
 
+    /// Connect the in-guest containerd gRPC socket to a persistent Unix socket on the host.
+    ///
+    /// Binds a temporary Unix socket at `/tmp/speck-containerd-<pid>-<port>.sock` and spawns
+    /// a persistent proxy thread that accepts multiple sequential Unix clients, creating a
+    /// fresh vsock connection for each one. Returns the path to the Unix socket.
+    /// Callers can pass that path to `containerd_client::connect()`.
     pub fn containerd_unix_proxy(&self) -> Result<PathBuf, Error> {
         let containerd_vsock_port = self
             .config
             .containerd_vsock_port
             .ok_or_else(|| Error::VsockConnect("containerd_vsock_port not configured".into()))?;
 
-        let vsock = self.vsock_connect(containerd_vsock_port)?;
+        let connector = self.vsock_connector_for_port(containerd_vsock_port);
 
         let sock_path = std::env::temp_dir().join(format!(
             "speck-containerd-{}-{}.sock",
@@ -146,9 +199,29 @@ impl Guest {
         let listener =
             std::os::unix::net::UnixListener::bind(&sock_path).map_err(Error::NetworkIo)?;
 
+        // Persistent proxy thread: accepts multiple clients, each gets its own vsock connection.
         std::thread::spawn(move || {
-            if let Ok((stream, _)) = listener.accept() {
-                bridge_vsock_unix(vsock, stream);
+            loop {
+                match listener.accept() {
+                    Ok((stream, _)) => match connector() {
+                        Ok(vsock) => {
+                            std::thread::spawn(move || bridge_vsock_unix(vsock, stream));
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                error = %e,
+                                "vsock connect failed for containerd proxy client"
+                            );
+                        }
+                    },
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            "containerd unix listener accept error; proxy exiting"
+                        );
+                        break;
+                    }
+                }
             }
         });
 
