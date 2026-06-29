@@ -16,6 +16,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Compute release metadata
+        id: meta
+        shell: bash
+        run: |
+          VERSION="${{ github.event.inputs.version || github.ref_name }}"
+          VERSION="${VERSION#rootfs-v}"
+          VERSION="${VERSION#v}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "release_tag=rootfs-${VERSION}" >> "$GITHUB_OUTPUT"
+
       - name: Create raw ext4 image (512 MB)
         run: |
           dd if=/dev/zero of=rootfs.img bs=1M count=512
@@ -51,13 +61,13 @@ jobs:
 
       - name: Compress and compute checksum
         run: |
-          gzip -9 -c rootfs.img > speck-rootfs-${{ github.event.inputs.version || github.ref_name }}-arm64.img.gz
-          shasum -a 256 rootfs.img > speck-rootfs-${{ github.event.inputs.version || github.ref_name }}-arm64.img.sha256
+          gzip -9 -c rootfs.img > speck-rootfs-${{ steps.meta.outputs.version }}-arm64.img.gz
+          shasum -a 256 rootfs.img > speck-rootfs-${{ steps.meta.outputs.version }}-arm64.img.sha256
 
       - name: Upload as GitHub Release artifact
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: rootfs-${{ github.event.inputs.version || github.ref_name }}
+          tag_name: ${{ steps.meta.outputs.release_tag }}
           files: |
             speck-rootfs-*.img.gz
             speck-rootfs-*.img.sha256
