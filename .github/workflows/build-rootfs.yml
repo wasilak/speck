@@ -10,6 +10,9 @@ on:
   push:
     tags: ["rootfs-v*"]
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-24.04-arm
