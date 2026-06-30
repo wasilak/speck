@@ -1,2 +1,4 @@
 .planning/
 .worktrees/
+target/
+*.rlib
