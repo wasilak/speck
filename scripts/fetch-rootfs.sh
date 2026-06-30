@@ -4,48 +4,45 @@ set -euo pipefail
 ROOTFS_VERSION="${1:-0.1.0}"
 BACKEND="${2:-podman}"
 SPECK_HOME="${SPECK_HOME:-$HOME/.local/share/speck}"
-ROOTFS_DEST="${SPECK_HOME}/rootfs"
+ROOTFS_DEST="${SPECK_HOME}"  # CR-02: match spk up defaults
 RELEASE_BASE="https://github.com/speck-vm/speck/releases/download"
 ROOTFS_IMG="${ROOTFS_DEST}/rootfs.img"
 ROOTFS_SUM="${ROOTFS_DEST}/rootfs.img.sha256"
 DATA_IMG="${ROOTFS_DEST}/data.img"
 
-# Step 1 — Skip only after verifying an existing image (idempotent)
-if [ -f "${ROOTFS_IMG}" ]; then
-    if [ -f "${ROOTFS_SUM}" ]; then
-        EXPECTED=$(awk '{print $1}' "${ROOTFS_SUM}")
-        ACTUAL=$(shasum -a 256 "${ROOTFS_IMG}" | awk '{print $1}')
-        if [ "${EXPECTED}" = "${ACTUAL}" ]; then
-            echo "==> rootfs image already present and verified, skipping"
-            exit 0
-        fi
-        echo "==> existing rootfs image checksum mismatch; re-downloading"
-    else
-        echo "==> existing rootfs image missing checksum; re-downloading"
-    fi
-    rm -f "${ROOTFS_IMG}" "${ROOTFS_SUM}" "${ROOTFS_IMG}.tmp"
-fi
-
 echo "==> Speck: fetching rootfs ${ROOTFS_VERSION} (${BACKEND}, arm64)"
 
-# Step 2 — Create directory
 mkdir -p "$ROOTFS_DEST"
-rm -f "${ROOTFS_IMG}.tmp"
 
-# Step 3 — Download SHA256 checksum file first
+# Step 1 — Download checksum for the REQUESTED version/backend (CR-01)
 RELEASE_TAG="rootfs-${ROOTFS_VERSION}"
 CHECKSUM_FILE="speck-rootfs-${ROOTFS_VERSION}-${BACKEND}-arm64.img.sha256"
 echo "    Downloading checksum: ${RELEASE_BASE}/${RELEASE_TAG}/${CHECKSUM_FILE}"
-curl -fsSL "${RELEASE_BASE}/${RELEASE_TAG}/${CHECKSUM_FILE}" -o "${ROOTFS_SUM}"
+curl -fsSL "${RELEASE_BASE}/${RELEASE_TAG}/${CHECKSUM_FILE}" -o "${ROOTFS_SUM}.requested"
 
-# Step 4 — Download and decompress rootfs image
+# Step 2 — Compare existing image against the REQUESTED checksum
+REQUESTED_SUM=$(awk '{print $1}' "${ROOTFS_SUM}.requested")
+if [ -f "${ROOTFS_IMG}" ]; then
+    ACTUAL=$(shasum -a 256 "${ROOTFS_IMG}" | awk '{print $1}')
+    if [ "${REQUESTED_SUM}" = "${ACTUAL}" ]; then
+        mv -f "${ROOTFS_SUM}.requested" "${ROOTFS_SUM}"
+        echo "==> rootfs image matches ${ROOTFS_VERSION}/${BACKEND}, skipping"
+        exit 0
+    fi
+    echo "==> existing rootfs does not match requested version/backend; re-downloading"
+    rm -f "${ROOTFS_IMG}" "${ROOTFS_SUM}" "${ROOTFS_IMG}.tmp"
+fi
+mv -f "${ROOTFS_SUM}.requested" "${ROOTFS_SUM}"
+
+# Step 3 — Download and decompress rootfs image
+rm -f "${ROOTFS_IMG}.tmp"
 IMAGE_FILE="speck-rootfs-${ROOTFS_VERSION}-${BACKEND}-arm64.img.gz"
 echo "    Downloading image: ${RELEASE_BASE}/${RELEASE_TAG}/${IMAGE_FILE}"
 curl -fsSL "${RELEASE_BASE}/${RELEASE_TAG}/${IMAGE_FILE}" | gunzip -c > "${ROOTFS_IMG}.tmp"
 mv -f "${ROOTFS_IMG}.tmp" "${ROOTFS_IMG}"
 
-# Step 5 — Verify SHA256
-EXPECTED=$(cat "${ROOTFS_SUM}" | awk '{print $1}')
+# Step 4 — Verify SHA256 against the downloaded checksum
+EXPECTED=$(awk '{print $1}' "${ROOTFS_SUM}")
 ACTUAL=$(shasum -a 256 "${ROOTFS_IMG}" | awk '{print $1}')
 if [ "${EXPECTED}" != "${ACTUAL}" ]; then
     echo "ERROR: SHA256 mismatch for rootfs.img"
@@ -56,13 +53,15 @@ if [ "${EXPECTED}" != "${ACTUAL}" ]; then
 fi
 echo "    SHA256 checksum verified"
 
-# Step 6 — Create data disk stub (zero-filled 512 MB raw file) if not present
+# Step 5 — Create data disk stub atomically (WR-01)
 if [ ! -f "${DATA_IMG}" ]; then
     echo "    Creating data disk stub: ${DATA_IMG}"
-    dd if=/dev/zero of="${DATA_IMG}" bs=1M count=512 status=progress 2>&1 || true
+    rm -f "${DATA_IMG}.tmp"
+    dd if=/dev/zero of="${DATA_IMG}.tmp" bs=1M count=512 status=progress
+    mv -f "${DATA_IMG}.tmp" "${DATA_IMG}"
 fi
 
-# Step 7 — Done message
+# Step 6 — Done message
 echo ""
 echo "==> Done!"
 echo "    Rootfs: ${ROOTFS_IMG} ($(du -h "${ROOTFS_IMG}" | cut -f1))"

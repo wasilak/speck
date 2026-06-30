@@ -89,21 +89,20 @@ impl Guest {
 
     /// Build a closure that creates a new vsock connection to `port` on demand.
     ///
-    /// The returned closure captures a cloned `mpsc::Sender<VmCommand>` and is safe to call
-    /// from `std::thread::spawn` OS-thread context. It must NOT be called from an async task
-    /// because `blocking_send` / `blocking_recv` will panic inside a tokio executor
-    /// (T-06.1-02 threat model — vsock_connector_for_port called from tokio task).
+    /// The returned closure captures a cloned `mpsc::Sender<VmCommand>` from a `std::sync::mpsc`
+    /// channel, so it is safe to call from any thread context — `std::thread::spawn` OS threads,
+    /// async tasks, or synchronous callers.
     fn vsock_connector_for_port(
         &self,
         port: u32,
     ) -> impl Fn() -> Result<VzSocket, Error> + Send + 'static {
         let sender = self.thread.clone_cmd_sender();
         move || {
-            let (tx, rx) = tokio::sync::oneshot::channel();
+            let (tx, rx) = std::sync::mpsc::channel();
             sender
-                .blocking_send(VmCommand::VsockConnect { port, reply: tx })
+                .send(VmCommand::VsockConnect { port, reply: tx })
                 .map_err(|_| Error::ChannelError("vm thread channel closed".into()))?;
-            rx.blocking_recv()
+            rx.recv()
                 .map_err(|_| Error::ChannelError("vm thread reply channel closed".into()))?
         }
     }

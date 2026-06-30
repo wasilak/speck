@@ -4,7 +4,7 @@ use std::os::unix::io::RawFd;
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
-use tokio::sync::{mpsc, oneshot};
+use std::sync::mpsc;
 
 use block2::{RcBlock, StackBlock};
 use dispatch2::{DispatchQueue, DispatchQueueAttr};
@@ -30,7 +30,7 @@ use crate::delegate::{VmDelegate, VmStateEvent};
 use crate::error::Error;
 use crate::vsock::VzSocket;
 
-type ReplySender = Option<oneshot::Sender<std::result::Result<InternalState, Error>>>;
+type ReplySender = Option<mpsc::Sender<std::result::Result<InternalState, Error>>>;
 
 /// Wrapper around `Option<Retained<VZVirtualMachine>>` that is explicitly `Send`.
 ///
@@ -83,37 +83,37 @@ impl DerefMut for VmSocketDevice {
 pub(crate) enum VmCommand {
     Start {
         config: GuestConfig,
-        reply: oneshot::Sender<std::result::Result<InternalState, Error>>,
+        reply: mpsc::Sender<std::result::Result<InternalState, Error>>,
     },
     Stop {
         stop_timeout: Duration,
-        reply: oneshot::Sender<std::result::Result<InternalState, Error>>,
+        reply: mpsc::Sender<std::result::Result<InternalState, Error>>,
     },
     State {
-        reply: oneshot::Sender<InternalState>,
+        reply: mpsc::Sender<InternalState>,
     },
     VsockConnect {
         port: u32,
-        reply: oneshot::Sender<std::result::Result<VzSocket, Error>>,
+        reply: mpsc::Sender<std::result::Result<VzSocket, Error>>,
     },
     NetstackFd {
-        reply: oneshot::Sender<std::result::Result<RawFd, Error>>,
+        reply: mpsc::Sender<std::result::Result<RawFd, Error>>,
     },
     DnsVsockFd {
-        reply: oneshot::Sender<std::result::Result<RawFd, Error>>,
+        reply: mpsc::Sender<std::result::Result<RawFd, Error>>,
     },
     WaitForGuestReady {
         ready_vsock_port: u32,
-        reply: oneshot::Sender<std::result::Result<(), Error>>,
+        reply: mpsc::Sender<std::result::Result<(), Error>>,
     },
     AddPortMap {
         host_port: u16,
         container_port: u16,
-        reply: oneshot::Sender<std::result::Result<(), Error>>,
+        reply: mpsc::Sender<std::result::Result<(), Error>>,
     },
     SetPortMapChannel {
-        tx: mpsc::Sender<PortMapConfig>,
-        reply: oneshot::Sender<std::result::Result<(), Error>>,
+        tx: tokio::sync::mpsc::Sender<PortMapConfig>,
+        reply: mpsc::Sender<std::result::Result<(), Error>>,
     },
     Shutdown,
 }
@@ -144,7 +144,7 @@ struct VmControl {
     netstack_fd: Option<RawFd>,
     dns_vsock_fd: Option<RawFd>,
     port_maps: Vec<PortMapConfig>,
-    port_map_tx: Option<mpsc::Sender<PortMapConfig>>,
+    port_map_tx: Option<tokio::sync::mpsc::Sender<PortMapConfig>>,
 }
 
 pub struct VmThread {
@@ -157,7 +157,7 @@ unsafe impl Sync for VmThread {}
 
 impl VmThread {
     pub fn spawn() -> Self {
-        let (tx, mut rx) = mpsc::channel::<VmCommand>(16);
+        let (tx, rx) = mpsc::channel::<VmCommand>();
         let queue = DispatchQueue::new("com.speck.vm", DispatchQueueAttr::SERIAL);
         let control = Arc::new(Mutex::new(VmControl {
             state: InternalState::Stopped,
@@ -172,7 +172,7 @@ impl VmThread {
         let thread = thread::Builder::new()
             .name("speck-vm".into())
             .spawn(move || {
-                while let Some(cmd) = rx.blocking_recv() {
+                while let Ok(cmd) = rx.recv() {
                     match cmd {
                         VmCommand::Start { config, reply } => {
                             let control = Arc::clone(&control);
@@ -791,22 +791,22 @@ impl VmThread {
     fn send_blocking<T>(
         &self,
         cmd: VmCommand,
-        rx: oneshot::Receiver<T>,
+        rx: mpsc::Receiver<T>,
     ) -> std::result::Result<T, Error> {
         self.sender
-            .blocking_send(cmd)
+            .send(cmd)
             .map_err(|_| Error::ChannelError("vm thread channel closed".into()))?;
-        rx.blocking_recv()
+        rx.recv()
             .map_err(|_| Error::ChannelError("vm thread reply channel closed".into()))
     }
 
     pub fn start(&self, config: GuestConfig) -> std::result::Result<InternalState, Error> {
-        let (tx, rx) = oneshot::channel();
+        let (tx, rx) = mpsc::channel();
         self.send_blocking(VmCommand::Start { config, reply: tx }, rx)?
     }
 
     pub fn stop(&self, stop_timeout: Duration) -> std::result::Result<InternalState, Error> {
-        let (tx, rx) = oneshot::channel();
+        let (tx, rx) = mpsc::channel();
         self.send_blocking(
             VmCommand::Stop {
                 stop_timeout,
@@ -818,7 +818,7 @@ impl VmThread {
 
     pub(crate) fn send_shutdown(&self) -> std::result::Result<(), Error> {
         self.sender
-            .blocking_send(VmCommand::Shutdown)
+            .send(VmCommand::Shutdown)
             .map_err(|_| Error::ChannelError("vm thread channel closed".into()))
     }
 
@@ -831,7 +831,7 @@ impl VmThread {
     }
 
     pub fn state(&self) -> std::result::Result<InternalState, Error> {
-        let (tx, rx) = oneshot::channel();
+        let (tx, rx) = mpsc::channel();
         self.send_blocking(VmCommand::State { reply: tx }, rx)
     }
 
@@ -841,7 +841,7 @@ impl VmThread {
     }
 
     pub fn vsock_connect(&self, port: u32) -> std::result::Result<VzSocket, Error> {
-        let (tx, rx) = oneshot::channel();
+        let (tx, rx) = mpsc::channel();
         self.send_blocking(VmCommand::VsockConnect { port, reply: tx }, rx)?
     }
 
@@ -851,7 +851,7 @@ impl VmThread {
     /// must close it when done. Returns an error if networking was not configured
     /// or the VM is not running.
     pub fn netstack_fd(&self) -> std::result::Result<RawFd, Error> {
-        let (tx, rx) = oneshot::channel();
+        let (tx, rx) = mpsc::channel();
         self.send_blocking(VmCommand::NetstackFd { reply: tx }, rx)?
     }
 
@@ -861,7 +861,7 @@ impl VmThread {
     /// must close it when done. Returns an error if no DNS vsock connection was
     /// established.
     pub fn dns_vsock_fd(&self) -> std::result::Result<RawFd, Error> {
-        let (tx, rx) = oneshot::channel();
+        let (tx, rx) = mpsc::channel();
         self.send_blocking(VmCommand::DnsVsockFd { reply: tx }, rx)?
     }
 
@@ -870,7 +870,7 @@ impl VmThread {
     /// Blocks until `do_wait_for_ready` returns (max ~6 s) or an error occurs.
     /// This is the blocking primitive `Guest::wait_for_ready()` delegates to.
     pub fn wait_for_ready(&self, ready_vsock_port: u32) -> std::result::Result<(), Error> {
-        let (tx, rx) = oneshot::channel();
+        let (tx, rx) = mpsc::channel();
         self.send_blocking(
             VmCommand::WaitForGuestReady {
                 ready_vsock_port,
@@ -885,7 +885,7 @@ impl VmThread {
         host_port: u16,
         container_port: u16,
     ) -> std::result::Result<(), Error> {
-        let (tx, rx) = oneshot::channel();
+        let (tx, rx) = mpsc::channel();
         self.send_blocking(
             VmCommand::AddPortMap {
                 host_port,
@@ -902,15 +902,15 @@ impl VmThread {
     /// subsequent `add_port_map` calls can forward entries in real time.
     pub fn set_port_map_channel(
         &self,
-        tx: mpsc::Sender<PortMapConfig>,
+        tx: tokio::sync::mpsc::Sender<PortMapConfig>,
     ) -> std::result::Result<(), Error> {
-        let (reply, rx) = oneshot::channel();
+        let (reply, rx) = mpsc::channel();
         self.send_blocking(VmCommand::SetPortMapChannel { tx, reply }, rx)?
     }
 
     pub fn join(&mut self) -> std::result::Result<(), Error> {
         self.sender
-            .blocking_send(VmCommand::Shutdown)
+            .send(VmCommand::Shutdown)
             .map_err(|_| Error::ChannelError("vm thread channel closed".into()))?;
 
         if let Some(handle) = self.thread.take() {
@@ -922,7 +922,7 @@ impl VmThread {
 
 impl Drop for VmThread {
     fn drop(&mut self) {
-        let _ = self.sender.blocking_send(VmCommand::Shutdown);
+        let _ = self.sender.send(VmCommand::Shutdown);
         if let Some(handle) = self.thread.take() {
             let _ = handle.join();
         }
