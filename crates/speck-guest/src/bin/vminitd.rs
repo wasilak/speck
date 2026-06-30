@@ -400,6 +400,31 @@ mod linux {
     }
 
     // ---------------------------------------------------------------------------
+    // Podman socket readiness
+    // ---------------------------------------------------------------------------
+
+    /// Poll `/rootfs/run/speck/podman.sock` until Podman accepts connections.
+    ///
+    /// The socket path is from vminitd's namespace (outside the chroot).
+    /// Podman writes to `/run/speck/podman.sock` inside the chroot, which is
+    /// `/rootfs/run/speck/podman.sock` from vminitd's perspective because the
+    /// tmpfs at `/rootfs/run` is shared between the outer namespace and the
+    /// chroot'd process.
+    ///
+    /// Returns `true` if the socket became reachable within `max_attempts`
+    /// (200 ms interval). Returns `false` if all attempts are exhausted.
+    fn wait_for_podman_socket(max_attempts: u32) -> bool {
+        for attempt in 0..max_attempts {
+            if unix_connect_once("/rootfs/run/speck/podman.sock") {
+                eprintln!("vminitd: podman socket ready after {attempt} attempts");
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+        false
+    }
+
+    // ---------------------------------------------------------------------------
     // containerd health check
     // ---------------------------------------------------------------------------
 
