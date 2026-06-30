@@ -1,5 +1,4 @@
 use std::path::Path;
-use std::sync::Arc;
 
 use anyhow::Context as _;
 use indicatif::ProgressBar;
@@ -70,9 +69,11 @@ pub async fn run_up(args: UpArgs, speck_home: &Path) -> anyhow::Result<()> {
     let _netstack_handles = speck_net::SpeckNet::new(net_config, Some(53))
         .spawn(netstack_fd, dns_vsock_fd, vec![], Some(port_map_rx));
 
-    spinner.set_message("Starting Docker API server...");
+    spinner.set_message("Starting Docker API proxy...");
     let sock_path = speck_home.join("speck.sock");
-    let _dockerd = speck_dockerd::SpeckDockerd::start(Arc::new(guest), sock_path.clone())?;
+    // Podman backend spike (phase 06.2): bypass speck-dockerd; proxy Unix socket traffic
+    // directly to guest Podman over vsock.  speck-dockerd is retained for comparison.
+    let _docker_proxy_path = guest.docker_api_unix_proxy(sock_path.clone())?;
 
     spinner.finish_with_message(format!("{NEON_CYAN}Speck is running{RESET}"));
 
