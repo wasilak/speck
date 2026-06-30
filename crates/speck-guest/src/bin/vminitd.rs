@@ -712,6 +712,109 @@ mod linux {
     }
 
     // ---------------------------------------------------------------------------
+    // Podman backend helpers
+    // ---------------------------------------------------------------------------
+
+    /// Return the Podman binary path as it appears INSIDE the chroot (/rootfs).
+    ///
+    /// Checks `/rootfs/usr/bin/podman` first (most distros), then falls back
+    /// to `/rootfs/usr/local/bin/podman` (manual installs).  Returns the path
+    /// without the `/rootfs` prefix because the caller passes it to a process
+    /// that already has `/rootfs` as its root.
+    fn detect_podman_bin_in_chroot() -> &'static str {
+        if std::path::Path::new("/rootfs/usr/bin/podman").exists() {
+            "/usr/bin/podman"
+        } else {
+            "/usr/local/bin/podman"
+        }
+    }
+
+    /// Spawn the Podman Docker-compatible API service inside a chroot rooted at
+    /// `/rootfs`, with automatic restart on crash.
+    ///
+    /// Uses `Command::pre_exec` + `libc::chroot` to pivot root before exec,
+    /// avoiding a dependency on a `chroot(1)` binary in the initrd.
+    ///
+    /// Equivalent shell command (for reference):
+    ///   chroot /rootfs <podman_bin> system service --time=0 unix:///run/speck/podman.sock
+    ///
+    /// The Podman socket path `/run/speck/podman.sock` is relative to the
+    /// chroot root and maps to `/rootfs/run/speck/podman.sock` in vminitd's
+    /// namespace.  Callers must create `/rootfs/run/speck` before calling this.
+    ///
+    /// Network backend diagnostic: logs the expected network config path so
+    /// VPN/WARP DNS troubleshooting can verify Podman reads the right file.
+    fn spawn_podman_service_with_restart(podman_bin_in_chroot: &'static str) {
+        // Diagnostic: log network backend so operators can verify DNS/routing
+        // behaviour under VPN and WARP before connecting containers.
+        eprintln!(
+            "vminitd: podman network config expected at /rootfs/etc/containers/containers.conf"
+        );
+        eprintln!(
+            "vminitd: podman DNS behaviour governed by host resolver via speck-net; \
+             netavark/pasta backend will be ignored at the VM level"
+        );
+
+        std::thread::spawn(move || {
+            use std::os::unix::process::CommandExt as _;
+            loop {
+                let mut cmd = std::process::Command::new(podman_bin_in_chroot);
+                cmd.args([
+                    "system",
+                    "service",
+                    "--time=0",
+                    "unix:///run/speck/podman.sock",
+                ]);
+
+                // Pivot root to /rootfs before exec so podman finds its
+                // libraries, configuration and socket directory relative to
+                // the real rootfs, not the initrd.
+                //
+                // SAFETY: pre_exec runs in the forked child after fork() but
+                // before exec(). No threads are running at that point.
+                // chroot + chdir are async-signal-safe.
+                unsafe {
+                    cmd.pre_exec(|| {
+                        let ret =
+                            libc::chroot(b"/rootfs\0".as_ptr() as *const libc::c_char);
+                        if ret < 0 {
+                            return Err(io::Error::last_os_error());
+                        }
+                        let ret = libc::chdir(b"/\0".as_ptr() as *const libc::c_char);
+                        if ret < 0 {
+                            return Err(io::Error::last_os_error());
+                        }
+                        Ok(())
+                    });
+                }
+
+                match cmd.spawn() {
+                    Ok(mut child) => {
+                        eprintln!("vminitd: started podman (pid {})", child.id());
+                        match child.wait() {
+                            Ok(status) => {
+                                eprintln!(
+                                    "vminitd: podman exited with status {status} — restarting"
+                                );
+                            }
+                            Err(e) => {
+                                eprintln!("vminitd: podman wait error: {e} — restarting");
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "vminitd: failed to spawn podman \
+                             (chroot /rootfs {podman_bin_in_chroot} system service): {e} — retrying"
+                        );
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_secs(1));
+            }
+        });
+    }
+
+    // ---------------------------------------------------------------------------
     // Service supervision
     // ---------------------------------------------------------------------------
 
