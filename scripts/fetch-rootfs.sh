@@ -20,6 +20,7 @@ echo "==> Speck: fetching rootfs ${ROOTFS_VERSION} (${BACKEND}, arm64)"
 
 # Step 2 — Create directory
 mkdir -p "$ROOTFS_DEST"
+rm -f "${ROOTFS_IMG}.tmp"
 
 # Step 3 — Download SHA256 checksum file first
 RELEASE_TAG="rootfs-${ROOTFS_VERSION}"
@@ -30,7 +31,8 @@ curl -fsSL "${RELEASE_BASE}/${RELEASE_TAG}/${CHECKSUM_FILE}" -o "${ROOTFS_SUM}"
 # Step 4 — Download and decompress rootfs image
 IMAGE_FILE="speck-rootfs-${ROOTFS_VERSION}-${BACKEND}-arm64.img.gz"
 echo "    Downloading image: ${RELEASE_BASE}/${RELEASE_TAG}/${IMAGE_FILE}"
-curl -fsSL "${RELEASE_BASE}/${RELEASE_TAG}/${IMAGE_FILE}" | gunzip -c > "${ROOTFS_IMG}"
+curl -fsSL "${RELEASE_BASE}/${RELEASE_TAG}/${IMAGE_FILE}" | gunzip -c > "${ROOTFS_IMG}.tmp"
+mv -f "${ROOTFS_IMG}.tmp" "${ROOTFS_IMG}"
 
 # Step 5 — Verify SHA256
 EXPECTED=$(cat "${ROOTFS_SUM}" | awk '{print $1}')
