@@ -373,7 +373,7 @@ mod linux {
     ///
     /// 1. Mount /dev/vda (rootfs) at /rootfs as ext4.
     /// 2. Mount /dev/vdb (data disk) at /rootfs/var/lib/containerd as ext4.
-    ///    If the data disk has no filesystem (ENODEV), format it with mke2fs
+    ///    If the data disk has no filesystem (EINVAL), format it with mke2fs
     ///    and retry. Failure on the second attempt is fatal.
     /// 3. Create /rootfs/run/ and /rootfs/tmp/.
     fn mount_disks() {
@@ -413,10 +413,15 @@ mod linux {
         };
         if ret < 0 {
             let err = io::Error::last_os_error();
-            if err.raw_os_error() == Some(libc::ENODEV) {
+            if err.raw_os_error() == Some(libc::EINVAL) {
                 eprintln!("vminitd: /dev/vdb has no filesystem — formatting with mke2fs");
-                unsafe {
-                    libc::system(b"mke2fs -t ext4 /dev/vdb\0".as_ptr() as *const libc::c_char);
+                let mke2fs_status = std::process::Command::new("/sbin/mke2fs")
+                    .args(["-t", "ext4", "/dev/vdb"])
+                    .status()
+                    .expect("vminitd: failed to start /sbin/mke2fs");
+                if !mke2fs_status.success() {
+                    eprintln!("vminitd: mke2fs failed with {mke2fs_status}");
+                    std::process::exit(1);
                 }
                 // Retry mount after formatting
                 let ret = unsafe {
