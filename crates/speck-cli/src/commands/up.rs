@@ -33,7 +33,11 @@ pub async fn run_up(args: UpArgs, speck_home: &Path) -> anyhow::Result<()> {
         .clone()
         .unwrap_or_else(|| speck_home.join("data.img"));
 
-    let config = GuestConfig::builder()
+    // Default identity mount roots: macOS host paths that must be visible at the
+    // same absolute path inside the guest for Docker bind mounts to work.
+    // /Users is always included; /Volumes and /private/tmp are added only when
+    // they exist on this host.
+    let mut builder = GuestConfig::builder()
         .kernel_path(kernel_path)
         .initrd_path(initrd_path)
         .rootfs_disk_path(rootfs_disk_path)
@@ -49,7 +53,17 @@ pub async fn run_up(args: UpArgs, speck_home: &Path) -> anyhow::Result<()> {
         .speck_home(speck_home)
         .network(NetworkConfig::default())
         .dns_vsock_port(53)
-        .build();
+        // /Users is always added — the primary macOS home directory tree.
+        .add_identity_mount("/Users");
+
+    // Add /Volumes and /private/tmp only when they exist on this host.
+    for optional_root in ["/Volumes", "/private/tmp"] {
+        if std::path::Path::new(optional_root).exists() {
+            builder = builder.add_identity_mount(optional_root);
+        }
+    }
+
+    let config = builder.build();
 
     let guest = speck_vz::Guest::new(config);
     let spinner = ProgressBar::new_spinner();

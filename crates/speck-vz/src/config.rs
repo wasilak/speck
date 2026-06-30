@@ -125,6 +125,16 @@ pub struct GuestConfig {
     ///
     /// Defaults to `<data_local_dir>/speck`.
     pub speck_home: PathBuf,
+
+    /// Identity mount roots: host paths shared into the guest at the same
+    /// absolute path, enabling Docker bind mount payloads to work without
+    /// JSON rewriting.
+    ///
+    /// For example, adding `/Users` causes the host `/Users` tree to appear
+    /// as `/Users` inside the guest rootfs.  Each path generates a stable
+    /// VirtioFS tag (`speck-id-<basename>`).  Paths that do not exist on
+    /// the host are silently skipped at VM start time.
+    pub identity_mounts: Vec<PathBuf>,
 }
 
 impl Default for GuestConfig {
@@ -148,6 +158,7 @@ impl Default for GuestConfig {
             port_maps: Vec::new(),
             volume_mounts: Vec::new(),
             speck_home: default_speck_home(),
+            identity_mounts: Vec::new(),
         }
     }
 }
@@ -266,6 +277,7 @@ pub struct GuestConfigBuilder {
     port_maps: Vec<PortMapConfig>,
     volume_mounts: Vec<VolumeMountConfig>,
     speck_home: PathBuf,
+    identity_mounts: Vec<PathBuf>,
 }
 
 impl Default for GuestConfigBuilder {
@@ -289,6 +301,7 @@ impl Default for GuestConfigBuilder {
             port_maps: Vec::new(),
             volume_mounts: Vec::new(),
             speck_home: default_speck_home(),
+            identity_mounts: Vec::new(),
         }
     }
 }
@@ -418,6 +431,15 @@ impl GuestConfigBuilder {
         self
     }
 
+    /// Add an identity mount root.
+    ///
+    /// The host path will be shared into the guest at the same absolute path.
+    /// Paths that do not exist on the host are silently skipped at VM start time.
+    pub fn add_identity_mount(mut self, path: impl Into<PathBuf>) -> Self {
+        self.identity_mounts.push(path.into());
+        self
+    }
+
     /// Consume the builder and produce a [`GuestConfig`].
     ///
     /// # Panics
@@ -445,6 +467,7 @@ impl GuestConfigBuilder {
             port_maps: self.port_maps,
             volume_mounts: self.volume_mounts,
             speck_home: self.speck_home,
+            identity_mounts: self.identity_mounts,
         }
     }
 }
@@ -529,5 +552,25 @@ mod tests {
 
         let err = privileged.validate().unwrap_err();
         assert!(err.contains("privileged"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn test_identity_mounts_propagate() {
+        let dir = std::env::temp_dir().join("speck-test-identity-mounts");
+        std::fs::create_dir_all(&dir).unwrap();
+        let kernel = dir.join("Image");
+        std::fs::write(&kernel, b"dummy kernel").unwrap();
+
+        let config = GuestConfig::builder()
+            .kernel_path(&kernel)
+            .add_identity_mount("/Users")
+            .add_identity_mount("/Volumes")
+            .build();
+
+        assert_eq!(config.identity_mounts.len(), 2);
+        assert_eq!(config.identity_mounts[0], PathBuf::from("/Users"));
+        assert_eq!(config.identity_mounts[1], PathBuf::from("/Volumes"));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

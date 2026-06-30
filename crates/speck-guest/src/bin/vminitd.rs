@@ -47,6 +47,10 @@ mod linux {
         create_named_volume_dirs(&vol_tags);
         eprintln!("vminitd: mounted {} virtiofs devices", vol_tags.len());
 
+        // Mount identity roots so Docker bind mount absolute paths resolve inside
+        // the guest chroot (e.g. /Users/... is valid inside /rootfs/Users/...).
+        mount_identity_roots("/proc/cmdline");
+
         // If DNS proxy vsock port is configured, spawn the DNS forwarder.
         // DNS forwarding is always active regardless of container backend
         // because the host resolver is the source of truth for VPN/WARP DNS.
@@ -780,6 +784,81 @@ mod linux {
                 }
             }
         }
+    }
+
+    /// Parse `speck_identity_tags=tag:path,tag:path` from the kernel cmdline.
+    ///
+    /// Returns a list of `(tag, guest_path)` pairs where `guest_path` is the
+    /// absolute path the tag should be mounted at inside the guest rootfs.
+    fn parse_cmdline_identity_tags(cmdline_path: &str) -> Vec<(String, String)> {
+        let content = match std::fs::read_to_string(cmdline_path) {
+            Ok(c) => c,
+            Err(_) => return Vec::new(),
+        };
+        for word in content.split_whitespace() {
+            if let Some(val) = word.strip_prefix("speck_identity_tags=") {
+                return val
+                    .split(',')
+                    .filter_map(|pair| {
+                        let mut parts = pair.splitn(2, ':');
+                        let tag = parts.next()?.to_string();
+                        let path = parts.next()?.to_string();
+                        if tag.is_empty() || path.is_empty() {
+                            return None;
+                        }
+                        Some((tag, path))
+                    })
+                    .collect();
+            }
+        }
+        Vec::new()
+    }
+
+    /// Mount identity root VirtioFS shares into `/rootfs` at their original paths.
+    ///
+    /// For each `(tag, path)` pair from `speck_identity_tags`, mounts the
+    /// VirtioFS tag at `/rootfs<path>`.  For example, tag `speck-id-users`
+    /// with path `/Users` is mounted at `/rootfs/Users`.
+    ///
+    /// Mount failures are non-fatal: logged and skipped.  The target directory
+    /// is created if it does not exist.
+    fn mount_identity_roots(cmdline_path: &str) {
+        let tags = parse_cmdline_identity_tags(cmdline_path);
+        if tags.is_empty() {
+            return;
+        }
+        for (tag, guest_path) in &tags {
+            // Strip a leading slash so we can join safely with /rootfs
+            let relative = guest_path.trim_start_matches('/');
+            let target = format!("/rootfs/{relative}");
+
+            if let Err(e) = std::fs::create_dir_all(&target) {
+                eprintln!("vminitd: create_dir_all {target} failed: {e}");
+                continue;
+            }
+
+            let tag_c = std::ffi::CString::new(tag.as_str()).unwrap_or_default();
+            let target_c = std::ffi::CString::new(target.as_str()).unwrap_or_default();
+
+            let ret = unsafe {
+                libc::mount(
+                    tag_c.as_ptr(),
+                    target_c.as_ptr(),
+                    b"virtiofs\0".as_ptr() as *const libc::c_char,
+                    0,
+                    std::ptr::null(),
+                )
+            };
+            if ret < 0 {
+                eprintln!(
+                    "vminitd: failed to mount identity root {tag} at {target}: {:?}",
+                    io::Error::last_os_error()
+                );
+            } else {
+                eprintln!("vminitd: mounted identity root {tag} at {target}");
+            }
+        }
+        eprintln!("vminitd: mounted {} identity roots", tags.len());
     }
 
     // ---------------------------------------------------------------------------
