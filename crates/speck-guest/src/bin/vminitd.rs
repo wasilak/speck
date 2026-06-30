@@ -374,7 +374,8 @@ mod linux {
     /// 1. Mount /dev/vda (rootfs) at /rootfs as ext4.
     /// 2. Mount /dev/vdb (data disk) at /rootfs/var/lib/containerd as ext4.
     ///    If the data disk has no filesystem (EINVAL), format it with mke2fs
-    ///    and retry. Failure on the second attempt is fatal.
+    ///    only after proving it has no filesystem signature, then retry.
+    ///    Failure on the second attempt is fatal.
     /// 3. Create /rootfs/run/ and /rootfs/tmp/.
     fn mount_disks() {
         // Create root mount point
@@ -414,7 +415,14 @@ mod linux {
         if ret < 0 {
             let err = io::Error::last_os_error();
             if err.raw_os_error() == Some(libc::EINVAL) {
-                eprintln!("vminitd: /dev/vdb has no filesystem — formatting with mke2fs");
+                if !data_disk_has_no_filesystem_signature("/dev/vdb") {
+                    eprintln!(
+                        "vminitd: /dev/vdb mount failed but disk is not proven blank; refusing to format: {:?}",
+                        err
+                    );
+                    std::process::exit(1);
+                }
+                eprintln!("vminitd: /dev/vdb has no filesystem signature — formatting with mke2fs");
                 let mke2fs_status = std::process::Command::new("/sbin/mke2fs")
                     .args(["-t", "ext4", "/dev/vdb"])
                     .status()
@@ -452,6 +460,44 @@ mod linux {
         // Create runtime directories needed by containerd
         let _ = std::fs::create_dir_all("/rootfs/run");
         let _ = std::fs::create_dir_all("/rootfs/tmp");
+    }
+
+    /// Return true only when a bounded signature probe positively reports that
+    /// the data disk has no recognizable filesystem signature.
+    ///
+    /// Fail-safe semantics: recognized signatures, missing probe tools,
+    /// execution failures, and ambiguous output all return false, which means
+    /// the caller must not format the disk.
+    fn data_disk_has_no_filesystem_signature(device: &str) -> bool {
+        let output = match std::process::Command::new("/sbin/blkid")
+            .arg(device)
+            .output()
+        {
+            Ok(output) => output,
+            Err(e) => {
+                eprintln!("vminitd: failed to run /sbin/blkid for {device}: {e}");
+                return false;
+            }
+        };
+
+        if output.status.success() {
+            eprintln!("vminitd: /sbin/blkid found a signature on {device}; refusing to format");
+            return false;
+        }
+
+        let stdout_empty = output.stdout.iter().all(|b| b.is_ascii_whitespace());
+        let stderr_empty = output.stderr.iter().all(|b| b.is_ascii_whitespace());
+
+        match output.status.code() {
+            Some(2) if stdout_empty && stderr_empty => true,
+            code => {
+                eprintln!(
+                    "vminitd: /sbin/blkid did not prove {device} is blank (status: {:?}); refusing to format",
+                    code
+                );
+                false
+            }
+        }
     }
 
     // ---------------------------------------------------------------------------
