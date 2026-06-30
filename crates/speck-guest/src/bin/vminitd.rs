@@ -247,6 +247,78 @@ mod linux {
         }
     }
 
+    /// Bind-mount /proc, /sys, /dev from the initrd namespace into /rootfs,
+    /// and mount a fresh tmpfs at /rootfs/run.
+    ///
+    /// This is required before running Podman (or any process) in a chroot
+    /// rooted at /rootfs: the chroot'd process must be able to see proc, sys,
+    /// and dev, which only exist in the outer namespace after
+    /// `mount_early_filesystems()` runs.
+    ///
+    /// Call order: must run AFTER `mount_disks()` so that /rootfs is a
+    /// valid ext4 mount point, and AFTER `mount_early_filesystems()` so
+    /// that the bind sources (/proc, /sys, /dev) themselves exist.
+    ///
+    /// Mount failures are non-fatal — errors are logged and execution
+    /// continues.  A chroot'd process that cannot see /proc will typically
+    /// fail to start on its own; the error log is sufficient for diagnosis.
+    fn mount_rootfs_runtime_filesystems() {
+        // /rootfs/proc — bind from /proc
+        let _ = std::fs::create_dir_all("/rootfs/proc");
+        bind_mount("/proc", "/rootfs/proc");
+
+        // /rootfs/sys — bind from /sys
+        let _ = std::fs::create_dir_all("/rootfs/sys");
+        bind_mount("/sys", "/rootfs/sys");
+
+        // /rootfs/dev — bind from /dev
+        let _ = std::fs::create_dir_all("/rootfs/dev");
+        bind_mount("/dev", "/rootfs/dev");
+
+        // /rootfs/run — fresh tmpfs (runtime sockets + pid files are ephemeral)
+        let _ = std::fs::create_dir_all("/rootfs/run");
+        let ret = unsafe {
+            libc::mount(
+                b"tmpfs\0".as_ptr() as *const libc::c_char,
+                b"/rootfs/run\0".as_ptr() as *const libc::c_char,
+                b"tmpfs\0".as_ptr() as *const libc::c_char,
+                0,
+                std::ptr::null(),
+            )
+        };
+        if ret < 0 {
+            eprintln!(
+                "vminitd: mount tmpfs at /rootfs/run failed: {:?}",
+                io::Error::last_os_error()
+            );
+        }
+    }
+
+    /// Bind-mount `source` onto `target` using MS_BIND.
+    ///
+    /// Non-fatal: logs the error and returns.  The filesystem type is
+    /// ignored by the kernel for bind mounts.
+    fn bind_mount(source: &str, target: &str) {
+        use std::ffi::CString;
+        let src = CString::new(source).unwrap_or_default();
+        let tgt = CString::new(target).unwrap_or_default();
+        let ret = unsafe {
+            libc::mount(
+                src.as_ptr(),
+                tgt.as_ptr(),
+                std::ptr::null(),   // fstype ignored for MS_BIND
+                libc::MS_BIND,
+                std::ptr::null(),
+            )
+        };
+        if ret < 0 {
+            eprintln!(
+                "vminitd: bind mount {source} → {target} failed: {:?}",
+                io::Error::last_os_error()
+            );
+        }
+    }
+
     /// Mount the rootfs and data disks.
     ///
     /// 1. Mount /dev/vda (rootfs) at /rootfs as ext4.
