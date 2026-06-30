@@ -1,8 +1,10 @@
 use bollard::exec::StartExecResults;
 use bollard::query_parameters::CreateImageOptionsBuilder;
 use bollard::models::{
-    ContainerCreateBody, ExecConfig, NetworkCreateRequest, VolumeCreateRequest,
+    ContainerCreateBody, ExecConfig, HostConfig, NetworkCreateRequest, PortBinding,
+    VolumeCreateRequest,
 };
+use std::collections::HashMap;
 use bollard::query_parameters::{
     CreateContainerOptionsBuilder, ListContainersOptions, LogsOptions, RemoveContainerOptions,
     StartContainerOptions, WaitContainerOptions,
@@ -377,4 +379,289 @@ async fn test_volume_create_list_remove() {
         .remove_volume("test-vol-conformance", None::<bollard::query_parameters::RemoveVolumeOptions>)
         .await
         .expect("remove volume");
+}
+
+// ─── Backend mode tests — Podman transparent proxy ────────────────────────
+//
+// These tests exercise features that must work end-to-end through the
+// transparent vsock proxy:
+//
+//   docker CLI → $SPECK_SOCK → unix_vsock_proxy → vsock port 9003
+//   → guest sock_forwarder → /run/speck/podman.sock → Podman
+//
+// They complement the general conformance tests above by covering bind mounts,
+// port publishing, in-container DNS resolution, and the Testcontainers/Ryuk
+// socket pattern.
+//
+// Prerequisites:
+//   - Signed speck binary (`cargo xtask codesign-dev`)
+//   - `spk up` running in Podman backend mode
+//   - For DNS tests: external network access from within the VM
+//
+// Run:
+//   cargo test -p speck-dockerd --test api_conformance -- --ignored
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Verify that a host path bind-mounted via `-v src:dst:ro` is readable inside a container.
+///
+/// This exercises the VirtioFS identity-mount path: the host path must be mounted at
+/// the same absolute path inside the guest so Podman can find it when resolving the
+/// bind spec without any JSON rewriting in the Speck proxy.
+#[tokio::test]
+#[ignore = "requires signed binary + spk up (podman backend) + /private/tmp identity mount"]
+async fn test_bind_mount_host_path() {
+    let tmp_dir = std::env::temp_dir(); // /private/tmp on macOS
+    let tmp_file = tmp_dir.join("speck-bind-test.txt");
+    std::fs::write(&tmp_file, "bind-mount-ok\n").expect("write bind test file");
+
+    let docker = speck_docker();
+    let config = ContainerCreateBody {
+        image: Some("alpine".to_string()),
+        cmd: Some(vec![
+            "cat".to_string(),
+            format!("{}/speck-bind-test.txt", tmp_dir.display()),
+        ]),
+        host_config: Some(HostConfig {
+            binds: Some(vec![format!(
+                "{}:{}:ro",
+                tmp_dir.display(),
+                tmp_dir.display()
+            )]),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let options = CreateContainerOptionsBuilder::default()
+        .name("test-bind-mount-backend")
+        .build();
+    let response = docker
+        .create_container(Some(options), config)
+        .await
+        .expect("create container with bind mount");
+    let container_id = response.id;
+
+    docker
+        .start_container(&container_id, None::<StartContainerOptions>)
+        .await
+        .expect("start container");
+
+    docker
+        .wait_container(&container_id, None::<WaitContainerOptions>)
+        .try_collect::<Vec<_>>()
+        .await
+        .expect("wait container");
+
+    let logs = docker
+        .logs(
+            &container_id,
+            Some(LogsOptions {
+                stdout: true,
+                stderr: true,
+                ..Default::default()
+            }),
+        )
+        .try_collect::<Vec<_>>()
+        .await
+        .expect("get bind mount logs");
+    let output: String = logs
+        .iter()
+        .flat_map(|l| l.as_ref())
+        .map(|&b| b as char)
+        .collect();
+
+    docker
+        .remove_container(
+            &container_id,
+            Some(RemoveContainerOptions { force: true, ..Default::default() }),
+        )
+        .await
+        .expect("remove container");
+
+    let _ = std::fs::remove_file(&tmp_file);
+
+    assert!(
+        output.contains("bind-mount-ok"),
+        "bind-mounted file content should be readable inside container, got: {output:?}"
+    );
+}
+
+/// Verify that a port-published container starts without error and the binding
+/// is negotiated through the Speck proxy without reintroducing VZNATNetworkDeviceAttachment.
+#[tokio::test]
+#[ignore = "requires signed binary + spk up (podman backend) + nginx:alpine image"]
+async fn test_port_publish_nginx() {
+    let docker = speck_docker();
+    let mut port_bindings: HashMap<String, Option<Vec<PortBinding>>> = HashMap::new();
+    port_bindings.insert(
+        "80/tcp".to_string(),
+        Some(vec![PortBinding {
+            host_ip: Some("127.0.0.1".to_string()),
+            host_port: Some("18080".to_string()),
+        }]),
+    );
+
+    let config = ContainerCreateBody {
+        image: Some("nginx:alpine".to_string()),
+        host_config: Some(HostConfig {
+            port_bindings: Some(port_bindings),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let options = CreateContainerOptionsBuilder::default()
+        .name("test-port-publish-backend")
+        .build();
+    let response = docker
+        .create_container(Some(options), config)
+        .await
+        .expect("create nginx container");
+    let container_id = response.id;
+
+    docker
+        .start_container(&container_id, None::<StartContainerOptions>)
+        .await
+        .expect("start nginx");
+
+    // Give nginx a moment to bind its port before cleanup.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    docker
+        .remove_container(
+            &container_id,
+            Some(RemoveContainerOptions { force: true, ..Default::default() }),
+        )
+        .await
+        .expect("remove nginx container");
+    // Test passes if create+start succeeded without error — port binding negotiation
+    // completed. Use `curl http://127.0.0.1:18080/` for full round-trip verification.
+}
+
+/// Verify that DNS resolves inside a container, confirming that Speck's host-resolver
+/// path is used rather than a backend-managed DNS that ignores macOS scoped resolvers.
+///
+/// With WARP/VPN active this same test with a VPN-internal hostname is the critical gate.
+#[tokio::test]
+#[ignore = "requires signed binary + spk up (podman backend) + external network access"]
+async fn test_dns_resolution_inside_container() {
+    let docker = speck_docker();
+    let config = ContainerCreateBody {
+        image: Some("alpine".to_string()),
+        cmd: Some(vec!["nslookup".to_string(), "cloudflare.com".to_string()]),
+        ..Default::default()
+    };
+    let options = CreateContainerOptionsBuilder::default()
+        .name("test-dns-backend")
+        .build();
+    let response = docker
+        .create_container(Some(options), config)
+        .await
+        .expect("create dns-test container");
+    let container_id = response.id;
+
+    docker
+        .start_container(&container_id, None::<StartContainerOptions>)
+        .await
+        .expect("start container");
+
+    let wait_result = docker
+        .wait_container(&container_id, None::<WaitContainerOptions>)
+        .try_collect::<Vec<_>>()
+        .await
+        .expect("wait container");
+    let exit_code = wait_result.first().map(|r| r.status_code).unwrap_or(1);
+
+    docker
+        .remove_container(
+            &container_id,
+            Some(RemoveContainerOptions { force: true, ..Default::default() }),
+        )
+        .await
+        .expect("remove container");
+
+    assert_eq!(
+        exit_code, 0,
+        "nslookup cloudflare.com should succeed inside container (exit 0)"
+    );
+}
+
+/// Testcontainers smoke test: the Ryuk resource reaper bind-mounts the Docker socket at
+/// `/var/run/docker.sock` inside a container and issues Docker API requests through it.
+///
+/// This test verifies that:
+///   1. Speck's Unix socket can be bind-mounted into a container as `/var/run/docker.sock`.
+///   2. The mounted path is a valid Unix domain socket (`test -S`), which Ryuk checks
+///      before opening the connection.
+///
+/// For a full Testcontainers run, set these env vars and run your language SDK's test suite:
+///   DOCKER_HOST=unix://$HOME/.local/share/speck/speck.sock
+///   TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=$HOME/.local/share/speck/speck.sock
+#[tokio::test]
+#[ignore = "requires signed binary + spk up (podman backend) running"]
+async fn test_ryuk_socket_bind_mount() {
+    let docker = speck_docker();
+    let sock = speck_sock();
+
+    let config = ContainerCreateBody {
+        image: Some("alpine".to_string()),
+        cmd: Some(vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            "test -S /var/run/docker.sock && echo ryuk-sock-ok".to_string(),
+        ]),
+        host_config: Some(HostConfig {
+            binds: Some(vec![format!("{}:/var/run/docker.sock", sock.display())]),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let options = CreateContainerOptionsBuilder::default()
+        .name("test-ryuk-socket-backend")
+        .build();
+    let response = docker
+        .create_container(Some(options), config)
+        .await
+        .expect("create ryuk-style container");
+    let container_id = response.id;
+
+    docker
+        .start_container(&container_id, None::<StartContainerOptions>)
+        .await
+        .expect("start container");
+
+    docker
+        .wait_container(&container_id, None::<WaitContainerOptions>)
+        .try_collect::<Vec<_>>()
+        .await
+        .expect("wait container");
+
+    let logs = docker
+        .logs(
+            &container_id,
+            Some(LogsOptions {
+                stdout: true,
+                stderr: true,
+                ..Default::default()
+            }),
+        )
+        .try_collect::<Vec<_>>()
+        .await
+        .expect("get ryuk logs");
+    let output: String = logs
+        .iter()
+        .flat_map(|l| l.as_ref())
+        .map(|&b| b as char)
+        .collect();
+
+    docker
+        .remove_container(
+            &container_id,
+            Some(RemoveContainerOptions { force: true, ..Default::default() }),
+        )
+        .await
+        .expect("remove container");
+
+    assert!(
+        output.contains("ryuk-sock-ok"),
+        "Speck socket bind-mounted as /var/run/docker.sock should be a socket inside the container, got: {output:?}"
+    );
 }
