@@ -14,11 +14,14 @@ use objc2::rc::{Retained, autoreleasepool};
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::{NSArray, NSError, NSFileHandle, NSString, NSURL};
 use objc2_virtualization::{
-    VZDiskImageStorageDeviceAttachment, VZEntropyDeviceConfiguration,
-    VZFileHandleNetworkDeviceAttachment, VZGenericPlatformConfiguration, VZLinuxBootLoader,
-    VZMACAddress, VZNetworkDeviceAttachment, VZNetworkDeviceConfiguration, VZSocketDevice,
-    VZSocketDeviceConfiguration, VZStorageDeviceAttachment, VZStorageDeviceConfiguration,
-    VZVirtioBlockDeviceConfiguration, VZVirtioEntropyDeviceConfiguration,
+    VZConsoleDeviceConfiguration, VZDiskImageStorageDeviceAttachment,
+    VZEntropyDeviceConfiguration, VZFileHandleNetworkDeviceAttachment,
+    VZFileSerialPortAttachment, VZGenericPlatformConfiguration, VZLinuxBootLoader, VZMACAddress,
+    VZNetworkDeviceAttachment, VZNetworkDeviceConfiguration, VZSerialPortAttachment,
+    VZSocketDevice, VZSocketDeviceConfiguration, VZStorageDeviceAttachment,
+    VZStorageDeviceConfiguration,     VZVirtioBlockDeviceConfiguration,
+    VZVirtioConsoleDeviceConfiguration, VZVirtioConsolePortConfiguration,
+    VZVirtioEntropyDeviceConfiguration,
     VZVirtioNetworkDeviceConfiguration, VZVirtioSocketConnection, VZVirtioSocketDevice,
     VZVirtioSocketDeviceConfiguration, VZVirtualMachine, VZVirtualMachineConfiguration,
 };
@@ -376,6 +379,45 @@ impl VmThread {
             let entropy_ref: &VZEntropyDeviceConfiguration = &entropy;
             let entropy_array = NSArray::from_slice(&[entropy_ref]);
             vm_config.setEntropyDevices(&entropy_array);
+
+            // ── Console device (serial log for kernel + vminitd debug) ────
+            let console_log_path = config.speck_home.join("console.log");
+            let console_log_str = NSString::from_str(
+                console_log_path
+                    .to_str()
+                    .ok_or_else(|| Error::VmFramework("non-UTF-8 console log path".into()))?,
+            );
+            let console_log_url = NSURL::fileURLWithPath(&console_log_str);
+
+            let virtio_console = VZVirtioConsoleDeviceConfiguration::init(
+                VZVirtioConsoleDeviceConfiguration::alloc(),
+            );
+            let port0 = VZVirtioConsolePortConfiguration::init(
+                VZVirtioConsolePortConfiguration::alloc(),
+            );
+            port0.setIsConsole(true);
+
+            let attachment = VZFileSerialPortAttachment::initWithURL_append_error(
+                VZFileSerialPortAttachment::alloc(),
+                &console_log_url,
+                true,
+            )
+            .map_err(|e| {
+                let desc = e.localizedDescription();
+                let desc = autoreleasepool(|pool| desc.to_str(pool).to_string());
+                Error::VmFramework(format!(
+                    "failed to create serial port attachment: {desc}"
+                ))
+            })?;
+            let attachment_ref: &VZSerialPortAttachment = &attachment;
+            port0.setAttachment(Some(attachment_ref));
+
+            let ports = virtio_console.ports();
+            ports.setObject_atIndexedSubscript(Some(&port0), 0);
+
+            let console_ref: &VZConsoleDeviceConfiguration = &virtio_console;
+            let console_array = NSArray::from_slice(&[console_ref]);
+            vm_config.setConsoleDevices(&console_array);
 
             let vsock =
                 VZVirtioSocketDeviceConfiguration::init(VZVirtioSocketDeviceConfiguration::alloc());
@@ -761,7 +803,7 @@ impl VmThread {
         queue: &DispatchQueue,
         ready_vsock_port: u32,
     ) -> Result<(), Error> {
-        for _ in 0..30 {
+        for _ in 0..500 {
             match Self::do_vsock_connect(control, queue, ready_vsock_port) {
                 Ok(sock) => {
                     let mut buf = [0u8; 6];
@@ -928,3 +970,4 @@ impl Drop for VmThread {
         }
     }
 }
+

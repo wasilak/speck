@@ -24,6 +24,11 @@ mod linux {
     use std::io;
 
     pub(super) fn main() {
+        // Mount early filesystems (/proc, /sys, /dev) before reading
+        // /proc/cmdline — the kernel cmdline lives at /proc/cmdline and
+        // all cmdline parsers below depend on /proc being reachable.
+        mount_early_filesystems();
+
         let _port = parse_cmdline_vsock_port("/proc/cmdline").unwrap_or(1234);
         let dns_port = parse_cmdline_dns_port("/proc/cmdline");
         let containerd_port = parse_cmdline_containerd_vsock_port("/proc/cmdline").unwrap_or(9001);
@@ -36,8 +41,6 @@ mod linux {
             container_backend.as_deref().unwrap_or("containerd")
         );
 
-        // Mount filesystems and disks before spawning services
-        mount_early_filesystems();
         mount_disks();
 
         // Mount VirtioFS volumes and Speck home for Ryuk socket access
@@ -73,6 +76,58 @@ mod linux {
             // /rootfs/run/speck/podman.sock from vminitd's namespace).
             if let Err(e) = std::fs::create_dir_all("/rootfs/run/speck") {
                 eprintln!("vminitd: failed to create /rootfs/run/speck: {e}");
+            }
+
+            // Podman v5 requires /libpod_lock for its shared memory lock manager.
+            // The kata-alpine rootfs doesn't include this directory, so we create
+            // it here before starting the service.
+            if let Err(e) = std::fs::create_dir_all("/rootfs/libpod_lock") {
+                eprintln!("vminitd: failed to create /rootfs/libpod_lock: {e}");
+            }
+
+            // Diagnose the lock directory
+            match std::fs::metadata("/rootfs/libpod_lock") {
+                Ok(m) => {
+                    use std::os::unix::fs::PermissionsExt;
+                    eprintln!(
+                        "vminitd: /rootfs/libpod_lock exists: type={:?} mode={:o}",
+                        m.file_type(),
+                        m.permissions().mode()
+                    );
+                }
+                Err(e) => {
+                    eprintln!("vminitd: /rootfs/libpod_lock stat failed: {e}");
+                }
+            }
+
+            // Mount /dev/shm inside the chroot so Podman's shm_open() works
+            let _ = std::fs::create_dir_all("/rootfs/dev/shm");
+            let ret = unsafe {
+                libc::mount(
+                    b"tmpfs\0".as_ptr() as *const libc::c_char,
+                    b"/rootfs/dev/shm\0".as_ptr() as *const libc::c_char,
+                    b"tmpfs\0".as_ptr() as *const libc::c_char,
+                    0,
+                    std::ptr::null(),
+                )
+            };
+            if ret < 0 {
+                eprintln!(
+                    "vminitd: mount tmpfs at /rootfs/dev/shm failed: {:?}",
+                    io::Error::last_os_error()
+                );
+            }
+
+            // Write a containers.conf drop-in to use file locking instead of
+            // shared-memory locks, which may not work in the chroot environment.
+            if let Err(e) = std::fs::create_dir_all("/rootfs/etc/containers/containers.conf.d") {
+                eprintln!("vminitd: failed to create containers.conf.d: {e}");
+            }
+            if let Err(e) = std::fs::write(
+                "/rootfs/etc/containers/containers.conf.d/10-speck-locks.conf",
+                b"[engine]\nlock_type = \"file\"\n",
+            ) {
+                eprintln!("vminitd: failed to write lock config: {e}");
             }
 
             let podman_bin = detect_podman_bin_in_chroot();
@@ -966,6 +1021,7 @@ mod linux {
                     "--time=0",
                     "unix:///run/speck/podman.sock",
                 ]);
+                cmd.env("PODMAN_IGNORE_CGROUPSV1_WARNING", "1");
 
                 // Pivot root to /rootfs before exec so podman finds its
                 // libraries, configuration and socket directory relative to

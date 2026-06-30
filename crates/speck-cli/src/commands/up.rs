@@ -15,12 +15,13 @@ pub async fn run_up(args: UpArgs, speck_home: &Path) -> anyhow::Result<()> {
     let kernel_path = args
         .kernel
         .clone()
-        .unwrap_or_else(|| speck_home.join("vmlinuz"));
+        .unwrap_or_else(|| speck_home.join("kernel/vmlinux"));
     let initrd_path: std::path::PathBuf = args
         .initrd
         .clone()
         .or_else(|| {
-            let p = speck_home.join("initrd");
+            // Custom Speck initrd with vminitd as PID 1
+            let p = speck_home.join("initrd/initrd.cpio.gz");
             if p.exists() { Some(p) } else { None }
         })
         .unwrap_or_default();
@@ -49,7 +50,7 @@ pub async fn run_up(args: UpArgs, speck_home: &Path) -> anyhow::Result<()> {
         // instead of containerd and forward its Docker-compatible API socket on
         // vsock port 9003.  Remove this block to revert to containerd.
         .podman_vsock_port(9003)
-        .cmdline("container_backend=podman podman_vsock_port=9003")
+        .cmdline("console=hvc0 panic=-1 container_backend=podman podman_vsock_port=9003 ready_vsock_port=9000 containerd_vsock_port=9001 buildkitd_vsock_port=9002")
         .speck_home(speck_home)
         .network(NetworkConfig::default())
         .dns_vsock_port(53)
