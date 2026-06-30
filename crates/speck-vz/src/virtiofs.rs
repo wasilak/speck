@@ -77,7 +77,7 @@ pub fn cmdline_virtiofs_arg(
     };
 
     result.push_str(&format!(
-        " {SPECK_HOME_TAG}_tag={SPECK_HOME_TAG} {SPECK_HOME_TAG}_path={}",
+        " speck_home_tag={SPECK_HOME_TAG} speck_home_path={}",
         speck_home.display()
     ));
 
@@ -275,8 +275,8 @@ mod tests {
         let home = Path::new("/tmp/speck-home");
         let result = cmdline_virtiofs_arg(&mounts, home, &[]);
         assert!(result.contains("speck_vol_tags=speck-vol-0:/app"));
-        assert!(result.contains("speck-home_tag=speck-home"));
-        assert!(result.contains("speck-home_path=/tmp/speck-home"));
+        assert!(result.contains("speck_home_tag=speck-home"));
+        assert!(result.contains("speck_home_path=/tmp/speck-home"));
     }
 
     #[test]
@@ -298,8 +298,8 @@ mod tests {
         let home = Path::new("/tmp/speck-home");
         let result = cmdline_virtiofs_arg(&mounts, home, &[]);
         assert!(result.contains("speck_vol_tags=speck-vol-0:/app,speck-vol-1:/etc/config"));
-        assert!(result.contains("speck-home_tag=speck-home"));
-        assert!(result.contains("speck-home_path=/tmp/speck-home"));
+        assert!(result.contains("speck_home_tag=speck-home"));
+        assert!(result.contains("speck_home_path=/tmp/speck-home"));
     }
 
     #[test]
@@ -308,7 +308,7 @@ mod tests {
         let home = Path::new("/tmp/speck-home");
         let result = cmdline_virtiofs_arg(&mounts, home, &[]);
         assert!(!result.contains("speck_vol_tags"));
-        assert!(result.contains("speck-home_tag=speck-home"));
+        assert!(result.contains("speck_home_tag=speck-home"));
     }
 
     #[test]
