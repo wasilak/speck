@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOTFS_VERSION="${1:-0.1.0}"
+BACKEND="${2:-podman}"
 SPECK_HOME="${SPECK_HOME:-$HOME/.local/share/speck}"
 ROOTFS_DEST="${SPECK_HOME}/rootfs"
 RELEASE_BASE="https://github.com/speck-vm/speck/releases/download"
@@ -15,19 +16,19 @@ if [ -f "${ROOTFS_IMG}" ]; then
     exit 0
 fi
 
-echo "==> Speck: fetching rootfs ${ROOTFS_VERSION} (arm64)"
+echo "==> Speck: fetching rootfs ${ROOTFS_VERSION} (${BACKEND}, arm64)"
 
 # Step 2 — Create directory
 mkdir -p "$ROOTFS_DEST"
 
 # Step 3 — Download SHA256 checksum file first
 RELEASE_TAG="rootfs-${ROOTFS_VERSION}"
-CHECKSUM_FILE="speck-rootfs-${ROOTFS_VERSION}-arm64.img.sha256"
+CHECKSUM_FILE="speck-rootfs-${ROOTFS_VERSION}-${BACKEND}-arm64.img.sha256"
 echo "    Downloading checksum: ${RELEASE_BASE}/${RELEASE_TAG}/${CHECKSUM_FILE}"
 curl -fsSL "${RELEASE_BASE}/${RELEASE_TAG}/${CHECKSUM_FILE}" -o "${ROOTFS_SUM}"
 
 # Step 4 — Download and decompress rootfs image
-IMAGE_FILE="speck-rootfs-${ROOTFS_VERSION}-arm64.img.gz"
+IMAGE_FILE="speck-rootfs-${ROOTFS_VERSION}-${BACKEND}-arm64.img.gz"
 echo "    Downloading image: ${RELEASE_BASE}/${RELEASE_TAG}/${IMAGE_FILE}"
 curl -fsSL "${RELEASE_BASE}/${RELEASE_TAG}/${IMAGE_FILE}" | gunzip -c > "${ROOTFS_IMG}"
 
