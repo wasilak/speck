@@ -10,10 +10,20 @@ ROOTFS_IMG="${ROOTFS_DEST}/rootfs.img"
 ROOTFS_SUM="${ROOTFS_DEST}/rootfs.img.sha256"
 DATA_IMG="${ROOTFS_DEST}/data.img"
 
-# Step 1 — Skip if already present (idempotent)
+# Step 1 — Skip only after verifying an existing image (idempotent)
 if [ -f "${ROOTFS_IMG}" ]; then
-    echo "==> rootfs image already present, skipping"
-    exit 0
+    if [ -f "${ROOTFS_SUM}" ]; then
+        EXPECTED=$(awk '{print $1}' "${ROOTFS_SUM}")
+        ACTUAL=$(shasum -a 256 "${ROOTFS_IMG}" | awk '{print $1}')
+        if [ "${EXPECTED}" = "${ACTUAL}" ]; then
+            echo "==> rootfs image already present and verified, skipping"
+            exit 0
+        fi
+        echo "==> existing rootfs image checksum mismatch; re-downloading"
+    else
+        echo "==> existing rootfs image missing checksum; re-downloading"
+    fi
+    rm -f "${ROOTFS_IMG}" "${ROOTFS_SUM}" "${ROOTFS_IMG}.tmp"
 fi
 
 echo "==> Speck: fetching rootfs ${ROOTFS_VERSION} (${BACKEND}, arm64)"
