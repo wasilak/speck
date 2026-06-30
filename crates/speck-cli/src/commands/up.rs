@@ -42,6 +42,11 @@ pub async fn run_up(args: UpArgs, speck_home: &Path) -> anyhow::Result<()> {
         .containerd_vsock_port(9001)
         .buildkitd_vsock_port(9002)
         .ready_vsock_port(9000)
+        // Podman backend spike (phase 06.2): instruct vminitd to start Podman
+        // instead of containerd and forward its Docker-compatible API socket on
+        // vsock port 9003.  Remove this block to revert to containerd.
+        .podman_vsock_port(9003)
+        .cmdline("container_backend=podman podman_vsock_port=9003")
         .speck_home(speck_home)
         .network(NetworkConfig::default())
         .dns_vsock_port(53)

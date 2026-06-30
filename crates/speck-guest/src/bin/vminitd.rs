@@ -47,7 +47,9 @@ mod linux {
         create_named_volume_dirs(&vol_tags);
         eprintln!("vminitd: mounted {} virtiofs devices", vol_tags.len());
 
-        // If DNS proxy vsock port is configured, spawn the DNS forwarder
+        // If DNS proxy vsock port is configured, spawn the DNS forwarder.
+        // DNS forwarding is always active regardless of container backend
+        // because the host resolver is the source of truth for VPN/WARP DNS.
         if let Some(dns_vsock_port) = dns_port {
             std::thread::spawn(
                 move || match speck_guest::dns_forwarder::serve(dns_vsock_port) {
@@ -57,40 +59,84 @@ mod linux {
             );
         }
 
-        // Spawn and supervise containerd and buildkitd
-        spawn_service_with_restart(
-            "containerd",
-            "/rootfs/usr/bin/containerd",
-            vec!["--config", "/rootfs/etc/containerd/config.toml"],
-        );
-        spawn_service_with_restart("buildkitd", "/rootfs/usr/local/bin/buildkitd", vec![]);
+        if container_backend.as_deref() == Some("podman") {
+            // ── Podman backend ────────────────────────────────────────────────
+            // Mount proc/sys/dev/run into /rootfs so Podman can see them from
+            // inside the chroot.
+            mount_rootfs_runtime_filesystems();
 
-        // Wait for containerd socket to become reachable
-        if !wait_for_containerd_socket(50) {
-            eprintln!("vminitd: containerd did not become ready within timeout");
-            std::process::exit(1);
+            // Create the socket directory inside the chroot (maps to
+            // /rootfs/run/speck/podman.sock from vminitd's namespace).
+            if let Err(e) = std::fs::create_dir_all("/rootfs/run/speck") {
+                eprintln!("vminitd: failed to create /rootfs/run/speck: {e}");
+            }
+
+            let podman_bin = detect_podman_bin_in_chroot();
+            eprintln!("vminitd: using podman at chroot-relative path {podman_bin}");
+            spawn_podman_service_with_restart(podman_bin);
+
+            // Block until Podman's Unix socket accepts connections before
+            // signalling READY — the host must not attempt to proxy before
+            // Podman is up.
+            if !wait_for_podman_socket(150) {
+                eprintln!("vminitd: podman socket did not become ready within timeout");
+                std::process::exit(1);
+            }
+            eprintln!("vminitd: podman socket ready");
+
+            // Signal READY to the host.
+            send_ready_signal(ready_port);
+
+            // Forward Podman's Unix socket over vsock port 9003.
+            // The socket path used here is from vminitd's namespace (outside
+            // the chroot). /rootfs/run/speck/podman.sock is the same inode as
+            // /run/speck/podman.sock inside the chroot because /rootfs/run is
+            // the shared tmpfs.
+            std::thread::spawn(move || {
+                if let Err(e) = speck_guest::sock_forwarder::serve(
+                    podman_port,
+                    "/rootfs/run/speck/podman.sock",
+                ) {
+                    eprintln!("vminitd: podman forwarder error: {e}");
+                }
+            });
+        } else {
+            // ── Containerd backend (default) ──────────────────────────────────
+            // Spawn and supervise containerd and buildkitd
+            spawn_service_with_restart(
+                "containerd",
+                "/rootfs/usr/bin/containerd",
+                vec!["--config", "/rootfs/etc/containerd/config.toml"],
+            );
+            spawn_service_with_restart("buildkitd", "/rootfs/usr/local/bin/buildkitd", vec![]);
+
+            // Wait for containerd socket to become reachable
+            if !wait_for_containerd_socket(50) {
+                eprintln!("vminitd: containerd did not become ready within timeout");
+                std::process::exit(1);
+            }
+
+            // Signal READY to the host (D-05)
+            send_ready_signal(ready_port);
+
+            // Start vsock→Unix socket forwarders (D-07, D-09)
+            std::thread::spawn(move || {
+                if let Err(e) = speck_guest::sock_forwarder::serve(
+                    containerd_port,
+                    "/rootfs/run/containerd/containerd.sock",
+                ) {
+                    eprintln!("vminitd: containerd forwarder error: {e}");
+                }
+            });
+            std::thread::spawn(move || {
+                if let Err(e) = speck_guest::sock_forwarder::serve(
+                    buildkitd_port,
+                    "/rootfs/run/buildkit/buildkitd.sock",
+                ) {
+                    eprintln!("vminitd: buildkitd forwarder error: {e}");
+                }
+            });
         }
-
-        // Signal READY to the host (D-05)
-        send_ready_signal(ready_port);
-
-        // Start vsock→Unix socket forwarders (D-07, D-09)
-        std::thread::spawn(move || {
-            if let Err(e) = speck_guest::sock_forwarder::serve(
-                containerd_port,
-                "/rootfs/run/containerd/containerd.sock",
-            ) {
-                eprintln!("vminitd: containerd forwarder error: {e}");
-            }
-        });
-        std::thread::spawn(move || {
-            if let Err(e) = speck_guest::sock_forwarder::serve(
-                buildkitd_port,
-                "/rootfs/run/buildkit/buildkitd.sock",
-            ) {
-                eprintln!("vminitd: buildkitd forwarder error: {e}");
-            }
-        });
 
         // PID 1 must never exit
         loop {
