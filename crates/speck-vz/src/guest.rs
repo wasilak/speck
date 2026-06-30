@@ -130,45 +130,17 @@ impl Guest {
             .buildkitd_vsock_port
             .ok_or_else(|| Error::VsockConnect("buildkitd_vsock_port not configured".into()))?;
 
-        let connector = self.vsock_connector_for_port(buildkitd_vsock_port);
-
         let sock_path = std::env::temp_dir().join(format!(
             "speck-buildkitd-{}-{}.sock",
             std::process::id(),
             buildkitd_vsock_port,
         ));
 
-        // Remove stale socket file if it exists.
-        let _ = std::fs::remove_file(&sock_path);
-
-        let listener =
-            std::os::unix::net::UnixListener::bind(&sock_path).map_err(Error::NetworkIo)?;
-
-        // Persistent proxy thread: accepts multiple clients, each gets its own vsock connection.
-        std::thread::spawn(move || {
-            loop {
-                match listener.accept() {
-                    Ok((stream, _)) => match connector() {
-                        Ok(vsock) => {
-                            std::thread::spawn(move || bridge_vsock_unix(vsock, stream));
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                error = %e,
-                                "vsock connect failed for buildkitd proxy client"
-                            );
-                        }
-                    },
-                    Err(e) => {
-                        tracing::warn!(
-                            error = %e,
-                            "buildkitd unix listener accept error; proxy exiting"
-                        );
-                        break;
-                    }
-                }
-            }
-        });
+        unix_vsock_proxy(
+            self.vsock_connector_for_port(buildkitd_vsock_port),
+            sock_path.clone(),
+            "buildkitd",
+        )?;
 
         Ok(sock_path)
     }
@@ -185,48 +157,78 @@ impl Guest {
             .containerd_vsock_port
             .ok_or_else(|| Error::VsockConnect("containerd_vsock_port not configured".into()))?;
 
-        let connector = self.vsock_connector_for_port(containerd_vsock_port);
-
         let sock_path = std::env::temp_dir().join(format!(
             "speck-containerd-{}-{}.sock",
             std::process::id(),
             containerd_vsock_port,
         ));
 
-        // Remove stale socket file if it exists (e.g., from a previous run).
-        let _ = std::fs::remove_file(&sock_path);
-
-        let listener =
-            std::os::unix::net::UnixListener::bind(&sock_path).map_err(Error::NetworkIo)?;
-
-        // Persistent proxy thread: accepts multiple clients, each gets its own vsock connection.
-        std::thread::spawn(move || {
-            loop {
-                match listener.accept() {
-                    Ok((stream, _)) => match connector() {
-                        Ok(vsock) => {
-                            std::thread::spawn(move || bridge_vsock_unix(vsock, stream));
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                error = %e,
-                                "vsock connect failed for containerd proxy client"
-                            );
-                        }
-                    },
-                    Err(e) => {
-                        tracing::warn!(
-                            error = %e,
-                            "containerd unix listener accept error; proxy exiting"
-                        );
-                        break;
-                    }
-                }
-            }
-        });
+        unix_vsock_proxy(
+            self.vsock_connector_for_port(containerd_vsock_port),
+            sock_path.clone(),
+            "containerd",
+        )?;
 
         Ok(sock_path)
     }
+
+    /// Expose guest Podman's Docker-compatible API on a host Unix socket.
+    ///
+    /// Binds exactly `sock_path` (typically `$SPECK_HOME/speck.sock`) and spawns a persistent
+    /// proxy thread that accepts multiple sequential Unix clients, forwarding each one to the
+    /// Podman vsock port inside the guest.
+    ///
+    /// Uses `self.config.podman_vsock_port` when set, falling back to the spike default `9003`.
+    ///
+    /// Returns the socket path that was bound (same as `sock_path`).
+    pub fn docker_api_unix_proxy(&self, sock_path: PathBuf) -> Result<PathBuf, Error> {
+        let podman_vsock_port = self.config.podman_vsock_port.unwrap_or(9003);
+
+        unix_vsock_proxy(
+            self.vsock_connector_for_port(podman_vsock_port),
+            sock_path.clone(),
+            "docker-api",
+        )?;
+
+        Ok(sock_path)
+    }
+}
+
+/// Bind a Unix socket at `sock_path` and spawn a persistent proxy thread.
+///
+/// For each accepted Unix client a fresh vsock connection is created via `connector`, then
+/// [`bridge_vsock_unix`] copies bytes bidirectionally. Stale socket files are removed before
+/// binding. The proxy thread runs until the listener returns an error.
+fn unix_vsock_proxy(
+    connector: impl Fn() -> Result<VzSocket, Error> + Send + 'static,
+    sock_path: PathBuf,
+    label: &'static str,
+) -> Result<(), Error> {
+    // Remove stale socket file if it exists (e.g., from a previous run).
+    let _ = std::fs::remove_file(&sock_path);
+
+    let listener =
+        std::os::unix::net::UnixListener::bind(&sock_path).map_err(Error::NetworkIo)?;
+
+    // Persistent proxy thread: accepts multiple clients, each gets its own vsock connection.
+    std::thread::spawn(move || loop {
+        match listener.accept() {
+            Ok((stream, _)) => match connector() {
+                Ok(vsock) => {
+                    std::thread::spawn(move || bridge_vsock_unix(vsock, stream));
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "vsock connect failed for {label} proxy client");
+                }
+            },
+            Err(e) => {
+                tracing::warn!(error = %e, "{label} unix listener accept error; proxy exiting");
+                break;
+            }
+        }
+    });
+
+    Ok(())
 }
 
 /// Bidirectional byte bridge between a [`VzSocket`] (vsock) and a [`UnixStream`].
