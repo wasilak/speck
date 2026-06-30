@@ -29,6 +29,12 @@ mod linux {
         let containerd_port = parse_cmdline_containerd_vsock_port("/proc/cmdline").unwrap_or(9001);
         let buildkitd_port = parse_cmdline_buildkitd_vsock_port("/proc/cmdline").unwrap_or(9002);
         let ready_port = parse_cmdline_ready_vsock_port("/proc/cmdline").unwrap_or(9000);
+        let container_backend = parse_cmdline_container_backend("/proc/cmdline");
+        let podman_port = parse_cmdline_podman_vsock_port("/proc/cmdline").unwrap_or(9003);
+        eprintln!(
+            "vminitd: backend={} podman_port={podman_port}",
+            container_backend.as_deref().unwrap_or("containerd")
+        );
 
         // Mount filesystems and disks before spawning services
         mount_early_filesystems();
@@ -145,6 +151,35 @@ mod linux {
         let content = std::fs::read_to_string(path).ok()?;
         for word in content.split_whitespace() {
             if let Some(port_str) = word.strip_prefix("ready_vsock_port=") {
+                return port_str.parse::<u32>().ok();
+            }
+        }
+        None
+    }
+
+    /// Parse `container_backend=VALUE` from the kernel command line.
+    ///
+    /// Returns `Some("podman")`, `Some("containerd")`, or `None` when the key
+    /// is absent.  Absence means "use the default (containerd) behavior".
+    fn parse_cmdline_container_backend(path: &str) -> Option<String> {
+        let content = std::fs::read_to_string(path).ok()?;
+        for word in content.split_whitespace() {
+            if let Some(val) = word.strip_prefix("container_backend=") {
+                if !val.is_empty() {
+                    return Some(val.to_string());
+                }
+            }
+        }
+        None
+    }
+
+    /// Parse `podman_vsock_port=PORT` from the kernel command line.
+    ///
+    /// The default is 9003 when the key is absent.
+    fn parse_cmdline_podman_vsock_port(path: &str) -> Option<u32> {
+        let content = std::fs::read_to_string(path).ok()?;
+        for word in content.split_whitespace() {
+            if let Some(port_str) = word.strip_prefix("podman_vsock_port=") {
                 return port_str.parse::<u32>().ok();
             }
         }
