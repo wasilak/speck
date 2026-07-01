@@ -266,6 +266,9 @@ fn bridge_vsock_unix(vsock: VzSocket, stream: std::os::unix::net::UnixStream) {
                 }
             }
         }
+        // Vsock closed (container exited). Shut down the unix socket so the
+        // unix→vsock direction unblocks from its read() and can exit too.
+        let _ = stream_write.shutdown(std::net::Shutdown::Both);
     });
 
     // unix → vsock (current thread)
@@ -287,6 +290,9 @@ fn bridge_vsock_unix(vsock: VzSocket, stream: std::os::unix::net::UnixStream) {
                 }
             }
         }
+        // Unix client disconnected. Shut down the vsock so the vsock→unix
+        // thread unblocks from its read() and can exit too.
+        unsafe { libc::shutdown(vsock_write.as_raw_fd(), libc::SHUT_RDWR) };
     }
 }
 
