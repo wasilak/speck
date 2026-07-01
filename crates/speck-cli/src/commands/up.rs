@@ -8,13 +8,170 @@ use speck_vz::config::GuestConfig;
 use crate::UpArgs;
 use crate::theme::{NEON_CYAN, RESET};
 
-/// Kill any processes that hold an exclusive lock on the given disk image paths.
+const ROOTFS_VERSION: &str = "0.2.0";
+const ROOTFS_BACKEND: &str = "moby";
+const KATA_VERSION: &str = "3.32.0";
+const KATA_KERNEL_FILE: &str = "vmlinux-6.18.35-197";
+const KATA_INITRD_FILE: &str = "kata-alpine-3.22.initrd";
+
+/// Ensure all VM assets (kernel, initrd, rootfs, data disk) are present in
+/// `speck_home`, downloading them from GitHub Releases if not.
 ///
-/// Virtualization.framework opens disk images with an exclusive lock. If a
-/// previous `spk up` process was killed without a clean shutdown the lock stays
-/// held until the OS notices the process is gone, which sometimes takes a moment.
-/// We proactively evict those holders so `guest.start()` never fails with
-/// "The storage device attachment is invalid."
+/// This makes `spk up` self-bootstrapping: first run works with no separate
+/// init step, exactly like `colima start`.
+async fn ensure_assets(speck_home: &Path) -> anyhow::Result<()> {
+    std::fs::create_dir_all(speck_home.join("kernel"))?;
+    std::fs::create_dir_all(speck_home.join("initrd"))?;
+
+    let kernel = speck_home.join("kernel/vmlinux");
+    let initrd = speck_home.join(format!("initrd/{KATA_INITRD_FILE}"));
+    let rootfs = speck_home.join("rootfs.img");
+    let data   = speck_home.join("data.img");
+
+    if !kernel.exists() || !initrd.exists() {
+        fetch_kata_assets(speck_home).await
+            .context("failed to download kernel + initrd")?;
+    }
+
+    if !rootfs.exists() {
+        fetch_rootfs(speck_home).await
+            .context("failed to download rootfs")?;
+    }
+
+    if !data.exists() {
+        create_data_disk(&data)
+            .context("failed to create data disk")?;
+    }
+
+    Ok(())
+}
+
+/// Download the Kata Containers kernel + initrd from GitHub Releases and
+/// place them under `speck_home/kernel/` and `speck_home/initrd/`.
+async fn fetch_kata_assets(speck_home: &Path) -> anyhow::Result<()> {
+    let kernel_dir = speck_home.join("kernel");
+    let initrd_dir = speck_home.join("initrd");
+    let kernel_out = kernel_dir.join(KATA_KERNEL_FILE);
+    let initrd_out = initrd_dir.join(KATA_INITRD_FILE);
+    let symlink    = kernel_dir.join("vmlinux");
+
+    println!("  Downloading Kata kernel {KATA_VERSION} (arm64)...");
+
+    let url = format!(
+        "https://github.com/kata-containers/kata-containers/releases/download\
+         /{KATA_VERSION}/kata-static-{KATA_VERSION}-arm64.tar.zst"
+    );
+
+    // curl → zstdcat → tar, extracting only the two files we need.
+    let status = tokio::process::Command::new("bash")
+        .args([
+            "-c",
+            &format!(
+                r#"curl -fsSL {url} | zstdcat -c | tar -C /tmp \
+                    --strip-components=5 -xf - \
+                    ./opt/kata/share/kata-containers/{KATA_KERNEL_FILE} \
+                    ./opt/kata/share/kata-containers/{KATA_INITRD_FILE} \
+                && mv /tmp/{KATA_KERNEL_FILE} {kernel_out} \
+                && mv /tmp/{KATA_INITRD_FILE} {initrd_out}"#,
+                url = url,
+                kernel_out = kernel_out.display(),
+                initrd_out = initrd_out.display(),
+            ),
+        ])
+        .status()
+        .await
+        .context("failed to run curl/zstdcat — is zstd installed? (brew install zstd)")?;
+
+    anyhow::ensure!(status.success(), "kernel download failed");
+
+    // Stable symlink: kernel/vmlinux → vmlinux-6.18.35-197
+    let _ = std::fs::remove_file(&symlink);
+    std::os::unix::fs::symlink(KATA_KERNEL_FILE, &symlink)?;
+
+    println!("  Kernel ready: {}", symlink.display());
+    println!("  Initrd ready: {}", initrd_out.display());
+    Ok(())
+}
+
+/// Download `speck-rootfs-{VERSION}-{BACKEND}-arm64.img.gz` from GitHub
+/// Releases, verify its SHA-256 checksum, and decompress to `rootfs.img`.
+async fn fetch_rootfs(speck_home: &Path) -> anyhow::Result<()> {
+    let dest     = speck_home.join("rootfs.img");
+    let tmp      = speck_home.join("rootfs.img.tmp");
+    let base     = format!(
+        "https://github.com/wasilak/speck/releases/download/rootfs-{ROOTFS_VERSION}"
+    );
+    let gz_name  = format!("speck-rootfs-{ROOTFS_VERSION}-{ROOTFS_BACKEND}-arm64.img.gz");
+    let sum_name = format!("speck-rootfs-{ROOTFS_VERSION}-{ROOTFS_BACKEND}-arm64.img.sha256");
+
+    println!("  Downloading rootfs {ROOTFS_VERSION} ({ROOTFS_BACKEND})...");
+
+    // Download + decompress in one pipeline.
+    let status = tokio::process::Command::new("bash")
+        .args([
+            "-c",
+            &format!(
+                "curl -fsSL --progress-bar {base}/{gz_name} | gunzip -c > {tmp}",
+                tmp = tmp.display(),
+            ),
+        ])
+        .status()
+        .await
+        .context("curl/gunzip failed")?;
+    anyhow::ensure!(status.success(), "rootfs download failed");
+
+    // Verify SHA-256.
+    let sum_bytes = tokio::process::Command::new("curl")
+        .args(["-fsSL", &format!("{base}/{sum_name}")])
+        .output()
+        .await
+        .context("failed to download checksum")?;
+    anyhow::ensure!(sum_bytes.status.success(), "checksum download failed");
+
+    let expected = std::str::from_utf8(&sum_bytes.stdout)
+        .ok()
+        .and_then(|s| s.split_whitespace().next())
+        .context("invalid checksum file")?
+        .to_string();
+
+    let actual_out = tokio::process::Command::new("shasum")
+        .args(["-a", "256", &tmp.to_string_lossy()])
+        .output()
+        .await
+        .context("shasum failed")?;
+    let actual = std::str::from_utf8(&actual_out.stdout)
+        .ok()
+        .and_then(|s| s.split_whitespace().next())
+        .context("shasum produced no output")?
+        .to_string();
+
+    anyhow::ensure!(
+        expected == actual,
+        "rootfs SHA-256 mismatch (expected {expected}, got {actual})"
+    );
+
+    std::fs::rename(&tmp, &dest)?;
+    println!("  Rootfs ready: {}", dest.display());
+    Ok(())
+}
+
+/// Create a blank 512 MiB ext4 data disk image.
+fn create_data_disk(path: &Path) -> anyhow::Result<()> {
+    let tmp = path.with_extension("img.tmp");
+    println!("  Creating data disk...");
+
+    let status = std::process::Command::new("dd")
+        .args(["if=/dev/zero", &format!("of={}", tmp.display()), "bs=1M", "count=512"])
+        .status()
+        .context("dd failed")?;
+    anyhow::ensure!(status.success(), "dd failed creating data disk");
+
+    std::fs::rename(&tmp, path)?;
+    println!("  Data disk ready: {}", path.display());
+    Ok(())
+}
+
+/// Kill any processes that hold an exclusive lock on the given disk image paths.
 fn kill_stale_vm_holders(paths: &[&std::path::Path]) {
     let my_pid = std::process::id();
     let mut killed_any = false;
@@ -30,15 +187,12 @@ fn kill_stale_vm_holders(paths: &[&std::path::Path]) {
             let Ok(s) = std::str::from_utf8(line) else { continue };
             let Ok(pid) = s.trim().parse::<u32>() else { continue };
             if pid == my_pid { continue; }
-            // SIGKILL — the process is a stale Virtualization.framework guest
-            // that is no longer responding to normal signals.
             let _ = std::process::Command::new("kill").args(["-9", &pid.to_string()]).status();
             killed_any = true;
         }
     }
 
     if killed_any {
-        // Give the kernel a moment to release the file descriptors.
         std::thread::sleep(std::time::Duration::from_millis(500));
     }
 }
@@ -46,6 +200,9 @@ fn kill_stale_vm_holders(paths: &[&std::path::Path]) {
 pub async fn run_up(args: UpArgs, speck_home: &Path) -> anyhow::Result<()> {
     std::fs::create_dir_all(speck_home)
         .with_context(|| format!("failed to create speck_home directory: {}", speck_home.display()))?;
+
+    // Auto-download kernel, initrd, rootfs, and data disk on first run.
+    ensure_assets(speck_home).await?;
 
     let kernel_path = args
         .kernel
@@ -55,8 +212,11 @@ pub async fn run_up(args: UpArgs, speck_home: &Path) -> anyhow::Result<()> {
         .initrd
         .clone()
         .or_else(|| {
-            // Custom Speck initrd with vminitd as PID 1
             let p = speck_home.join("initrd/initrd.cpio.gz");
+            if p.exists() { Some(p) } else { None }
+        })
+        .or_else(|| {
+            let p = speck_home.join(format!("initrd/{KATA_INITRD_FILE}"));
             if p.exists() { Some(p) } else { None }
         })
         .unwrap_or_default();
@@ -71,10 +231,6 @@ pub async fn run_up(args: UpArgs, speck_home: &Path) -> anyhow::Result<()> {
 
     kill_stale_vm_holders(&[&rootfs_disk_path, &data_disk_path]);
 
-    // Default identity mount roots: macOS host paths that must be visible at the
-    // same absolute path inside the guest for Docker bind mounts to work.
-    // /Users is always included; /Volumes and /private/tmp are added only when
-    // they exist on this host.
     let mut builder = GuestConfig::builder()
         .kernel_path(kernel_path)
         .initrd_path(initrd_path)
@@ -88,10 +244,8 @@ pub async fn run_up(args: UpArgs, speck_home: &Path) -> anyhow::Result<()> {
         .speck_home(speck_home)
         .network(NetworkConfig::default())
         .dns_vsock_port(53)
-        // /Users is always added — the primary macOS home directory tree.
         .add_identity_mount("/Users");
 
-    // Add /Volumes and /private/tmp only when they exist on this host.
     for optional_root in ["/Volumes", "/private/tmp"] {
         if std::path::Path::new(optional_root).exists() {
             builder = builder.add_identity_mount(optional_root);
