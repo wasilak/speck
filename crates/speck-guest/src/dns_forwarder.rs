@@ -127,14 +127,18 @@ pub fn serve(dns_vsock_port: u32) -> io::Result<()> {
 
         // UDP:53 has data — DNS query from guest app
         if fds[0].revents & libc::POLLIN != 0 {
+            // Capture client address so we can send the response back.
+            let mut client_addr: libc::sockaddr_in = unsafe { std::mem::zeroed() };
+            let mut client_addr_len: libc::socklen_t =
+                std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t;
             let n = unsafe {
                 libc::recvfrom(
                     udp_fd,
                     buf.as_mut_ptr() as *mut libc::c_void,
                     DNS_BUF_SIZE,
                     0,
-                    std::ptr::null_mut(),
-                    std::ptr::null_mut(),
+                    &mut client_addr as *mut libc::sockaddr_in as *mut libc::sockaddr,
+                    &mut client_addr_len,
                 )
             };
             if n <= 0 {
@@ -210,15 +214,15 @@ pub fn serve(dns_vsock_port: u32) -> io::Result<()> {
                 r += n as usize;
             }
 
-            // Send DNS response to UDP client
+            // Send DNS response back to the client that sent the query
             unsafe {
                 libc::sendto(
                     udp_fd,
                     buf.as_ptr() as *const libc::c_void,
                     resp_len,
                     0,
-                    std::ptr::null_mut(),
-                    0,
+                    &client_addr as *const libc::sockaddr_in as *const libc::sockaddr,
+                    client_addr_len,
                 );
             }
         }

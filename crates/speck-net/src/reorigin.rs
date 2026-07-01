@@ -34,29 +34,56 @@ impl ReoriginBridge {
                 } else {
                     let mut stream = self.bridges.remove(&handle).unwrap();
 
-                    if socket.can_recv() {
-                        let mut buf = vec![0u8; self.mtu as usize];
-                        let n = socket.recv_slice(&mut buf);
-                        if let Ok(len) = n {
-                            if len > 0 {
-                                let _ = stream.write_all(&buf[..len]);
+                    // Guest → Host: drain smoltcp recv buffer into the host TcpStream.
+                    // Loop to avoid leaving data in the buffer when the guest sends a
+                    // burst larger than MTU.
+                    let mut g2h_err = false;
+                    while socket.can_recv() {
+                        let mut buf = vec![0u8; 16384];
+                        match socket.recv_slice(&mut buf) {
+                            Ok(0) => break,
+                            Ok(len) => {
+                                if stream.write_all(&buf[..len]).is_err() {
+                                    g2h_err = true;
+                                    break;
+                                }
                             }
+                            Err(_) => break,
                         }
                     }
 
-                    let mut host_buf = [0u8; 65536];
-                    match stream.read(&mut host_buf) {
-                        Ok(0) => true,
-                        Ok(n) => {
-                            let _ = socket.send_slice(&host_buf[..n]);
+                    if g2h_err {
+                        let _ = stream.shutdown(Shutdown::Both);
+                        // socket borrow already released by the inner block; close below
+                        true
+                    } else {
+                        // Host → Guest: limit read to available smoltcp send capacity so we
+                        // never lose bytes when send_slice can't accept the full read.
+                        let send_avail =
+                            socket.send_capacity().saturating_sub(socket.send_queue());
+                        let close = if send_avail == 0 {
+                            // TX buffer full; try again next poll cycle
                             self.bridges.insert(handle, stream);
                             false
-                        }
-                        Err(e) if e.kind() == ErrorKind::WouldBlock => {
-                            self.bridges.insert(handle, stream);
-                            false
-                        }
-                        Err(_) => true,
+                        } else {
+                            let read_cap = send_avail.min(65536);
+                            let mut host_buf = vec![0u8; read_cap];
+                            match stream.read(&mut host_buf) {
+                                Ok(0) => true,
+                                Ok(n) => {
+                                    // n <= send_avail, so send_slice accepts all n bytes
+                                    let _ = socket.send_slice(&host_buf[..n]);
+                                    self.bridges.insert(handle, stream);
+                                    false
+                                }
+                                Err(e) if e.kind() == ErrorKind::WouldBlock => {
+                                    self.bridges.insert(handle, stream);
+                                    false
+                                }
+                                Err(_) => true,
+                            }
+                        };
+                        close
                     }
                 }
             };
@@ -87,9 +114,17 @@ impl ReoriginBridge {
                         if tcp_socket.state() != tcp::State::Established {
                             return None;
                         }
-                        let endpoint = tcp_socket.remote_endpoint()?;
+                        // local_endpoint is the DESTINATION the guest wanted to reach
+                        // (smoltcp updates it from Unspecified to the real dst on accept).
+                        // remote_endpoint is the guest's SOURCE — not where we connect to.
+                        let endpoint = tcp_socket.local_endpoint()?;
                         if let IpAddress::Ipv4(v4) = endpoint.addr {
-                            if v4.octets()[0] == 127 {
+                            let o = v4.octets();
+                            // Skip loopback and the virtual gateway/subnet itself
+                            if o[0] == 127 || o == [0, 0, 0, 0] {
+                                return None;
+                            }
+                            if o == [172, 16, 0, 1] || o == [172, 16, 0, 2] {
                                 return None;
                             }
                         }

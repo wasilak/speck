@@ -22,16 +22,22 @@ impl SmoltcpInterface {
         let iface_config = smoltcp::iface::Config::new(ethernet_addr.into());
         let mut iface = Interface::new(iface_config, &mut device, smoltcp::time::Instant::now());
 
-        // Set the guest IP address and prefix from NetworkConfig
-        let ip_octets = config.guest_ip.octets();
+        // Configure smoltcp as the gateway (172.16.0.1) for the guest subnet.
+        // set_any_ip(true) enables "AnyIP" / transparent proxy mode: has_ip_addr()
+        // returns true for any destination, so smoltcp responds to ARP for any IP
+        // the guest sends to (including ghcr.io, registry-1.docker.io, etc.) and
+        // accepts TCP connections for any destination IP. This is the correct
+        // smoltcp API for transparent proxying.
+        let gw_octets = config.gateway.octets();
         iface.update_ip_addrs(|addrs| {
             addrs
                 .push(IpCidr::new(
-                    IpAddress::v4(ip_octets[0], ip_octets[1], ip_octets[2], ip_octets[3]),
+                    IpAddress::v4(gw_octets[0], gw_octets[1], gw_octets[2], gw_octets[3]),
                     config.subnet_prefix,
                 ))
                 .unwrap();
         });
+        iface.set_any_ip(true);
 
         // Empty socket set — sockets are added by re-origination and DNS modules later
         let sockets = SocketSet::new(vec![]);

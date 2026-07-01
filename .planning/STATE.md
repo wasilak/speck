@@ -2,14 +2,13 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_phase: 06
 status: completed
-last_updated: "2026-06-28T18:00:00.000Z"
+last_updated: "2026-06-30T18:13:01.319Z"
 progress:
-  total_phases: 6
-  completed_phases: 6
-  total_plans: 32
-  completed_plans: 32
+  total_phases: 7
+  completed_phases: 7
+  total_plans: 37
+  completed_plans: 37
   percent: 100
 ---
 
@@ -155,6 +154,7 @@ Phase 05 (containerd + BuildKit Integration) is complete across 3 waves and 5 pl
 
 - [Phase ?]: do_wait_for_ready: VsockConnect and VsockTimeout are retriable (ECONNREFUSED expected until vminitd binds port); all other errors propagate immediately
 - [Phase ?]: Disk attachment requires both paths set together (rootfs_disk_path + data_disk_path); if either is None, no storage devices are attached
+- [Phase 06.2]: Actual decision: Podman rejected/uncertain due to API compatibility; classify next action — G1 startup failed before socket exposure; G2-G9 are blocked; WARP/VPN container-side proof is missing, so Podman is not accepted for MVP.
 
 ## Performance Metrics
 
@@ -162,3 +162,6 @@ Phase 05 (containerd + BuildKit Integration) is complete across 3 waves and 5 pl
 |-------|------|----------|-------|
 | Phase 06 P04 | 26 min | 2 tasks | 12 files |
 | Phase 06 P05 | 17min | 2 tasks | 7 files |
+| Phase 06.2 P06.2-07 | 5 min | 2 tasks | 2 files |
+| Phase 06.2 P06.2-08 | resume close-out | 2 tasks | 12 files |
+| Phase 06.2 P06.2-09 | 6 min | 2 tasks | 3 files |

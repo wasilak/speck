@@ -36,10 +36,18 @@ mod linux {
         let ready_port = parse_cmdline_ready_vsock_port("/proc/cmdline").unwrap_or(9000);
         let container_backend = parse_cmdline_container_backend("/proc/cmdline");
         let podman_port = parse_cmdline_podman_vsock_port("/proc/cmdline").unwrap_or(9003);
+        let guest_ip = parse_cmdline_guest_ip("/proc/cmdline");
+        let gateway = parse_cmdline_gateway("/proc/cmdline");
         eprintln!(
             "vminitd: backend={} podman_port={podman_port}",
             container_backend.as_deref().unwrap_or("containerd")
         );
+        if let Some(ip) = guest_ip.as_deref() {
+            eprintln!("vminitd: guest_ip={ip}");
+        }
+        if let Some(gw) = gateway.as_deref() {
+            eprintln!("vminitd: gateway={gw}");
+        }
 
         mount_disks();
 
@@ -64,6 +72,29 @@ mod linux {
                     Err(e) => eprintln!("vminitd: dns forwarder error: {e}"),
                 },
             );
+        }
+
+        // Bring up loopback first so 127.0.0.1 routes locally (kernel adds
+        // 127.0.0.0/8 to its local table only when lo is UP).
+        bring_up_loopback();
+
+        // Bring up the virtio-net interface so containers can reach external
+        // registries.  This is required even though DNS goes through the vsock
+        // proxy — image pulls and other TCP/UDP traffic need a live network.
+        if let (Some(ip_str), Some(gw_str)) = (guest_ip, gateway) {
+            bring_up_network(&ip_str, &gw_str);
+        }
+
+        // Write /etc/resolv.conf inside the chroot so Podman sends DNS queries
+        // to the guest-local forwarder (listening on UDP:53) instead of hitting
+        // an external resolver that is unreachable without a routed connection.
+        if let Err(e) = std::fs::write(
+            "/rootfs/etc/resolv.conf",
+            "nameserver 127.0.0.1\n",
+        ) {
+            eprintln!("vminitd: failed to write /rootfs/etc/resolv.conf: {e}");
+        } else {
+            eprintln!("vminitd: wrote /rootfs/etc/resolv.conf → nameserver 127.0.0.1");
         }
 
         if container_backend.as_deref() == Some("podman") {
@@ -128,6 +159,18 @@ mod linux {
                 b"[engine]\nlock_type = \"file\"\n",
             ) {
                 eprintln!("vminitd: failed to write lock config: {e}");
+            }
+            // Write a containers.conf drop-in to default to host networking.
+            // The VM's eth0 goes through speck-net's transparent proxy, so
+            // containers using host networking inherit the host macOS routing
+            // table and DNS via smoltcp — no netavark/iptables needed.
+            if let Err(e) = std::fs::write(
+                "/rootfs/etc/containers/containers.conf.d/20-speck-network.conf",
+                b"[containers]\nnetwork = \"host\"\n",
+            ) {
+                eprintln!("vminitd: failed to write network config: {e}");
+            } else {
+                eprintln!("vminitd: set default container network to host (via eth0 -> smoltcp)");
             }
 
             let podman_bin = detect_podman_bin_in_chroot();
@@ -262,6 +305,32 @@ mod linux {
         None
     }
 
+    /// Parse `speck_guest_ip=IP` from the kernel command line.
+    fn parse_cmdline_guest_ip(path: &str) -> Option<String> {
+        let content = std::fs::read_to_string(path).ok()?;
+        for word in content.split_whitespace() {
+            if let Some(val) = word.strip_prefix("speck_guest_ip=") {
+                if !val.is_empty() {
+                    return Some(val.to_string());
+                }
+            }
+        }
+        None
+    }
+
+    /// Parse `speck_gateway=IP` from the kernel command line.
+    fn parse_cmdline_gateway(path: &str) -> Option<String> {
+        let content = std::fs::read_to_string(path).ok()?;
+        for word in content.split_whitespace() {
+            if let Some(val) = word.strip_prefix("speck_gateway=") {
+                if !val.is_empty() {
+                    return Some(val.to_string());
+                }
+            }
+        }
+        None
+    }
+
     /// Parse `container_backend=VALUE` from the kernel command line.
     ///
     /// Returns `Some("podman")`, `Some("containerd")`, or `None` when the key
@@ -375,6 +444,29 @@ mod linux {
         // /rootfs/sys — bind from /sys
         let _ = std::fs::create_dir_all("/rootfs/sys");
         bind_mount("/sys", "/rootfs/sys");
+
+        // /rootfs/sys/fs/cgroup — mount cgroup2 hierarchy.
+        // A plain MS_BIND of /sys does NOT carry cgroupv2 submounts;
+        // crun sees sysfs type at /sys/fs/cgroup and rejects it with
+        // "invalid file system type". Mount cgroup2 directly on top.
+        let _ = std::fs::create_dir_all("/rootfs/sys/fs/cgroup");
+        let ret = unsafe {
+            libc::mount(
+                b"cgroup2\0".as_ptr() as *const libc::c_char,
+                b"/rootfs/sys/fs/cgroup\0".as_ptr() as *const libc::c_char,
+                b"cgroup2\0".as_ptr() as *const libc::c_char,
+                0,
+                std::ptr::null(),
+            )
+        };
+        if ret < 0 {
+            eprintln!(
+                "vminitd: mount cgroup2 at /rootfs/sys/fs/cgroup failed: {:?}",
+                io::Error::last_os_error()
+            );
+        } else {
+            eprintln!("vminitd: mounted cgroup2 at /rootfs/sys/fs/cgroup");
+        }
 
         // /rootfs/dev — bind from /dev
         let _ = std::fs::create_dir_all("/rootfs/dev");
@@ -1022,6 +1114,11 @@ mod linux {
                     "unix:///run/speck/podman.sock",
                 ]);
                 cmd.env("PODMAN_IGNORE_CGROUPSV1_WARNING", "1");
+                // Skip iptables/nftables firewall rules in netavark — the iptables
+                // binary is not present in the VM rootfs. Container networking still
+                // sets up the bridge/veth pair; NAT is not needed because speck-net
+                // transparently re-originates all TCP from the host macOS network stack.
+                cmd.env("NETAVARK_FW", "none");
 
                 // Pivot root to /rootfs before exec so podman finds its
                 // libraries, configuration and socket directory relative to
@@ -1105,5 +1202,258 @@ mod linux {
                 std::thread::sleep(std::time::Duration::from_secs(1));
             }
         });
+    }
+
+    // ---------------------------------------------------------------------------
+    // Guest networking (static IP via ioctl)
+    // ---------------------------------------------------------------------------
+
+    /// Bring up the virtio-net interface with a static IP and default route.
+    ///
+    /// Uses `ioctl` syscalls exclusively — no external tools needed.  The guest
+    /// IP and gateway are passed as strings parsed from the kernel cmdline
+    /// (`speck_guest_ip=` and `speck_gateway=`).
+    ///
+    /// Steps:
+    /// 1. Create a raw socket for ioctl.
+    /// 2. Find the virtio-net interface (try eth0).
+    /// 3. Set IFF_UP to bring the interface running.
+    /// 4. Set IP address via SIOCSIFADDR.
+    /// 5. Set netmask via SIOCSIFNETMASK (implicit /24).
+    /// 6. Add default route via SIOCADDRT.
+    ///
+    /// Non-fatal: errors are logged and execution continues.  Without a live
+    /// network, containers can only resolve DNS (via vsock proxy) but cannot
+    /// pull images from external registries.
+    /// Bring up the loopback interface so 127.0.0.1 is routed locally.
+    ///
+    /// Without this, packets destined for 127.0.0.1 fall through to the default
+    /// route (eth0) because the kernel only adds 127.0.0.0/8 to the local routing
+    /// table when `lo` is UP. DNS queries to 127.0.0.1:53 would otherwise exit
+    /// the VM and time out.
+    fn bring_up_loopback() {
+        let sock_fd = match unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM, 0) } {
+            fd if fd >= 0 => fd,
+            _ => {
+                eprintln!("vminitd: bring_up_loopback socket failed");
+                return;
+            }
+        };
+
+        let iface = b"lo\0";
+        let mut ifr: libc::ifreq = unsafe { std::mem::zeroed() };
+        for (i, &b) in iface.iter().enumerate() {
+            if i < ifr.ifr_name.len() - 1 {
+                ifr.ifr_name[i] = b;
+            }
+        }
+
+        // Get current flags
+        let ret = unsafe {
+            libc::ioctl(sock_fd, libc::SIOCGIFFLAGS as libc::c_int, &ifr as *const libc::ifreq)
+        };
+        if ret < 0 {
+            eprintln!("vminitd: lo SIOCGIFFLAGS failed: {:?}", std::io::Error::last_os_error());
+            unsafe { libc::close(sock_fd) };
+            return;
+        }
+
+        // Set IFF_UP | IFF_LOOPBACK
+        unsafe {
+            ifr.ifr_ifru.ifru_flags =
+                (ifr.ifr_ifru.ifru_flags | (libc::IFF_UP as i16) | (libc::IFF_LOOPBACK as i16))
+                    as i16;
+        }
+        let ret = unsafe {
+            libc::ioctl(sock_fd, libc::SIOCSIFFLAGS as libc::c_int, &ifr as *const libc::ifreq)
+        };
+        if ret < 0 {
+            eprintln!("vminitd: lo SIOCSIFFLAGS failed: {:?}", std::io::Error::last_os_error());
+        } else {
+            eprintln!("vminitd: loopback lo brought up");
+        }
+
+        unsafe { libc::close(sock_fd) };
+    }
+
+    fn bring_up_network(ip_str: &str, gw_str: &str) {
+        let sock_fd = match unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM, 0) } {
+            fd if fd >= 0 => fd,
+            _ => {
+                eprintln!("vminitd: bring_up_network socket failed");
+                return;
+            }
+        };
+
+        let iface = b"eth0\0";
+        let mut ifr: libc::ifreq = unsafe { std::mem::zeroed() };
+        for (i, &b) in iface.iter().enumerate() {
+            if i < ifr.ifr_name.len() - 1 {
+                ifr.ifr_name[i] = b;
+            }
+        }
+
+        // --- Step 1: Bring the interface up via SIOCGIFFLAGS / SIOCSIFFLAGS ---
+        // On aarch64-linux-musl the ioctl constants are u64 but the syscall takes
+        // c_int; cast explicitly to suppress the type mismatch error.
+        let flags_ret = unsafe {
+            libc::ioctl(
+                sock_fd,
+                libc::SIOCGIFFLAGS as libc::c_int,
+                &ifr as *const libc::ifreq,
+            )
+        };
+        if flags_ret < 0 {
+            eprintln!(
+                "vminitd: SIOCGIFFLAGS failed: {:?}",
+                io::Error::last_os_error()
+            );
+            unsafe { libc::close(sock_fd); }
+            return;
+        }
+        unsafe {
+            ifr.ifr_ifru.ifru_flags =
+                (ifr.ifr_ifru.ifru_flags | (libc::IFF_UP as i16)) as i16;
+        }
+        let up_ret = unsafe {
+            libc::ioctl(
+                sock_fd,
+                libc::SIOCSIFFLAGS as libc::c_int,
+                &ifr as *const libc::ifreq,
+            )
+        };
+        if up_ret < 0 {
+            eprintln!(
+                "vminitd: SIOCSIFFLAGS (IFF_UP) failed: {:?}",
+                io::Error::last_os_error()
+            );
+            unsafe { libc::close(sock_fd); }
+            return;
+        }
+        eprintln!("vminitd: brought up interface eth0");
+
+        // --- Step 2: Parse IP to raw bytes ---
+        let ip_bytes: [u8; 4] = match parse_ipv4(ip_str) {
+            Some(b) => b,
+            None => {
+                eprintln!("vminitd: invalid guest IP: {ip_str}");
+                unsafe { libc::close(sock_fd); }
+                return;
+            }
+        };
+        let gw_bytes: [u8; 4] = match parse_ipv4(gw_str) {
+            Some(b) => b,
+            None => {
+                eprintln!("vminitd: invalid gateway: {gw_str}");
+                unsafe { libc::close(sock_fd); }
+                return;
+            }
+        };
+
+        // --- Step 3: Set IP address via SIOCSIFADDR ---
+        ifr.ifr_ifru.ifru_addr = libc::sockaddr {
+            sa_family: libc::AF_INET as u16,
+            // sa_data layout: [sin_port(2), sin_addr(4), sin_zero(8)]
+            sa_data: [
+                0, 0,
+                ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3],
+                0, 0, 0, 0, 0, 0, 0, 0,
+            ],
+        };
+        let addr_ret = unsafe {
+            libc::ioctl(
+                sock_fd,
+                libc::SIOCSIFADDR as libc::c_int,
+                &ifr as *const libc::ifreq,
+            )
+        };
+        if addr_ret < 0 {
+            eprintln!(
+                "vminitd: SIOCSIFADDR {ip_str} failed: {:?}",
+                io::Error::last_os_error()
+            );
+            unsafe { libc::close(sock_fd); }
+            return;
+        }
+        eprintln!("vminitd: set IP {ip_str} on eth0");
+
+        // --- Step 4: Set netmask to 255.255.255.0 via SIOCSIFNETMASK ---
+        ifr.ifr_ifru.ifru_addr = libc::sockaddr {
+            sa_family: libc::AF_INET as u16,
+            // sa_data layout: [sin_port(2), sin_addr(4), sin_zero(8)]
+            sa_data: [
+                0, 0,
+                255u8, 255u8, 255u8, 0u8,
+                0, 0, 0, 0, 0, 0, 0, 0,
+            ],
+        };
+        let mask_ret = unsafe {
+            libc::ioctl(
+                sock_fd,
+                libc::SIOCSIFNETMASK as libc::c_int,
+                &ifr as *const libc::ifreq,
+            )
+        };
+        if mask_ret < 0 {
+            eprintln!(
+                "vminitd: SIOCSIFNETMASK failed: {:?}",
+                io::Error::last_os_error()
+            );
+            unsafe { libc::close(sock_fd); }
+            return;
+        }
+
+        // --- Step 5: Add default route via SIOCADDRT ---
+        let mut rt: libc::rtentry = unsafe { std::mem::zeroed() };
+        let mut gw_sa: libc::sockaddr_in = unsafe { std::mem::zeroed() };
+        gw_sa.sin_family = libc::AF_INET as u16;
+        gw_sa.sin_addr = libc::in_addr {
+            // s_addr is network-byte-order bytes in memory; from_ne_bytes copies
+            // the octets directly so [172,16,0,1] lands as-is on LE aarch64.
+            s_addr: u32::from_ne_bytes(gw_bytes),
+        };
+        rt.rt_gateway = unsafe { std::mem::transmute(gw_sa) };
+        rt.rt_dst = libc::sockaddr {
+            sa_family: libc::AF_INET as u16,
+            sa_data: [0; 14],
+        };
+        rt.rt_genmask = libc::sockaddr {
+            sa_family: libc::AF_INET as u16,
+            sa_data: [0; 14],
+        };
+        rt.rt_flags = (libc::RTF_UP | libc::RTF_GATEWAY) as u16;
+
+        let route_ret = unsafe {
+            libc::ioctl(sock_fd, libc::SIOCADDRT as libc::c_int, &rt as *const libc::rtentry)
+        };
+        if route_ret < 0 {
+            let err = io::Error::last_os_error();
+            // EEXIST means the route already exists (harmless)
+            if err.raw_os_error() != Some(libc::EEXIST) {
+                eprintln!("vminitd: SIOCADDRT default route via {gw_str} failed: {err:?}");
+            }
+        } else {
+            eprintln!("vminitd: added default route via {gw_str}");
+        }
+
+        unsafe { libc::close(sock_fd); }
+        eprintln!("vminitd: networking configured — eth0={ip_str}/24 gw={gw_str}");
+    }
+
+    /// Parse a dotted-quad IPv4 string into four bytes.
+    fn parse_ipv4(s: &str) -> Option<[u8; 4]> {
+        let parts: Vec<&str> = s.split('.').collect();
+        if parts.len() != 4 {
+            return None;
+        }
+        let mut octets = [0u8; 4];
+        for (i, p) in parts.iter().enumerate() {
+            let val: u16 = p.parse().ok()?;
+            if val > 255 {
+                return None;
+            }
+            octets[i] = val as u8;
+        }
+        Some(octets)
     }
 }

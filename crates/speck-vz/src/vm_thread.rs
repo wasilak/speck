@@ -105,6 +105,10 @@ pub(crate) enum VmCommand {
     DnsVsockFd {
         reply: mpsc::Sender<std::result::Result<RawFd, Error>>,
     },
+    ConnectDnsVsock {
+        port: u32,
+        reply: mpsc::Sender<std::result::Result<RawFd, Error>>,
+    },
     WaitForGuestReady {
         ready_vsock_port: u32,
         reply: mpsc::Sender<std::result::Result<(), Error>>,
@@ -243,6 +247,12 @@ impl VmThread {
                                 let _ = reply
                                     .send(Err(Error::Network("no dns vsock fd available".into())));
                             }
+                        }
+                        VmCommand::ConnectDnsVsock { port, reply } => {
+                            let control = Arc::clone(&control);
+                            let q = queue.clone();
+                            let result = Self::do_connect_dns_vsock(&control, &q, port);
+                            let _ = reply.send(result);
                         }
                         VmCommand::WaitForGuestReady {
                             ready_vsock_port,
@@ -556,7 +566,6 @@ impl VmThread {
             }
         }
 
-        let dns_vsock_port = config.dns_vsock_port;
         let initial_port_maps = config.port_maps.clone();
         let control_for_block = Arc::clone(control);
         let reply_for_block = Arc::clone(reply);
@@ -566,45 +575,10 @@ impl VmThread {
                     let mut ctrl = control_for_block.lock().unwrap_or_else(|e| e.into_inner());
                     ctrl.state = InternalState::Running;
                     ctrl.port_maps = initial_port_maps.clone();
+                    drop(ctrl);
                     let mut guard = reply_for_block.lock().unwrap_or_else(|e| e.into_inner());
                     if let Some(sender) = guard.take() {
                         let _ = sender.send(Ok(InternalState::Running));
-                    }
-
-                    // ── vsock DNS connection (D-07) ────────────────────────
-                    let dns_device = ctrl.socket_device.inner.clone();
-                    drop(ctrl);
-                    if let Some(dns_port) = dns_vsock_port {
-                        let control_for_dns = Arc::clone(&control_for_block);
-                        if let Some(device) = dns_device {
-                            match device.downcast::<VZVirtioSocketDevice>() {
-                                Ok(vsock) => {
-                                    let dns_block = StackBlock::new(
-                                        move |conn: *mut VZVirtioSocketConnection,
-                                              _err: *mut NSError| {
-                                        if !conn.is_null() {
-                                            let raw_fd = unsafe { (*conn).fileDescriptor() };
-                                            let dup_fd = unsafe { libc::dup(raw_fd) };
-                                            if dup_fd < 0 {
-                                                // Best-effort; log skipped.
-                                            } else {
-                                                let mut c = control_for_dns
-                                                    .lock()
-                                                    .unwrap_or_else(|e| e.into_inner());
-                                                c.dns_vsock_fd = Some(dup_fd);
-                                            }
-                                        }
-                                    },
-                                    );
-                                    unsafe {
-                                        vsock.connectToPort_completionHandler(dns_port, &dns_block);
-                                    }
-                                }
-                                Err(_) => {
-                                    // Not a VZVirtioSocketDevice — best-effort skip.
-                                }
-                            }
-                        }
                     }
                 } else {
                     let ns_error = unsafe { &*error };
@@ -720,6 +694,81 @@ impl VmThread {
             )
         };
         Ok(block_dev)
+    }
+
+    /// Connect to the guest vsock DNS port and store the fd in `ctrl.dns_vsock_fd`.
+    ///
+    /// Called AFTER `wait_for_ready` so vminitd's DNS forwarder is already listening.
+    fn do_connect_dns_vsock(
+        control: &Arc<Mutex<VmControl>>,
+        queue: &DispatchQueue,
+        port: u32,
+    ) -> Result<RawFd, Error> {
+        {
+            let ctrl = control.lock().unwrap_or_else(|e| e.into_inner());
+            if ctrl.socket_device.inner.is_none() {
+                return Err(Error::VsockConnect("VM has no vsock socket device".into()));
+            }
+        }
+
+        let (done_tx, done_rx) = std::sync::mpsc::channel::<Result<RawFd, Error>>();
+        let control_clone = Arc::clone(control);
+
+        queue.exec_sync(move || {
+            let ctrl = control_clone.lock().unwrap_or_else(|e| e.into_inner());
+            let device = ctrl.socket_device.inner.as_ref().expect("checked above");
+            let device_clone = device.clone();
+            drop(ctrl);
+
+            match device_clone.downcast::<VZVirtioSocketDevice>() {
+                Ok(vsock) => {
+                    let done_tx_for_block = done_tx.clone();
+                    let control_for_block = Arc::clone(&control_clone);
+                    let block = StackBlock::new(
+                        move |connection: *mut VZVirtioSocketConnection, error: *mut NSError| {
+                            if !connection.is_null() {
+                                let raw_fd = unsafe { (*connection).fileDescriptor() };
+                                let dup_fd = unsafe { libc::dup(raw_fd) };
+                                if dup_fd >= 0 {
+                                    let mut c = control_for_block
+                                        .lock()
+                                        .unwrap_or_else(|e| e.into_inner());
+                                    c.dns_vsock_fd = Some(dup_fd);
+                                    let _ = done_tx_for_block.send(Ok(dup_fd));
+                                } else {
+                                    let _ = done_tx_for_block.send(Err(Error::NetworkIo(
+                                        std::io::Error::last_os_error(),
+                                    )));
+                                }
+                            } else if !error.is_null() {
+                                autoreleasepool(|pool| {
+                                    let ns_error = unsafe { &*error };
+                                    let desc = ns_error.localizedDescription();
+                                    let err_str = unsafe { desc.to_str(pool).to_string() };
+                                    let _ = done_tx_for_block
+                                        .send(Err(Error::VsockConnect(err_str)));
+                                });
+                            } else {
+                                let _ = done_tx_for_block.send(Err(Error::VsockConnect(
+                                    "no connection and no error".into(),
+                                )));
+                            }
+                        },
+                    );
+                    unsafe { vsock.connectToPort_completionHandler(port, &block) };
+                }
+                Err(_) => {
+                    let _ = done_tx.send(Err(Error::VsockConnect(
+                        "socket device is not a VZVirtioSocketDevice".into(),
+                    )));
+                }
+            }
+        });
+
+        match done_rx.recv_timeout(Duration::from_secs(10)) {
+            Ok(result) => result,
+            Err(_) => Err(Error::VsockTimeout),
+        }
     }
 
     fn do_vsock_connect(
@@ -905,6 +954,15 @@ impl VmThread {
     pub fn dns_vsock_fd(&self) -> std::result::Result<RawFd, Error> {
         let (tx, rx) = mpsc::channel();
         self.send_blocking(VmCommand::DnsVsockFd { reply: tx }, rx)?
+    }
+
+    /// Initiate a vsock connection to the guest DNS forwarder on `port` and
+    /// return the raw fd. Blocks until the connection completes (max 10 s).
+    ///
+    /// Must be called AFTER `wait_for_ready` so the guest forwarder is listening.
+    pub fn connect_dns_vsock(&self, port: u32) -> std::result::Result<RawFd, Error> {
+        let (tx, rx) = mpsc::channel();
+        self.send_blocking(VmCommand::ConnectDnsVsock { port, reply: tx }, rx)?
     }
 
     /// Wait for the guest to send the READY signal on the given vsock port.

@@ -7,6 +7,7 @@ pub mod interface;
 pub mod mtu;
 pub mod port_publish;
 pub(crate) mod reorigin;
+pub(crate) mod tcp_listener;
 
 pub use dns::spawn_dns_proxy;
 pub use error::{Error, Result};
@@ -14,6 +15,7 @@ pub use mtu::{detect_host_mtu, mss_for_mtu};
 pub use port_publish::{PortMapConfig, PortPublishBridge};
 
 use std::os::unix::io::RawFd;
+use std::time::Duration;
 use tokio::sync::mpsc;
 
 /// Minimal wrapper around `RawFd` that implements `AsRawFd` for use with
@@ -93,13 +95,26 @@ impl SpeckNet {
             let mut dhcp = dhcp::DhcpServer::new(&self.config);
             dhcp.add_to_set(net.sockets_mut());
 
+            // Seed initial TCP listener sockets for transparent re-origination.
+            // Ports 443 (HTTPS) and 80 (HTTP) cover registry pulls.
+            tcp_listener::ensure_listeners(net.sockets_mut(), 443, 8);
+            tcp_listener::ensure_listeners(net.sockets_mut(), 80, 4);
+
             // Poll loop
             loop {
-                let mut guard = async_fd
-                    .readable()
-                    .await
-                    .map_err(|e| Error::Netstack(format!("readable: {e}")))?;
-                guard.clear_ready();
+                // Replenish listener slots consumed by accepted connections.
+                tcp_listener::ensure_listeners(net.sockets_mut(), 443, 8);
+                tcp_listener::ensure_listeners(net.sockets_mut(), 80, 4);
+
+                // Use a short timeout so host→guest data is forwarded promptly even
+                // when the guest is waiting (e.g., TLS handshake ServerHello).
+                match tokio::time::timeout(Duration::from_millis(5), async_fd.readable()).await {
+                    Ok(Ok(mut guard)) => guard.clear_ready(),
+                    Ok(Err(e)) => {
+                        return Err(Error::Netstack(format!("readable: {e}")));
+                    }
+                    Err(_) => {} // timeout — fall through to poll bridges
+                }
 
                 let timestamp = smoltcp::time::Instant::now();
 

@@ -8,6 +8,41 @@ use speck_vz::config::GuestConfig;
 use crate::UpArgs;
 use crate::theme::{NEON_CYAN, RESET};
 
+/// Kill any processes that hold an exclusive lock on the given disk image paths.
+///
+/// Virtualization.framework opens disk images with an exclusive lock. If a
+/// previous `spk up` process was killed without a clean shutdown the lock stays
+/// held until the OS notices the process is gone, which sometimes takes a moment.
+/// We proactively evict those holders so `guest.start()` never fails with
+/// "The storage device attachment is invalid."
+fn kill_stale_vm_holders(paths: &[&std::path::Path]) {
+    let my_pid = std::process::id();
+    let mut killed_any = false;
+
+    for path in paths {
+        let Ok(out) = std::process::Command::new("lsof")
+            .args(["-t", &path.to_string_lossy()])
+            .output()
+        else {
+            continue;
+        };
+        for line in out.stdout.split(|&b| b == b'\n') {
+            let Ok(s) = std::str::from_utf8(line) else { continue };
+            let Ok(pid) = s.trim().parse::<u32>() else { continue };
+            if pid == my_pid { continue; }
+            // SIGKILL — the process is a stale Virtualization.framework guest
+            // that is no longer responding to normal signals.
+            let _ = std::process::Command::new("kill").args(["-9", &pid.to_string()]).status();
+            killed_any = true;
+        }
+    }
+
+    if killed_any {
+        // Give the kernel a moment to release the file descriptors.
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+}
+
 pub async fn run_up(args: UpArgs, speck_home: &Path) -> anyhow::Result<()> {
     std::fs::create_dir_all(speck_home)
         .with_context(|| format!("failed to create speck_home directory: {}", speck_home.display()))?;
@@ -34,6 +69,8 @@ pub async fn run_up(args: UpArgs, speck_home: &Path) -> anyhow::Result<()> {
         .clone()
         .unwrap_or_else(|| speck_home.join("data.img"));
 
+    kill_stale_vm_holders(&[&rootfs_disk_path, &data_disk_path]);
+
     // Default identity mount roots: macOS host paths that must be visible at the
     // same absolute path inside the guest for Docker bind mounts to work.
     // /Users is always included; /Volumes and /private/tmp are added only when
@@ -50,7 +87,7 @@ pub async fn run_up(args: UpArgs, speck_home: &Path) -> anyhow::Result<()> {
         // instead of containerd and forward its Docker-compatible API socket on
         // vsock port 9003.  Remove this block to revert to containerd.
         .podman_vsock_port(9003)
-        .cmdline("console=hvc0 panic=-1 container_backend=podman podman_vsock_port=9003 ready_vsock_port=9000 containerd_vsock_port=9001 buildkitd_vsock_port=9002")
+        .cmdline("console=hvc0 panic=-1 container_backend=podman podman_vsock_port=9003 ready_vsock_port=9000 containerd_vsock_port=9001 buildkitd_vsock_port=9002 dns_vsock_port=53 speck_guest_ip=172.16.0.2 speck_gateway=172.16.0.1")
         .speck_home(speck_home)
         .network(NetworkConfig::default())
         .dns_vsock_port(53)
@@ -79,7 +116,16 @@ pub async fn run_up(args: UpArgs, speck_home: &Path) -> anyhow::Result<()> {
         tokio::sync::mpsc::channel::<speck_net::PortMapConfig>(64);
     guest.set_port_map_channel(port_map_tx)?;
     let netstack_fd = guest.netstack_fd()?;
-    let dns_vsock_fd = guest.dns_vsock_fd().ok();
+    let dns_vsock_fd = match guest.connect_dns_vsock(53) {
+        Ok(fd) => {
+            eprintln!("[spk] DNS vsock connected, fd={fd}");
+            Some(fd)
+        }
+        Err(e) => {
+            eprintln!("[spk] DNS vsock connect failed: {e}");
+            None
+        }
+    };
     let net_config = speck_net::config::NetworkConfig::default();
     let _netstack_handles = speck_net::SpeckNet::new(net_config, Some(53))
         .spawn(netstack_fd, dns_vsock_fd, vec![], Some(port_map_rx));
