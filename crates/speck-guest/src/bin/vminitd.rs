@@ -1017,7 +1017,9 @@ mod linux {
                     "--host", "unix:///run/speck/dockerd.sock",
                     "--data-root", "/var/lib/containerd",
                     "--iptables=false",
+                    "--userland-proxy=false",
                 ]);
+                cmd.env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin");
 
                 unsafe {
                     cmd.pre_exec(|| {
