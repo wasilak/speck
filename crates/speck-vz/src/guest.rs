@@ -237,25 +237,36 @@ fn unix_vsock_proxy(
 
 /// Bidirectional byte bridge between a [`VzSocket`] (vsock) and a [`UnixStream`].
 ///
-/// Spawns one thread for the vsock→unix direction and handles unix→vsock in the current thread.
-/// Errors in either direction silently end the copy loop; the fds are closed on drop.
+/// Each direction runs in its own thread. A `pipe()` is used as a cancellation
+/// signal: whichever direction finishes first writes to the pipe; the other
+/// direction's `poll()` wakes up and exits. This is necessary because macOS
+/// `AF_UNIX` sockets do not unblock a concurrent `read()` via `shutdown()`.
 fn bridge_vsock_unix(vsock: VzSocket, stream: std::os::unix::net::UnixStream) {
-    use std::io::{Read, Write};
+    use std::io::Write;
 
     // Dup the vsock fd so both directions have independent ownership.
     let dup_fd = unsafe { libc::dup(vsock.as_raw_fd()) };
     if dup_fd < 0 {
-        return; // dup failed; bridge cannot start
+        return;
     }
     let vsock_dup = unsafe { VzSocket::from_raw_fd(dup_fd) };
 
     let stream_clone = stream.try_clone().expect("clone unix stream");
 
-    // vsock → unix (in a separate thread)
+    // Cancellation pipe: first direction to finish writes a byte; the other
+    // direction's poll() wakes up and exits cleanly.
+    let mut pipe_fds = [0i32; 2];
+    if unsafe { libc::pipe(pipe_fds.as_mut_ptr()) } < 0 {
+        return;
+    }
+    let cancel_r = pipe_fds[0]; // read end: polled by unix→vsock
+    let cancel_w = pipe_fds[1]; // write end: written by vsock→unix
+
+    // vsock → unix
     std::thread::spawn(move || {
         let mut stream_write = stream_clone;
         let vsock_read = vsock;
-        let mut buf = [0u8; 4096];
+        let mut buf = [0u8; 65536];
         loop {
             match vsock_read.read(&mut buf) {
                 Ok(0) | Err(_) => break,
@@ -266,33 +277,66 @@ fn bridge_vsock_unix(vsock: VzSocket, stream: std::os::unix::net::UnixStream) {
                 }
             }
         }
-        // Vsock closed (container exited). Shut down the unix socket so the
-        // unix→vsock direction unblocks from its read() and can exit too.
-        let _ = stream_write.shutdown(std::net::Shutdown::Both);
+        // Signal EOF to the docker client.
+        let _ = stream_write.shutdown(std::net::Shutdown::Write);
+        // Wake up the unix→vsock direction so it can exit.
+        unsafe {
+            libc::write(cancel_w, b"\0".as_ptr() as *const libc::c_void, 1);
+            libc::close(cancel_w);
+        }
     });
 
-    // unix → vsock (current thread)
+    // unix → vsock: poll-based so the cancellation pipe can interrupt it.
     {
-        let mut stream_read = stream;
+        let stream_fd = stream.as_raw_fd();
         let vsock_write = vsock_dup;
-        let mut buf = [0u8; 4096];
-        loop {
-            match stream_read.read(&mut buf) {
-                Ok(0) | Err(_) => break,
-                Ok(n) => {
+        // Set O_NONBLOCK on the unix stream so read() never blocks after poll().
+        unsafe {
+            let flags = libc::fcntl(stream_fd, libc::F_GETFL, 0);
+            libc::fcntl(stream_fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
+        }
+        let mut buf = [0u8; 65536];
+        'outer: loop {
+            let mut fds = [
+                libc::pollfd { fd: stream_fd,  events: libc::POLLIN, revents: 0 },
+                libc::pollfd { fd: cancel_r,   events: libc::POLLIN, revents: 0 },
+            ];
+            let ret = unsafe { libc::poll(fds.as_mut_ptr(), 2, -1) };
+            if ret <= 0 { break; }
+
+            if fds[1].revents & libc::POLLIN != 0 {
+                break; // vsock direction signalled done
+            }
+
+            if fds[0].revents != 0 {
+                loop {
+                    let n = unsafe {
+                        libc::read(stream_fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len())
+                    };
+                    if n <= 0 {
+                        if n < 0 {
+                            let e = std::io::Error::last_os_error();
+                            if e.kind() == std::io::ErrorKind::WouldBlock { break; }
+                        }
+                        break 'outer;
+                    }
+                    let data = &buf[..n as usize];
                     let mut written = 0;
-                    while written < n {
-                        match vsock_write.write(&buf[written..n]) {
-                            Ok(0) | Err(_) => return,
+                    while written < data.len() {
+                        match vsock_write.write(&data[written..]) {
+                            Ok(0) | Err(_) => break 'outer,
                             Ok(w) => written += w,
                         }
                     }
                 }
             }
         }
-        // Unix client disconnected. Shut down the vsock so the vsock→unix
-        // thread unblocks from its read() and can exit too.
+        // Unblock the vsock→unix thread if it's still reading (e.g. client
+        // disconnected before container exited).
         unsafe { libc::shutdown(vsock_write.as_raw_fd(), libc::SHUT_RDWR) };
+        unsafe { libc::close(cancel_r) };
+        // Drop stream here to ensure our write end is fully closed.
+        drop(stream);
     }
 }
 
