@@ -10,9 +10,10 @@ on:
       backend:
         description: Runtime backend to install in rootfs
         required: true
-        default: "podman"
+        default: "moby"
         type: choice
         options:
+          - moby
           - podman
           - containerd
   push:
@@ -34,7 +35,7 @@ jobs:
           VERSION="${{ github.event.inputs.version || github.ref_name }}"
           VERSION="${VERSION#rootfs-v}"
           VERSION="${VERSION#v}"
-          BACKEND="${{ github.event.inputs.backend || 'podman' }}"
+          BACKEND="${{ github.event.inputs.backend || 'moby' }}"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "backend=${BACKEND}" >> "$GITHUB_OUTPUT"
           echo "release_tag=rootfs-${VERSION}" >> "$GITHUB_OUTPUT"
@@ -44,26 +45,70 @@ jobs:
           dd if=/dev/zero of=rootfs.img bs=1M count=512
           mkfs.ext4 -O dir_index,extent -L speck-rootfs rootfs.img
 
-      - name: Mount and populate rootfs (podman)
-        if: ${{ github.event.inputs.backend != 'containerd' }}
+      - name: Mount and populate rootfs (moby)
+        if: ${{ github.event.inputs.backend == 'moby' || github.event.inputs.backend == '' }}
         run: |
           mkdir -p /tmp/rootfs
           sudo mount -o loop rootfs.img /tmp/rootfs
 
-          # Download Alpine aarch64 minirootfs as the userspace base
+          # Alpine aarch64 minirootfs as the userspace base
           curl -fsSL \
             "https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/aarch64/alpine-minirootfs-3.20.3-aarch64.tar.gz" \
             | sudo tar -C /tmp/rootfs -xz
 
-          # DNS for apk inside chroot
           echo "nameserver 1.1.1.1" | sudo tee /tmp/rootfs/etc/resolv.conf
 
-          # Bind mounts required by apk
           sudo mount -t proc proc /tmp/rootfs/proc
           sudo mount -t sysfs sysfs /tmp/rootfs/sys
           sudo mount --bind /dev /tmp/rootfs/dev
 
-          # Enable community repo and install Podman stack
+          # Install Docker Engine (moby) from Alpine community repo.
+          # docker package brings: dockerd, docker-proxy, containerd, runc.
+          # No iptables needed — speck-net re-originates all TCP from the host.
+          sudo chroot /tmp/rootfs /bin/sh -c "
+            echo 'https://dl-cdn.alpinelinux.org/alpine/v3.20/community' >> /etc/apk/repositories
+            apk update
+            apk add --no-cache \
+              docker \
+              ca-certificates \
+              iproute2
+          "
+
+          sudo mkdir -p /tmp/rootfs/run/speck
+          sudo mkdir -p /tmp/rootfs/var/lib/containerd
+
+          sudo umount /tmp/rootfs/dev
+          sudo umount /tmp/rootfs/sys
+          sudo umount /tmp/rootfs/proc
+
+          echo "=== moby binary inventory ==="
+          for p in \
+            usr/bin/dockerd \
+            usr/bin/docker-proxy \
+            usr/bin/containerd \
+            usr/bin/runc; do
+            f="/tmp/rootfs/${p}"
+            [ -e "$f" ] && echo "FOUND: /${p}" || echo "MISSING: /${p}"
+          done
+
+          sudo umount /tmp/rootfs
+
+      - name: Mount and populate rootfs (podman)
+        if: ${{ github.event.inputs.backend == 'podman' }}
+        run: |
+          mkdir -p /tmp/rootfs
+          sudo mount -o loop rootfs.img /tmp/rootfs
+
+          curl -fsSL \
+            "https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/aarch64/alpine-minirootfs-3.20.3-aarch64.tar.gz" \
+            | sudo tar -C /tmp/rootfs -xz
+
+          echo "nameserver 1.1.1.1" | sudo tee /tmp/rootfs/etc/resolv.conf
+
+          sudo mount -t proc proc /tmp/rootfs/proc
+          sudo mount -t sysfs sysfs /tmp/rootfs/sys
+          sudo mount --bind /dev /tmp/rootfs/dev
+
           sudo chroot /tmp/rootfs /bin/sh -c "
             echo 'https://dl-cdn.alpinelinux.org/alpine/v3.20/community' >> /etc/apk/repositories
             apk update
@@ -78,12 +123,10 @@ jobs:
               iproute2
           "
 
-          # Ensure required runtime directories exist
           sudo mkdir -p /tmp/rootfs/run/speck
           sudo mkdir -p /tmp/rootfs/var/lib/containers
           sudo mkdir -p /tmp/rootfs/etc/containers
 
-          # Write /etc/containers/storage.conf (rootful overlay driver)
           sudo tee /tmp/rootfs/etc/containers/storage.conf <<'EOF'
           [storage]
           driver = "overlay"
@@ -91,31 +134,14 @@ jobs:
           graphroot = "/var/lib/containers/storage"
           EOF
 
-          # Write /etc/containers/registries.conf
           sudo tee /tmp/rootfs/etc/containers/registries.conf <<'EOF'
           [registries.search]
           registries = ["docker.io"]
           EOF
 
-          # Unmount bind mounts before image umount
           sudo umount /tmp/rootfs/dev
           sudo umount /tmp/rootfs/sys
           sudo umount /tmp/rootfs/proc
-
-          # Record Podman network stack inventory in build log
-          echo "=== Podman network stack inventory ==="
-          for p in \
-            usr/bin/podman \
-            usr/bin/conmon usr/libexec/podman/conmon \
-            usr/bin/crun usr/sbin/crun \
-            usr/bin/netavark usr/libexec/podman/netavark \
-            usr/bin/aardvark-dns usr/libexec/podman/aardvark-dns \
-            usr/bin/fuse-overlayfs \
-            etc/containers/storage.conf \
-            etc/containers/registries.conf; do
-            f="/tmp/rootfs/${p}"
-            [ -e "$f" ] && echo "FOUND: /${p}" || echo "MISSING: /${p}"
-          done
 
           sudo umount /tmp/rootfs
 
@@ -126,20 +152,16 @@ jobs:
           sudo mount -o loop rootfs.img /tmp/rootfs
           sudo mkdir -p /tmp/rootfs/{usr/bin,usr/local/bin,etc/containerd,run,tmp,proc,sys,var/lib/containerd}
 
-          # Install containerd 2.3.2 static arm64
           curl -fsSL https://github.com/containerd/containerd/releases/download/v2.3.2/containerd-static-2.3.2-linux-arm64.tar.gz \
             | sudo tar -C /tmp/rootfs/usr/local -xz
 
-          # Install runc 1.5.0
           sudo curl -fsSL https://github.com/opencontainers/runc/releases/download/v1.5.0/runc.arm64 \
             -o /tmp/rootfs/usr/bin/runc
           sudo chmod +x /tmp/rootfs/usr/bin/runc
 
-          # Install buildkitd 0.31.1
           curl -fsSL https://github.com/moby/buildkit/releases/download/v0.31.1/buildkit-v0.31.1.linux-arm64.tar.gz \
             | sudo tar -C /tmp/rootfs/usr/local -xz
 
-          # Write containerd config.toml (version 3, overlayfs snapshotter)
           sudo tee /tmp/rootfs/etc/containerd/config.toml <<'EOF'
           version = 3
           [plugins.'io.containerd.cri.v1.images']

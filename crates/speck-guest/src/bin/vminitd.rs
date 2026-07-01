@@ -107,11 +107,6 @@ mod linux {
                 eprintln!("vminitd: failed to create /rootfs/run/speck: {e}");
             }
 
-            // dockerd writes its data to /var/lib/docker — ensure the path exists.
-            if let Err(e) = std::fs::create_dir_all("/rootfs/var/lib/docker") {
-                eprintln!("vminitd: failed to create /rootfs/var/lib/docker: {e}");
-            }
-
             let dockerd_bin = detect_dockerd_bin_in_chroot();
             eprintln!("vminitd: using dockerd at chroot-relative path {dockerd_bin}");
             spawn_dockerd_with_restart(dockerd_bin);
@@ -1020,7 +1015,7 @@ mod linux {
                 let mut cmd = std::process::Command::new(dockerd_bin_in_chroot);
                 cmd.args([
                     "--host", "unix:///run/speck/dockerd.sock",
-                    "--data-root", "/var/lib/docker",
+                    "--data-root", "/var/lib/containerd",
                     "--iptables=false",
                 ]);
 
