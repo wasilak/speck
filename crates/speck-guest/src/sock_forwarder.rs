@@ -97,23 +97,20 @@ pub fn serve(vsock_port: u32, unix_path: &'static str) -> io::Result<()> {
         // Thread A: vsock → unix
         std::thread::spawn(move || {
             proxy_copy(vsock_a, unix_a);
-            unsafe {
-                libc::close(vsock_a);
-            }
-            unsafe {
-                libc::close(unix_a);
-            }
+            // Half-close: signal dockerd that no more data is coming from the host.
+            unsafe { libc::shutdown(unix_a, libc::SHUT_WR) };
+            unsafe { libc::close(vsock_a) };
+            unsafe { libc::close(unix_a) };
         });
 
         // Thread B: unix → vsock
         std::thread::spawn(move || {
             proxy_copy(unix_b, vsock_b);
-            unsafe {
-                libc::close(unix_b);
-            }
-            unsafe {
-                libc::close(vsock_b);
-            }
+            // Half-close: send FIN to host so host v→u thread unblocks and sees EOF.
+            // shutdown() on a dup'd fd still affects the underlying socket on Linux.
+            unsafe { libc::shutdown(vsock_b, libc::SHUT_WR) };
+            unsafe { libc::close(unix_b) };
+            unsafe { libc::close(vsock_b) };
         });
     }
 }
