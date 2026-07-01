@@ -103,12 +103,11 @@ pub struct GuestConfig {
     /// containerd and BuildKit are fully operational.  Recommended: 9000.
     pub ready_vsock_port: Option<u32>,
 
-    /// Vsock port for the Podman Docker-compatible API forwarder inside the guest.
+    /// Vsock port for the Docker Engine (moby) API forwarder inside the guest.
     ///
-    /// When the Podman backend is active (`container_backend=podman` in the
-    /// kernel cmdline), vminitd forwards Podman's Unix socket to this vsock
-    /// port.  Recommended: 9003.
-    pub podman_vsock_port: Option<u32>,
+    /// vminitd forwards dockerd's Unix socket to this vsock port.
+    /// Recommended: 9003.
+    pub docker_vsock_port: Option<u32>,
 
     /// Published TCP port maps (`-p host:container`).
     ///
@@ -154,7 +153,7 @@ impl Default for GuestConfig {
             containerd_vsock_port: None,
             buildkitd_vsock_port: None,
             ready_vsock_port: None,
-            podman_vsock_port: None,
+            docker_vsock_port: None,
             port_maps: Vec::new(),
             volume_mounts: Vec::new(),
             speck_home: default_speck_home(),
@@ -273,7 +272,7 @@ pub struct GuestConfigBuilder {
     containerd_vsock_port: Option<u32>,
     buildkitd_vsock_port: Option<u32>,
     ready_vsock_port: Option<u32>,
-    podman_vsock_port: Option<u32>,
+    docker_vsock_port: Option<u32>,
     port_maps: Vec<PortMapConfig>,
     volume_mounts: Vec<VolumeMountConfig>,
     speck_home: PathBuf,
@@ -297,7 +296,7 @@ impl Default for GuestConfigBuilder {
             containerd_vsock_port: None,
             buildkitd_vsock_port: None,
             ready_vsock_port: None,
-            podman_vsock_port: None,
+            docker_vsock_port: None,
             port_maps: Vec::new(),
             volume_mounts: Vec::new(),
             speck_home: default_speck_home(),
@@ -405,11 +404,11 @@ impl GuestConfigBuilder {
         self
     }
 
-    /// Set the vsock port for the Podman Docker-compatible API forwarder.
+    /// Set the vsock port for the Docker Engine (moby) API forwarder.
     ///
     /// Recommended: 9003.
-    pub fn podman_vsock_port(mut self, port: u32) -> Self {
-        self.podman_vsock_port = Some(port);
+    pub fn docker_vsock_port(mut self, port: u32) -> Self {
+        self.docker_vsock_port = Some(port);
         self
     }
 
@@ -463,7 +462,7 @@ impl GuestConfigBuilder {
             containerd_vsock_port: self.containerd_vsock_port,
             buildkitd_vsock_port: self.buildkitd_vsock_port,
             ready_vsock_port: self.ready_vsock_port,
-            podman_vsock_port: self.podman_vsock_port,
+            docker_vsock_port: self.docker_vsock_port,
             port_maps: self.port_maps,
             volume_mounts: self.volume_mounts,
             speck_home: self.speck_home,

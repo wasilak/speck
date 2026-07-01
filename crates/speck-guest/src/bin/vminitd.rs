@@ -35,11 +35,11 @@ mod linux {
         let buildkitd_port = parse_cmdline_buildkitd_vsock_port("/proc/cmdline").unwrap_or(9002);
         let ready_port = parse_cmdline_ready_vsock_port("/proc/cmdline").unwrap_or(9000);
         let container_backend = parse_cmdline_container_backend("/proc/cmdline");
-        let podman_port = parse_cmdline_podman_vsock_port("/proc/cmdline").unwrap_or(9003);
+        let docker_port = parse_cmdline_docker_vsock_port("/proc/cmdline").unwrap_or(9003);
         let guest_ip = parse_cmdline_guest_ip("/proc/cmdline");
         let gateway = parse_cmdline_gateway("/proc/cmdline");
         eprintln!(
-            "vminitd: backend={} podman_port={podman_port}",
+            "vminitd: backend={} docker_port={docker_port}",
             container_backend.as_deref().unwrap_or("containerd")
         );
         if let Some(ip) = guest_ip.as_deref() {
@@ -85,7 +85,7 @@ mod linux {
             bring_up_network(&ip_str, &gw_str);
         }
 
-        // Write /etc/resolv.conf inside the chroot so Podman sends DNS queries
+        // Write /etc/resolv.conf inside the chroot so dockerd sends DNS queries
         // to the guest-local forwarder (listening on UDP:53) instead of hitting
         // an external resolver that is unreachable without a routed connection.
         if let Err(e) = std::fs::write(
@@ -97,109 +97,40 @@ mod linux {
             eprintln!("vminitd: wrote /rootfs/etc/resolv.conf → nameserver 127.0.0.1");
         }
 
-        if container_backend.as_deref() == Some("podman") {
-            // ── Podman backend ────────────────────────────────────────────────
-            // Mount proc/sys/dev/run into /rootfs so Podman can see them from
-            // inside the chroot.
+        if container_backend.as_deref() == Some("dockerd") {
+            // ── Docker Engine (moby) backend ──────────────────────────────────
+            // Mount proc/sys/dev/run into /rootfs so dockerd can see them.
             mount_rootfs_runtime_filesystems();
 
-            // Create the socket directory inside the chroot (maps to
-            // /rootfs/run/speck/podman.sock from vminitd's namespace).
+            // Create the socket directory inside the chroot.
             if let Err(e) = std::fs::create_dir_all("/rootfs/run/speck") {
                 eprintln!("vminitd: failed to create /rootfs/run/speck: {e}");
             }
 
-            // Podman v5 requires /libpod_lock for its shared memory lock manager.
-            // The kata-alpine rootfs doesn't include this directory, so we create
-            // it here before starting the service.
-            if let Err(e) = std::fs::create_dir_all("/rootfs/libpod_lock") {
-                eprintln!("vminitd: failed to create /rootfs/libpod_lock: {e}");
+            // dockerd writes its data to /var/lib/docker — ensure the path exists.
+            if let Err(e) = std::fs::create_dir_all("/rootfs/var/lib/docker") {
+                eprintln!("vminitd: failed to create /rootfs/var/lib/docker: {e}");
             }
 
-            // Diagnose the lock directory
-            match std::fs::metadata("/rootfs/libpod_lock") {
-                Ok(m) => {
-                    use std::os::unix::fs::PermissionsExt;
-                    eprintln!(
-                        "vminitd: /rootfs/libpod_lock exists: type={:?} mode={:o}",
-                        m.file_type(),
-                        m.permissions().mode()
-                    );
-                }
-                Err(e) => {
-                    eprintln!("vminitd: /rootfs/libpod_lock stat failed: {e}");
-                }
-            }
+            let dockerd_bin = detect_dockerd_bin_in_chroot();
+            eprintln!("vminitd: using dockerd at chroot-relative path {dockerd_bin}");
+            spawn_dockerd_with_restart(dockerd_bin);
 
-            // Mount /dev/shm inside the chroot so Podman's shm_open() works
-            let _ = std::fs::create_dir_all("/rootfs/dev/shm");
-            let ret = unsafe {
-                libc::mount(
-                    b"tmpfs\0".as_ptr() as *const libc::c_char,
-                    b"/rootfs/dev/shm\0".as_ptr() as *const libc::c_char,
-                    b"tmpfs\0".as_ptr() as *const libc::c_char,
-                    0,
-                    std::ptr::null(),
-                )
-            };
-            if ret < 0 {
-                eprintln!(
-                    "vminitd: mount tmpfs at /rootfs/dev/shm failed: {:?}",
-                    io::Error::last_os_error()
-                );
-            }
-
-            // Write a containers.conf drop-in to use file locking instead of
-            // shared-memory locks, which may not work in the chroot environment.
-            if let Err(e) = std::fs::create_dir_all("/rootfs/etc/containers/containers.conf.d") {
-                eprintln!("vminitd: failed to create containers.conf.d: {e}");
-            }
-            if let Err(e) = std::fs::write(
-                "/rootfs/etc/containers/containers.conf.d/10-speck-locks.conf",
-                b"[engine]\nlock_type = \"file\"\n",
-            ) {
-                eprintln!("vminitd: failed to write lock config: {e}");
-            }
-            // Write a containers.conf drop-in to default to host networking.
-            // The VM's eth0 goes through speck-net's transparent proxy, so
-            // containers using host networking inherit the host macOS routing
-            // table and DNS via smoltcp — no netavark/iptables needed.
-            if let Err(e) = std::fs::write(
-                "/rootfs/etc/containers/containers.conf.d/20-speck-network.conf",
-                b"[containers]\nnetwork = \"host\"\n",
-            ) {
-                eprintln!("vminitd: failed to write network config: {e}");
-            } else {
-                eprintln!("vminitd: set default container network to host (via eth0 -> smoltcp)");
-            }
-
-            let podman_bin = detect_podman_bin_in_chroot();
-            eprintln!("vminitd: using podman at chroot-relative path {podman_bin}");
-            spawn_podman_service_with_restart(podman_bin);
-
-            // Block until Podman's Unix socket accepts connections before
-            // signalling READY — the host must not attempt to proxy before
-            // Podman is up.
-            if !wait_for_podman_socket(150) {
-                eprintln!("vminitd: podman socket did not become ready within timeout");
+            if !wait_for_dockerd_socket(150) {
+                eprintln!("vminitd: dockerd socket did not become ready within timeout");
                 std::process::exit(1);
             }
-            eprintln!("vminitd: podman socket ready");
+            eprintln!("vminitd: dockerd socket ready");
 
-            // Signal READY to the host.
             send_ready_signal(ready_port);
 
-            // Forward Podman's Unix socket over vsock port 9003.
-            // The socket path used here is from vminitd's namespace (outside
-            // the chroot). /rootfs/run/speck/podman.sock is the same inode as
-            // /run/speck/podman.sock inside the chroot because /rootfs/run is
-            // the shared tmpfs.
+            // Forward dockerd's Unix socket over vsock port 9003.
             std::thread::spawn(move || {
                 if let Err(e) = speck_guest::sock_forwarder::serve(
-                    podman_port,
-                    "/rootfs/run/speck/podman.sock",
+                    docker_port,
+                    "/rootfs/run/speck/dockerd.sock",
                 ) {
-                    eprintln!("vminitd: podman forwarder error: {e}");
+                    eprintln!("vminitd: dockerd forwarder error: {e}");
                 }
             });
         } else {
@@ -350,10 +281,10 @@ mod linux {
     /// Parse `podman_vsock_port=PORT` from the kernel command line.
     ///
     /// The default is 9003 when the key is absent.
-    fn parse_cmdline_podman_vsock_port(path: &str) -> Option<u32> {
+    fn parse_cmdline_docker_vsock_port(path: &str) -> Option<u32> {
         let content = std::fs::read_to_string(path).ok()?;
         for word in content.split_whitespace() {
-            if let Some(port_str) = word.strip_prefix("podman_vsock_port=") {
+            if let Some(port_str) = word.strip_prefix("docker_vsock_port=") {
                 return port_str.parse::<u32>().ok();
             }
         }
@@ -661,10 +592,10 @@ mod linux {
     ///
     /// Returns `true` if the socket became reachable within `max_attempts`
     /// (200 ms interval). Returns `false` if all attempts are exhausted.
-    fn wait_for_podman_socket(max_attempts: u32) -> bool {
+    fn wait_for_dockerd_socket(max_attempts: u32) -> bool {
         for attempt in 0..max_attempts {
-            if unix_connect_once("/rootfs/run/speck/podman.sock") {
-                eprintln!("vminitd: podman socket ready after {attempt} attempts");
+            if unix_connect_once("/rootfs/run/speck/dockerd.sock") {
+                eprintln!("vminitd: dockerd socket ready after {attempt} attempts");
                 return true;
             }
             std::thread::sleep(std::time::Duration::from_millis(200));
@@ -1069,98 +1000,50 @@ mod linux {
     /// to `/rootfs/usr/local/bin/podman` (manual installs).  Returns the path
     /// without the `/rootfs` prefix because the caller passes it to a process
     /// that already has `/rootfs` as its root.
-    fn detect_podman_bin_in_chroot() -> &'static str {
-        if std::path::Path::new("/rootfs/usr/bin/podman").exists() {
-            "/usr/bin/podman"
+    fn detect_dockerd_bin_in_chroot() -> &'static str {
+        if std::path::Path::new("/rootfs/usr/bin/dockerd").exists() {
+            "/usr/bin/dockerd"
         } else {
-            "/usr/local/bin/podman"
+            "/usr/local/bin/dockerd"
         }
     }
 
-    /// Spawn the Podman Docker-compatible API service inside a chroot rooted at
-    /// `/rootfs`, with automatic restart on crash.
+    /// Spawn dockerd inside a chroot rooted at `/rootfs`, with automatic restart.
     ///
-    /// Uses `Command::pre_exec` + `libc::chroot` to pivot root before exec,
-    /// avoiding a dependency on a `chroot(1)` binary in the initrd.
-    ///
-    /// Equivalent shell command (for reference):
-    ///   chroot /rootfs <podman_bin> system service --time=0 unix:///run/speck/podman.sock
-    ///
-    /// The Podman socket path `/run/speck/podman.sock` is relative to the
-    /// chroot root and maps to `/rootfs/run/speck/podman.sock` in vminitd's
-    /// namespace.  Callers must create `/rootfs/run/speck` before calling this.
-    ///
-    /// Network backend diagnostic: logs the expected network config path so
-    /// VPN/WARP DNS troubleshooting can verify Podman reads the right file.
-    fn spawn_podman_service_with_restart(podman_bin_in_chroot: &'static str) {
-        // Diagnostic: log network backend so operators can verify DNS/routing
-        // behaviour under VPN and WARP before connecting containers.
-        eprintln!(
-            "vminitd: podman network config expected at /rootfs/etc/containers/containers.conf"
-        );
-        eprintln!(
-            "vminitd: podman DNS behaviour governed by host resolver via speck-net; \
-             netavark/pasta backend will be ignored at the VM level"
-        );
-
+    /// Equivalent shell command:
+    ///   chroot /rootfs <dockerd_bin> --host unix:///run/speck/dockerd.sock \
+    ///       --data-root /var/lib/docker
+    fn spawn_dockerd_with_restart(dockerd_bin_in_chroot: &'static str) {
         std::thread::spawn(move || {
             use std::os::unix::process::CommandExt as _;
             loop {
-                let mut cmd = std::process::Command::new(podman_bin_in_chroot);
+                let mut cmd = std::process::Command::new(dockerd_bin_in_chroot);
                 cmd.args([
-                    "system",
-                    "service",
-                    "--time=0",
-                    "unix:///run/speck/podman.sock",
+                    "--host", "unix:///run/speck/dockerd.sock",
+                    "--data-root", "/var/lib/docker",
+                    "--iptables=false",
                 ]);
-                cmd.env("PODMAN_IGNORE_CGROUPSV1_WARNING", "1");
-                // Skip iptables/nftables firewall rules in netavark — the iptables
-                // binary is not present in the VM rootfs. Container networking still
-                // sets up the bridge/veth pair; NAT is not needed because speck-net
-                // transparently re-originates all TCP from the host macOS network stack.
-                cmd.env("NETAVARK_FW", "none");
 
-                // Pivot root to /rootfs before exec so podman finds its
-                // libraries, configuration and socket directory relative to
-                // the real rootfs, not the initrd.
-                //
-                // SAFETY: pre_exec runs in the forked child after fork() but
-                // before exec(). No threads are running at that point.
-                // chroot + chdir are async-signal-safe.
                 unsafe {
                     cmd.pre_exec(|| {
-                        let ret =
-                            libc::chroot(b"/rootfs\0".as_ptr() as *const libc::c_char);
-                        if ret < 0 {
-                            return Err(io::Error::last_os_error());
-                        }
+                        let ret = libc::chroot(b"/rootfs\0".as_ptr() as *const libc::c_char);
+                        if ret < 0 { return Err(io::Error::last_os_error()); }
                         let ret = libc::chdir(b"/\0".as_ptr() as *const libc::c_char);
-                        if ret < 0 {
-                            return Err(io::Error::last_os_error());
-                        }
+                        if ret < 0 { return Err(io::Error::last_os_error()); }
                         Ok(())
                     });
                 }
 
                 match cmd.spawn() {
                     Ok(mut child) => {
-                        eprintln!("vminitd: started podman (pid {})", child.id());
+                        eprintln!("vminitd: started dockerd (pid {})", child.id());
                         match child.wait() {
-                            Ok(status) => {
-                                eprintln!(
-                                    "vminitd: podman exited with status {status} — restarting"
-                                );
-                            }
-                            Err(e) => {
-                                eprintln!("vminitd: podman wait error: {e} — restarting");
-                            }
+                            Ok(status) => eprintln!("vminitd: dockerd exited {status} — restarting"),
+                            Err(e) => eprintln!("vminitd: dockerd wait error: {e} — restarting"),
                         }
                     }
                     Err(e) => {
-                        eprintln!(
-                            "vminitd: failed to spawn podman \
-                             (chroot /rootfs {podman_bin_in_chroot} system service): {e} — retrying"
-                        );
+                        eprintln!("vminitd: failed to spawn dockerd: {e} — retrying");
                     }
                 }
                 std::thread::sleep(std::time::Duration::from_secs(1));

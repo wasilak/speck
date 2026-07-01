@@ -83,11 +83,8 @@ pub async fn run_up(args: UpArgs, speck_home: &Path) -> anyhow::Result<()> {
         .containerd_vsock_port(9001)
         .buildkitd_vsock_port(9002)
         .ready_vsock_port(9000)
-        // Podman backend spike (phase 06.2): instruct vminitd to start Podman
-        // instead of containerd and forward its Docker-compatible API socket on
-        // vsock port 9003.  Remove this block to revert to containerd.
-        .podman_vsock_port(9003)
-        .cmdline("console=hvc0 panic=-1 container_backend=podman podman_vsock_port=9003 ready_vsock_port=9000 containerd_vsock_port=9001 buildkitd_vsock_port=9002 dns_vsock_port=53 speck_guest_ip=172.16.0.2 speck_gateway=172.16.0.1")
+        .docker_vsock_port(9003)
+        .cmdline("console=hvc0 panic=-1 container_backend=dockerd docker_vsock_port=9003 ready_vsock_port=9000 dns_vsock_port=53 speck_guest_ip=172.16.0.2 speck_gateway=172.16.0.1")
         .speck_home(speck_home)
         .network(NetworkConfig::default())
         .dns_vsock_port(53)
@@ -132,8 +129,6 @@ pub async fn run_up(args: UpArgs, speck_home: &Path) -> anyhow::Result<()> {
 
     spinner.set_message("Starting Docker API proxy...");
     let sock_path = speck_home.join("speck.sock");
-    // Podman backend spike (phase 06.2): bypass speck-dockerd; proxy Unix socket traffic
-    // directly to guest Podman over vsock.  speck-dockerd is retained for comparison.
     let _docker_proxy_path = guest.docker_api_unix_proxy(sock_path.clone())?;
 
     spinner.finish_with_message(format!("{NEON_CYAN}Speck is running{RESET}"));
