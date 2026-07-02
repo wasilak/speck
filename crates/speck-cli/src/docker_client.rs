@@ -161,4 +161,25 @@ mod tests {
             "DockerClient must not build a TCP HTTP client"
         );
     }
+
+    #[test]
+    fn docker_client_routes_raw_and_json_paths_through_shared_unix_transport() {
+        assert!(
+            !SOURCE.contains(concat!("let _ = &self", ".sock_path")),
+            "DockerClient must not keep unused socket-path markers"
+        );
+        assert!(
+            SOURCE.contains("async fn request("),
+            "DockerClient should centralize request execution through one Unix-backed helper"
+        );
+
+        let raw_body_path = SOURCE
+            .split("pub async fn post_body_raw")
+            .nth(1)
+            .expect("post_body_raw should exist");
+        assert!(
+            raw_body_path.contains(concat!("self", ".request(")),
+            "post_body_raw must use the same shared Unix request helper as JSON methods"
+        );
+    }
 }
