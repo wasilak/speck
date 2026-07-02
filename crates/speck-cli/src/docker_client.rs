@@ -58,10 +58,20 @@ impl DockerClient {
         Client::builder(TokioExecutor::new()).build(UnixConnector::new(self.sock_path.clone()))
     }
 
+    async fn request(
+        &self,
+        req: hyper::Request<Full<Bytes>>,
+    ) -> anyhow::Result<hyper::Response<Incoming>> {
+        Ok(self.http_client().request(req).await?)
+    }
+
     pub async fn get(&self, path: &str) -> anyhow::Result<serde_json::Value> {
         let uri: hyper::Uri = format!("http://localhost{path}").parse()?;
-        let _ = &self.sock_path;
-        let resp = self.http_client().get(uri).await?;
+        let req = hyper::Request::builder()
+            .method("GET")
+            .uri(&uri)
+            .body(Full::new(Bytes::new()))?;
+        let resp = self.request(req).await?;
         let body = read_body(resp.into_body()).await?;
         Ok(serde_json::from_slice(&body)?)
     }
@@ -73,13 +83,12 @@ impl DockerClient {
         content_type: &str,
     ) -> anyhow::Result<serde_json::Value> {
         let uri: hyper::Uri = format!("http://localhost{path}").parse()?;
-        let _ = &self.sock_path;
         let req = hyper::Request::builder()
             .method("POST")
             .uri(&uri)
             .header("Content-Type", content_type)
             .body(Full::new(body.into()))?;
-        let resp = self.http_client().request(req).await?;
+        let resp = self.request(req).await?;
         let body = read_body(resp.into_body()).await?;
         Ok(serde_json::from_slice(&body)?)
     }
@@ -95,36 +104,33 @@ impl DockerClient {
 
     pub async fn post_empty(&self, path: &str) -> anyhow::Result<serde_json::Value> {
         let uri: hyper::Uri = format!("http://localhost{path}").parse()?;
-        let _ = &self.sock_path;
         let req = hyper::Request::builder()
             .method("POST")
             .uri(&uri)
             .body(Full::new(Bytes::new()))?;
-        let resp = self.http_client().request(req).await?;
+        let resp = self.request(req).await?;
         let body = read_body(resp.into_body()).await?;
         Ok(serde_json::from_slice(&body)?)
     }
 
     pub async fn delete(&self, path: &str) -> anyhow::Result<serde_json::Value> {
         let uri: hyper::Uri = format!("http://localhost{path}").parse()?;
-        let _ = &self.sock_path;
         let req = hyper::Request::builder()
             .method("DELETE")
             .uri(&uri)
             .body(Full::new(Bytes::new()))?;
-        let resp = self.http_client().request(req).await?;
+        let resp = self.request(req).await?;
         let body = read_body(resp.into_body()).await?;
         Ok(serde_json::from_slice(&body)?)
     }
 
     pub async fn post_body_raw(&self, path: &str, body: Full<Bytes>) -> anyhow::Result<Vec<u8>> {
         let uri: hyper::Uri = format!("http://localhost{path}").parse()?;
-        let _ = &self.sock_path;
         let req = hyper::Request::builder()
             .method("POST")
             .uri(&uri)
             .body(body)?;
-        let resp = self.http_client().request(req).await?;
+        let resp = self.request(req).await?;
         read_body(resp.into_body()).await
     }
 }
