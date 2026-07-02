@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use axum::body::Bytes;
 use axum::Json;
+use axum::body::Bytes;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
@@ -76,12 +76,7 @@ pub async fn build(
         "context:local".into(),
         build_context.staged_tar_path().display().to_string(),
     );
-    if build_context.has_copy_or_add_source(
-        query
-            .dockerfile
-            .as_deref()
-            .unwrap_or("Dockerfile"),
-    ) {
+    if build_context.has_copy_or_add_source(query.dockerfile.as_deref().unwrap_or("Dockerfile")) {
         frontend_attrs.insert("speck.context.has-copy-add".into(), "true".into());
     }
 
@@ -185,7 +180,11 @@ impl BuildContext {
     }
 
     fn has_copy_or_add_source(&self, dockerfile_path: &str) -> bool {
-        let Some(dockerfile) = self.entries.iter().find(|entry| entry.path == dockerfile_path) else {
+        let Some(dockerfile) = self
+            .entries
+            .iter()
+            .find(|entry| entry.path == dockerfile_path)
+        else {
             return false;
         };
         let Ok(text) = std::str::from_utf8(&dockerfile.data) else {
@@ -250,14 +249,21 @@ fn parse_tar_path(header: &[u8]) -> Result<String, String> {
 
 fn parse_tar_size(header: &[u8]) -> Result<usize, String> {
     let raw = &header[124..136];
-    let end = raw.iter().position(|b| *b == 0 || *b == b' ').unwrap_or(raw.len());
+    let end = raw
+        .iter()
+        .position(|b| *b == 0 || *b == b' ')
+        .unwrap_or(raw.len());
     let text = std::str::from_utf8(&raw[..end]).map_err(|_| "invalid tar size".to_string())?;
     usize::from_str_radix(text.trim(), 8).map_err(|_| "invalid tar size".to_string())
 }
 
 fn validate_tar_path(path: &str) -> Result<(), String> {
     let path = Path::new(path);
-    if path.is_absolute() || path.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+    if path.is_absolute()
+        || path
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
         return Err("build context tar contains unsafe path".into());
     }
     Ok(())
@@ -271,7 +277,8 @@ mod tests {
     fn build_context_rejects_inputs_over_explicit_limit() {
         let too_large = vec![0_u8; MAX_BUILD_CONTEXT_BYTES + 1];
 
-        let err = BuildContext::from_bytes(too_large.into()).expect_err("oversized context rejected");
+        let err =
+            BuildContext::from_bytes(too_large.into()).expect_err("oversized context rejected");
 
         assert!(err.contains("build context exceeds"));
     }
@@ -279,7 +286,10 @@ mod tests {
     #[test]
     fn build_context_accepts_tar_with_copy_source() {
         let tar = test_tar(&[
-            ("Dockerfile", b"FROM scratch\nCOPY hello.txt /hello.txt\n".as_slice()),
+            (
+                "Dockerfile",
+                b"FROM scratch\nCOPY hello.txt /hello.txt\n".as_slice(),
+            ),
             ("hello.txt", b"hello from context\n".as_slice()),
         ]);
 

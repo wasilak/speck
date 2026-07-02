@@ -87,7 +87,10 @@ impl BuildkitClient {
     ) -> proto::SolveRequest {
         let mut frontend_inputs = std::collections::HashMap::new();
         frontend_inputs.insert(context.context_name.clone(), proto::Definition::default());
-        frontend_inputs.insert(context.dockerfile_name.clone(), proto::Definition::default());
+        frontend_inputs.insert(
+            context.dockerfile_name.clone(),
+            proto::Definition::default(),
+        );
 
         proto::SolveRequest {
             r#ref: ref_id,
