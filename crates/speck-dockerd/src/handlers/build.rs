@@ -1,5 +1,8 @@
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
+use axum::body::Bytes;
 use axum::Json;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
@@ -8,6 +11,10 @@ use serde::Deserialize;
 use tracing::Instrument;
 
 use crate::state::AppState;
+
+pub const MAX_BUILD_CONTEXT_BYTES: usize = 256 * 1024 * 1024;
+
+static BUILD_CONTEXT_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -34,7 +41,18 @@ pub struct BuildQuery {
 pub async fn build(
     State(state): State<AppState>,
     Query(query): Query<BuildQuery>,
+    body: Bytes,
 ) -> impl IntoResponse {
+    let build_context = match BuildContext::from_bytes(body) {
+        Ok(context) => context,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"message": e})),
+            );
+        }
+    };
+
     let buildkit = match state.buildkit_client().await {
         Ok(c) => c,
         Err(e) => {
@@ -52,6 +70,42 @@ pub async fn build(
         "dockerfile.v0"
     };
 
+    let mut frontend_attrs = frontend_attrs_from_query(&query);
+    frontend_attrs.insert(
+        "context:local".into(),
+        build_context.staged_tar_path().display().to_string(),
+    );
+    if build_context.has_copy_or_add_source(
+        query
+            .dockerfile
+            .as_deref()
+            .unwrap_or("Dockerfile"),
+    ) {
+        frontend_attrs.insert("speck.context.has-copy-add".into(), "true".into());
+    }
+
+    let req = crate::buildkit::proto::SolveRequest {
+        r#ref: tag.clone(),
+        frontend: frontend.into(),
+        frontend_attrs,
+        cache: None,
+        exports: Vec::new(),
+    };
+
+    let span = tracing::info_span!("buildkit_solve", ref_ = %tag);
+    match buildkit.solve(req).instrument(span).await {
+        Ok(_) => {
+            let body = serde_json::json!({"stream": format!("Build complete for {tag}\n")});
+            (StatusCode::OK, Json(body))
+        }
+        Err(e) => {
+            let body = serde_json::json!({"message": format!("Build failed: {e}")});
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(body))
+        }
+    }
+}
+
+fn frontend_attrs_from_query(query: &BuildQuery) -> HashMap<String, String> {
     let mut frontend_attrs: HashMap<String, String> = HashMap::new();
     if let Some(df) = &query.dockerfile {
         frontend_attrs.insert("filename".into(), df.clone());
@@ -85,25 +139,120 @@ pub async fn build(
         frontend_attrs.insert("cache-from".into(), cachefrom.clone());
     }
 
-    let req = crate::buildkit::proto::SolveRequest {
-        r#ref: tag.clone(),
-        frontend: frontend.into(),
-        frontend_attrs,
-        cache: None,
-        exports: Vec::new(),
-    };
+    frontend_attrs
+}
 
-    let span = tracing::info_span!("buildkit_solve", ref_ = %tag);
-    match buildkit.solve(req).instrument(span).await {
-        Ok(_) => {
-            let body = serde_json::json!({"stream": format!("Build complete for {tag}\n")});
-            (StatusCode::OK, Json(body))
+#[derive(Debug)]
+struct BuildContext {
+    staged_tar_path: PathBuf,
+    entries: Vec<TarEntrySummary>,
+}
+
+#[derive(Debug)]
+struct TarEntrySummary {
+    path: String,
+    data: Vec<u8>,
+}
+
+impl BuildContext {
+    fn from_bytes(bytes: Bytes) -> Result<Self, String> {
+        if bytes.len() > MAX_BUILD_CONTEXT_BYTES {
+            return Err(format!(
+                "build context exceeds {} byte limit",
+                MAX_BUILD_CONTEXT_BYTES
+            ));
         }
-        Err(e) => {
-            let body = serde_json::json!({"message": format!("Build failed: {e}")});
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(body))
-        }
+
+        let entries = summarize_tar_entries(&bytes)?;
+        let staged_tar_path = stage_context_tar(&bytes)?;
+
+        Ok(Self {
+            staged_tar_path,
+            entries,
+        })
     }
+
+    fn staged_tar_path(&self) -> &Path {
+        &self.staged_tar_path
+    }
+
+    fn has_copy_or_add_source(&self, dockerfile_path: &str) -> bool {
+        let Some(dockerfile) = self.entries.iter().find(|entry| entry.path == dockerfile_path) else {
+            return false;
+        };
+        let Ok(text) = std::str::from_utf8(&dockerfile.data) else {
+            return false;
+        };
+
+        text.lines().any(|line| {
+            let trimmed = line.trim_start();
+            trimmed.starts_with("COPY ") || trimmed.starts_with("ADD ")
+        })
+    }
+}
+
+fn stage_context_tar(bytes: &[u8]) -> Result<PathBuf, String> {
+    let mut path = std::env::temp_dir();
+    let id = BUILD_CONTEXT_COUNTER.fetch_add(1, Ordering::Relaxed);
+    path.push(format!(
+        "speck-build-context-{}-{id}.tar",
+        std::process::id()
+    ));
+    std::fs::write(&path, bytes).map_err(|e| format!("stage build context: {e}"))?;
+    Ok(path)
+}
+
+fn summarize_tar_entries(bytes: &[u8]) -> Result<Vec<TarEntrySummary>, String> {
+    let mut entries = Vec::new();
+    let mut offset = 0_usize;
+    while offset + 512 <= bytes.len() {
+        let header = &bytes[offset..offset + 512];
+        if header.iter().all(|b| *b == 0) {
+            break;
+        }
+        let path = parse_tar_path(header)?;
+        validate_tar_path(&path)?;
+        let size = parse_tar_size(header)?;
+        let data_start = offset + 512;
+        let data_end = data_start
+            .checked_add(size)
+            .ok_or_else(|| "build context tar entry size overflow".to_string())?;
+        if data_end > bytes.len() {
+            return Err("build context tar entry extends past archive".into());
+        }
+        entries.push(TarEntrySummary {
+            path,
+            data: bytes[data_start..data_end].to_vec(),
+        });
+        let padded_size = size.div_ceil(512) * 512;
+        offset = data_start
+            .checked_add(padded_size)
+            .ok_or_else(|| "build context tar offset overflow".to_string())?;
+    }
+
+    Ok(entries)
+}
+
+fn parse_tar_path(header: &[u8]) -> Result<String, String> {
+    let end = header[..100].iter().position(|b| *b == 0).unwrap_or(100);
+    std::str::from_utf8(&header[..end])
+        .map(|s| s.to_string())
+        .map_err(|_| "build context tar path is not UTF-8".into())
+}
+
+fn parse_tar_size(header: &[u8]) -> Result<usize, String> {
+    let raw = &header[124..136];
+    let end = raw.iter().position(|b| *b == 0 || *b == b' ').unwrap_or(raw.len());
+    let text = std::str::from_utf8(&raw[..end]).map_err(|_| "invalid tar size".to_string())?;
+    usize::from_str_radix(text.trim(), 8).map_err(|_| "invalid tar size".to_string())
+}
+
+fn validate_tar_path(path: &str) -> Result<(), String> {
+    let path = Path::new(path);
+    if path.is_absolute() || path.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+        return Err("build context tar contains unsafe path".into());
+    }
+    Ok(())
 }
 
 #[cfg(test)]
