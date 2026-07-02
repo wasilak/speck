@@ -74,3 +74,33 @@ pub enum Error {
     #[error("BuildKit client error: {0}")]
     Buildkit(String),
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+
+    #[test]
+    fn solve_request_can_represent_local_context_session() {
+        let context = LocalBuildContext {
+            session_id: "speck-session-1".into(),
+            context_name: "context".into(),
+            dockerfile_name: "dockerfile".into(),
+            tar_path: PathBuf::from("/tmp/context.tar"),
+        };
+        let mut attrs = HashMap::new();
+        attrs.insert("filename".into(), "Dockerfile".into());
+
+        let req = BuildkitClient::solve_request_with_local_context(
+            "example:latest".into(),
+            "dockerfile.v0".into(),
+            attrs,
+            &context,
+        );
+
+        assert_eq!(req.session, "speck-session-1");
+        assert!(req.frontend_inputs.contains_key("context"));
+        assert!(req.frontend_inputs.contains_key("dockerfile"));
+    }
+}
