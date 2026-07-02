@@ -1029,3 +1029,39 @@ impl Drop for VmThread {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn running_control() -> Arc<Mutex<VmControl>> {
+        Arc::new(Mutex::new(VmControl {
+            state: InternalState::Running,
+            machine: VmMachine { inner: None },
+            socket_device: VmSocketDevice { inner: None },
+            netstack_fd: None,
+            dns_vsock_fd: None,
+            port_maps: Vec::new(),
+            port_map_tx: None,
+        }))
+    }
+
+    #[test]
+    fn delegate_stopped_event_sets_control_state_to_stopped() {
+        let control = running_control();
+
+        VmThread::apply_delegate_event(&control, VmStateEvent::Stopped);
+
+        let ctrl = control.lock().unwrap_or_else(|e| e.into_inner());
+        assert_eq!(ctrl.state, InternalState::Stopped);
+    }
+
+    #[test]
+    fn delegate_error_event_sets_control_state_to_stopped() {
+        let control = running_control();
+
+        VmThread::apply_delegate_event(&control, VmStateEvent::Error);
+
+        let ctrl = control.lock().unwrap_or_else(|e| e.into_inner());
+        assert_eq!(ctrl.state, InternalState::Stopped);
+    }
+}
