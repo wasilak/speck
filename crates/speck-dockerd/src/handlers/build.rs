@@ -10,6 +10,7 @@ use axum::response::IntoResponse;
 use serde::Deserialize;
 use tracing::Instrument;
 
+use crate::buildkit::LocalBuildContext;
 use crate::state::AppState;
 
 pub const MAX_BUILD_CONTEXT_BYTES: usize = 256 * 1024 * 1024;
@@ -84,16 +85,23 @@ pub async fn build(
         frontend_attrs.insert("speck.context.has-copy-add".into(), "true".into());
     }
 
-    let req = crate::buildkit::proto::SolveRequest {
-        r#ref: tag.clone(),
-        frontend: frontend.into(),
-        frontend_attrs,
-        cache: None,
-        exports: Vec::new(),
+    let local_context = LocalBuildContext {
+        session_id: format!(
+            "speck-build-{}-{}",
+            std::process::id(),
+            BUILD_CONTEXT_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ),
+        context_name: "context".into(),
+        dockerfile_name: "dockerfile".into(),
+        tar_path: build_context.staged_tar_path().to_path_buf(),
     };
 
     let span = tracing::info_span!("buildkit_solve", ref_ = %tag);
-    match buildkit.solve(req).instrument(span).await {
+    match buildkit
+        .solve_with_local_context(tag.clone(), frontend.into(), frontend_attrs, &local_context)
+        .instrument(span)
+        .await
+    {
         Ok(_) => {
             let body = serde_json::json!({"stream": format!("Build complete for {tag}\n")});
             (StatusCode::OK, Json(body))
