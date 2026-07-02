@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::Json;
@@ -322,6 +323,51 @@ pub async fn exec() -> Response {
         .into_response()
 }
 
+/// A validated Docker bind mount specification parsed from a `host:container[:mode]` string.
+///
+/// Mode is optional; `ro` means read-only, `rw` (or no mode) means read-write.
+/// Anonymous volumes (no host path) are not supported and will be rejected during create.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct DockerBind {
+    /// Absolute path on the host filesystem (must exist at create time).
+    pub(crate) host_path: PathBuf,
+    /// Absolute mount path inside the container (no `..` allowed).
+    pub(crate) container_path: PathBuf,
+    /// True if the mount should be read-only.
+    pub(crate) read_only: bool,
+}
+
+impl DockerBind {
+    /// Serialize back to the canonical label-storage form (`host:container` or
+    /// `host:container:ro`).  The `\u{1f}` join delimiter is applied by the caller.
+    fn to_label_string(&self) -> String {
+        let host = self.host_path.display();
+        let container = self.container_path.display();
+        if self.read_only {
+            format!("{host}:{container}:ro")
+        } else {
+            format!("{host}:{container}")
+        }
+    }
+}
+
+/// Parse and validate a single Docker bind-mount string.
+///
+/// Accepted formats:
+/// - `host_path:container_path`       — read-write
+/// - `host_path:container_path:ro`    — read-only
+/// - `host_path:container_path:rw`    — read-write (explicit)
+///
+/// Errors (HTTP 400):
+/// - Empty host or container path.
+/// - Container path is not absolute (does not start with `/`).
+/// - Container path contains `..`.
+/// - Host path does not exist on the host filesystem.
+/// - Unknown mount mode.
+fn parse_docker_bind(s: &str) -> Result<DockerBind> {
+    todo!("parse_docker_bind not yet implemented")
+}
+
 fn validate_container_name(name: &str) -> Result<()> {
     let mut chars = name.chars();
     let Some(first) = chars.next() else {
@@ -439,4 +485,132 @@ fn container_inspect_json(
         "Mounts": [],
         "NetworkSettings": { "Ports": {} },
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ---- parse_docker_bind: success cases ----
+
+    #[test]
+    fn test_containers_bind_rw_default() {
+        // /tmp always exists on macOS; read-write is the default when no mode is given.
+        let b = parse_docker_bind("/tmp:/app").expect("valid rw bind");
+        assert_eq!(b.host_path, PathBuf::from("/tmp"));
+        assert_eq!(b.container_path, PathBuf::from("/app"));
+        assert!(!b.read_only, "no mode suffix → read-write");
+    }
+
+    #[test]
+    fn test_containers_bind_ro_explicit() {
+        let b = parse_docker_bind("/tmp:/data:ro").expect("valid ro bind");
+        assert!(b.read_only, ":ro suffix → read-only");
+        assert_eq!(b.container_path, PathBuf::from("/data"));
+    }
+
+    #[test]
+    fn test_containers_bind_rw_explicit() {
+        let b = parse_docker_bind("/tmp:/data:rw").expect("valid rw bind");
+        assert!(!b.read_only, ":rw suffix → read-write");
+    }
+
+    #[test]
+    fn test_containers_bind_label_string_rw() {
+        let b = DockerBind {
+            host_path: PathBuf::from("/tmp"),
+            container_path: PathBuf::from("/app"),
+            read_only: false,
+        };
+        assert_eq!(b.to_label_string(), "/tmp:/app");
+    }
+
+    #[test]
+    fn test_containers_bind_label_string_ro() {
+        let b = DockerBind {
+            host_path: PathBuf::from("/tmp"),
+            container_path: PathBuf::from("/data"),
+            read_only: true,
+        };
+        assert_eq!(b.to_label_string(), "/tmp:/data:ro");
+    }
+
+    // ---- parse_docker_bind: rejection cases ----
+
+    #[test]
+    fn test_containers_bind_empty_string_rejected() {
+        let err = parse_docker_bind("").unwrap_err();
+        assert!(
+            matches!(err, DockerApiError::BadRequest(_)),
+            "empty bind must be 400 bad request"
+        );
+    }
+
+    #[test]
+    fn test_containers_bind_empty_host_rejected() {
+        let err = parse_docker_bind(":/app").unwrap_err();
+        assert!(
+            matches!(err, DockerApiError::BadRequest(_)),
+            "empty host path must be 400 bad request"
+        );
+    }
+
+    #[test]
+    fn test_containers_bind_empty_container_rejected() {
+        let err = parse_docker_bind("/tmp:").unwrap_err();
+        assert!(
+            matches!(err, DockerApiError::BadRequest(_)),
+            "empty container path must be 400 bad request"
+        );
+    }
+
+    #[test]
+    fn test_containers_bind_relative_container_rejected() {
+        let err = parse_docker_bind("/tmp:relative/path").unwrap_err();
+        assert!(
+            matches!(err, DockerApiError::BadRequest(_)),
+            "relative container path must be 400 bad request"
+        );
+    }
+
+    #[test]
+    fn test_containers_bind_dotdot_container_rejected() {
+        // Container path containing .. is a path-traversal risk.
+        let err = parse_docker_bind("/tmp:/app/../etc").unwrap_err();
+        assert!(
+            matches!(err, DockerApiError::BadRequest(_)),
+            "container path with .. must be 400 bad request"
+        );
+    }
+
+    #[test]
+    fn test_containers_bind_nonexistent_host_rejected() {
+        let err = parse_docker_bind("/nonexistent/path/xyz:/app").unwrap_err();
+        assert!(
+            matches!(err, DockerApiError::BadRequest(_)),
+            "non-existent host path must be 400 bad request"
+        );
+    }
+
+    #[test]
+    fn test_containers_bind_unknown_mode_rejected() {
+        let err = parse_docker_bind("/tmp:/app:shared").unwrap_err();
+        assert!(
+            matches!(err, DockerApiError::BadRequest(_)),
+            "unknown mount mode must be 400 bad request"
+        );
+    }
+
+    // ---- no anonymous volumes ----
+
+    #[test]
+    fn test_containers_bind_volume_name_only_rejected() {
+        // An anonymous volume (no host path, just a name like "myvolume:/app")
+        // with a relative host part must be rejected. Absolute paths only.
+        let err = parse_docker_bind("myvolume:/app").unwrap_err();
+        assert!(
+            matches!(err, DockerApiError::BadRequest(_)),
+            "anonymous volume (non-existent relative host) must be rejected"
+        );
+    }
 }
