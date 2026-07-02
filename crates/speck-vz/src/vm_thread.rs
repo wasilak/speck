@@ -83,6 +83,30 @@ impl DerefMut for VmSocketDevice {
     }
 }
 
+/// Wrapper around `Option<Retained<VmDelegate>>` that is explicitly `Send`.
+///
+/// SAFETY: the delegate only sends `VmStateEvent` values through an mpsc channel.
+/// The retained reference is stored here only to keep the Objective-C delegate
+/// alive for the VM lifetime.
+struct VmDelegateHandle {
+    inner: Option<Retained<VmDelegate>>,
+}
+
+unsafe impl Send for VmDelegateHandle {}
+
+impl Deref for VmDelegateHandle {
+    type Target = Option<Retained<VmDelegate>>;
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl DerefMut for VmDelegateHandle {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
+    }
+}
+
 pub(crate) enum VmCommand {
     Start {
         config: GuestConfig,
@@ -148,6 +172,8 @@ struct VmControl {
     state: InternalState,
     machine: VmMachine,
     socket_device: VmSocketDevice,
+    delegate: VmDelegateHandle,
+    delegate_drain: Option<JoinHandle<()>>,
     netstack_fd: Option<RawFd>,
     dns_vsock_fd: Option<RawFd>,
     port_maps: Vec<PortMapConfig>,
@@ -170,6 +196,8 @@ impl VmThread {
             state: InternalState::Stopped,
             machine: VmMachine { inner: None },
             socket_device: VmSocketDevice { inner: None },
+            delegate: VmDelegateHandle { inner: None },
+            delegate_drain: None,
             netstack_fd: None,
             dns_vsock_fd: None,
             port_maps: Vec::new(),
@@ -316,13 +344,19 @@ impl VmThread {
         config: &GuestConfig,
         queue: &DispatchQueue,
     ) -> Result<(), Error> {
-        let mut ctrl = control.lock().unwrap_or_else(|e| e.into_inner());
-        if ctrl.state != InternalState::Stopped {
-            return Err(Error::AlreadyRunning);
+        let previous_drain = {
+            let mut ctrl = control.lock().unwrap_or_else(|e| e.into_inner());
+            if ctrl.state != InternalState::Stopped {
+                return Err(Error::AlreadyRunning);
+            }
+            ctrl.state = InternalState::Starting;
+            ctrl.machine.inner = None;
+            ctrl.delegate.inner = None;
+            ctrl.delegate_drain.take()
+        };
+        if let Some(handle) = previous_drain {
+            let _ = handle.join();
         }
-        ctrl.state = InternalState::Starting;
-        ctrl.machine.inner = None;
-        drop(ctrl);
 
         let kernel_str = NSString::from_str(
             config
@@ -534,7 +568,8 @@ impl VmThread {
             return Err(Error::VmFramework(format!("config validation: {desc}")));
         }
 
-        let (delegate_tx, _delegate_rx) = std::sync::mpsc::channel::<VmStateEvent>();
+        let (delegate_tx, delegate_rx) = std::sync::mpsc::channel::<VmStateEvent>();
+        let delegate_drain = Self::spawn_delegate_drain(Arc::clone(control), delegate_rx);
         let delegate = VmDelegate::create(delegate_tx);
 
         let vm = unsafe {
@@ -551,6 +586,8 @@ impl VmThread {
         {
             let mut ctrl = control.lock().unwrap_or_else(|e| e.into_inner());
             ctrl.machine.inner = Some(vm);
+            ctrl.delegate.inner = Some(delegate);
+            ctrl.delegate_drain = Some(delegate_drain);
 
             // Extract the vsock socket device so we can connect to ports later
             if let Some(ref vm) = *ctrl.machine {
@@ -599,6 +636,29 @@ impl VmThread {
         }
 
         Ok(())
+    }
+
+    fn spawn_delegate_drain(
+        control: Arc<Mutex<VmControl>>,
+        receiver: mpsc::Receiver<VmStateEvent>,
+    ) -> JoinHandle<()> {
+        thread::Builder::new()
+            .name("speck-vm-delegate".into())
+            .spawn(move || {
+                while let Ok(event) = receiver.recv() {
+                    Self::apply_delegate_event(&control, event);
+                }
+            })
+            .expect("spawning speck-vm delegate drain thread")
+    }
+
+    fn apply_delegate_event(control: &Arc<Mutex<VmControl>>, event: VmStateEvent) {
+        match event {
+            VmStateEvent::Stopped | VmStateEvent::Error => {
+                let mut ctrl = control.lock().unwrap_or_else(|e| e.into_inner());
+                ctrl.state = InternalState::Stopped;
+            }
+        }
     }
 
     fn do_stop(
@@ -1038,6 +1098,8 @@ mod tests {
             state: InternalState::Running,
             machine: VmMachine { inner: None },
             socket_device: VmSocketDevice { inner: None },
+            delegate: VmDelegateHandle { inner: None },
+            delegate_drain: None,
             netstack_fd: None,
             dns_vsock_fd: None,
             port_maps: Vec::new(),
