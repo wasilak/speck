@@ -354,4 +354,40 @@ mod tests {
             "unexpected identity_tags in cmdline: {result}"
         );
     }
+
+    // ── D-05: pre-provisioned bind-mounts device ────────────────────────
+
+    #[test]
+    fn test_bind_mounts_tag_is_valid_virtiofs_tag() {
+        // BIND_MOUNTS_TAG must be a valid VirtioFS tag so the pre-provisioned
+        // virtiofs-binds device passes Apple's configuration validation.
+        assert!(
+            validate_virtiofs_tag(BIND_MOUNTS_TAG),
+            "BIND_MOUNTS_TAG must be a valid VirtioFS tag; got: {BIND_MOUNTS_TAG}"
+        );
+    }
+
+    #[test]
+    fn test_container_path_to_share_name_simple() {
+        let name = container_path_to_share_name(std::path::Path::new("/app"));
+        assert!(!name.contains('/'), "share name must not contain slashes; got: {name}");
+        assert!(!name.is_empty(), "share name must not be empty");
+        // Leading slash → leading separator
+        assert_eq!(name, "..app", "expected separator-prefixed name");
+    }
+
+    #[test]
+    fn test_container_path_to_share_name_nested() {
+        let name = container_path_to_share_name(std::path::Path::new("/etc/config"));
+        assert!(!name.contains('/'), "nested path must have slashes replaced");
+        assert_eq!(name, "..etc..config", "expected double-dot separator");
+    }
+
+    #[test]
+    fn test_container_path_to_share_name_no_collision() {
+        // /a_b and /a/b must produce different names when using the ../ scheme.
+        let a = container_path_to_share_name(std::path::Path::new("/a_b"));
+        let b = container_path_to_share_name(std::path::Path::new("/a/b"));
+        assert_ne!(a, b, "collision: /a_b and /a/b must not map to the same share name");
+    }
 }
