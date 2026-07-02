@@ -9,7 +9,7 @@ license.workspace = true
 [dependencies]
 speck-core = { path = "../speck-core" }
 objc2 = { version = "0.6", features = ["objc2-proc-macros"] }
-objc2-foundation = { version = "0.3", features = ["NSURL", "NSError", "NSFileHandle"] }
+objc2-foundation = { version = "0.3", features = ["NSURL", "NSError", "NSFileHandle", "NSDictionary", "NSObject"] }
 objc2-virtualization = { version = "0.3", features = [
     "VZVirtualMachineConfiguration",
     "VZVirtualMachine",
@@ -38,6 +38,7 @@ objc2-virtualization = { version = "0.3", features = [
     "VZDiskImageStorageDeviceAttachment",
     "VZDirectorySharingDeviceConfiguration",
     "VZDirectoryShare",
+    "VZDirectorySharingDevice",
     "VZVirtioFileSystemDeviceConfiguration",
     "VZSharedDirectory",
     "VZSingleDirectoryShare",

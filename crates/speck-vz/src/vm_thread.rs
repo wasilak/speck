@@ -146,6 +146,12 @@ pub(crate) enum VmCommand {
         tx: tokio::sync::mpsc::Sender<PortMapConfig>,
         reply: mpsc::Sender<std::result::Result<(), Error>>,
     },
+    /// Accumulate Docker bind mounts and update the pre-provisioned
+    /// `virtiofs-binds` VirtioFS device share on the running VM (D-05).
+    UpdateBindMounts {
+        binds: Vec<crate::config::VolumeMountConfig>,
+        reply: mpsc::Sender<std::result::Result<(), Error>>,
+    },
     Shutdown,
 }
 
@@ -178,6 +184,9 @@ struct VmControl {
     dns_vsock_fd: Option<RawFd>,
     port_maps: Vec<PortMapConfig>,
     port_map_tx: Option<tokio::sync::mpsc::Sender<PortMapConfig>>,
+    /// Accumulated Docker bind mounts (D-05); rebuilt as VZMultipleDirectoryShare
+    /// on the pre-provisioned virtiofs-binds device at each container start.
+    docker_bind_mounts: Vec<crate::config::VolumeMountConfig>,
 }
 
 pub struct VmThread {
@@ -202,6 +211,7 @@ impl VmThread {
             dns_vsock_fd: None,
             port_maps: Vec::new(),
             port_map_tx: None,
+            docker_bind_mounts: Vec::new(),
         }));
 
         let thread = thread::Builder::new()
@@ -325,6 +335,49 @@ impl VmThread {
                             ctrl.port_map_tx = Some(tx);
                             drop(ctrl);
                             let _ = reply.send(Ok(()));
+                        }
+                        VmCommand::UpdateBindMounts { binds, reply } => {
+                            // Step 1: accumulate bind mounts under the mutex and
+                            // collect the full list (VM reference stays in ctrl).
+                            let all_binds = {
+                                let mut ctrl =
+                                    control.lock().unwrap_or_else(|e| e.into_inner());
+                                if ctrl.state != InternalState::Running {
+                                    let _ = reply.send(Err(Error::NotRunning));
+                                    continue;
+                                }
+                                ctrl.docker_bind_mounts.extend(binds);
+                                ctrl.docker_bind_mounts.clone()
+                            };
+
+                            // Step 2: dispatch the VirtioFS update onto the serial
+                            // queue.  `Retained<VZVirtualMachine>` is not Send, so
+                            // we pass Arc<Mutex<VmControl>> (which IS Send) and
+                            // re-borrow the machine inside the queue closure —
+                            // the same pattern used by do_vsock_connect.
+                            let control_clone = Arc::clone(&control);
+                            let (done_tx, done_rx) =
+                                mpsc::channel::<std::result::Result<(), Error>>();
+                            queue.exec_sync(move || {
+                                let ctrl =
+                                    control_clone.lock().unwrap_or_else(|e| e.into_inner());
+                                let result = if let Some(ref vm) = *ctrl.machine {
+                                    crate::virtiofs::update_virtiofs_bind_mounts(
+                                        vm,
+                                        &all_binds,
+                                    )
+                                } else {
+                                    Err(Error::NotRunning)
+                                };
+                                drop(ctrl);
+                                let _ = done_tx.send(result);
+                            });
+                            let result = done_rx.recv().unwrap_or_else(|_| {
+                                Err(Error::ChannelError(
+                                    "bind mount update reply channel closed".into(),
+                                ))
+                            });
+                            let _ = reply.send(result);
                         }
                         VmCommand::Shutdown => break,
                     }
@@ -1068,6 +1121,20 @@ impl VmThread {
         self.send_blocking(VmCommand::SetPortMapChannel { tx, reply }, rx)?
     }
 
+    /// Accumulate Docker bind mounts and update the pre-provisioned
+    /// `virtiofs-binds` device on the running VM (D-05).
+    ///
+    /// Bind mounts are accumulated across containers: each call appends to the
+    /// running VM's bind-mount list and rebuilds the `VZMultipleDirectoryShare`.
+    /// Returns `Err(NotRunning)` if the VM is not in the Running state.
+    pub fn update_bind_mounts(
+        &self,
+        binds: Vec<crate::config::VolumeMountConfig>,
+    ) -> std::result::Result<(), Error> {
+        let (tx, rx) = mpsc::channel();
+        self.send_blocking(VmCommand::UpdateBindMounts { binds, reply: tx }, rx)?
+    }
+
     pub fn join(&mut self) -> std::result::Result<(), Error> {
         self.sender
             .send(VmCommand::Shutdown)
@@ -1104,6 +1171,7 @@ mod tests {
             dns_vsock_fd: None,
             port_maps: Vec::new(),
             port_map_tx: None,
+            docker_bind_mounts: Vec::new(),
         }))
     }
 

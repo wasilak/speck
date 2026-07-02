@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::Json;
@@ -119,7 +120,15 @@ pub async fn create(
         );
     }
     if let Some(binds) = host_config.binds {
-        labels.insert("speck.binds".into(), binds.join("\u{1f}"));
+        // Validate each bind string eagerly at create time so malformed or
+        // unsafe paths return a 400 error before any label is stored.
+        // (Rule 2 / T-07-06: path-traversal and non-existent host paths are
+        // rejected here rather than silently at container start time.)
+        let validated: Vec<String> = binds
+            .iter()
+            .map(|s| parse_docker_bind(s).map(|b| b.to_label_string()))
+            .collect::<Result<Vec<_>>>()?;
+        labels.insert("speck.binds".into(), validated.join("\u{1f}"));
     }
 
     let image_for_event = body.image.clone();
@@ -215,6 +224,43 @@ pub async fn start(State(state): State<AppState>, Path(id): Path<String>) -> Res
                         }
                     }
                 }
+            }
+        }
+    }
+
+    // Apply bind mounts from the speck.binds label stored during create() (D-05).
+    // The label holds '\u{1f}'-delimited bind strings validated at create time.
+    // Malformed or missing labels are silently skipped — bind mount failures
+    // must not cause the container start to fail.
+    if let Some(binds_label) = info.labels.get("speck.binds") {
+        let mounts: Vec<speck_vz::config::VolumeMountConfig> = binds_label
+            .split('\u{1f}')
+            .filter(|s| !s.is_empty())
+            .filter_map(|s| match parse_docker_bind(s) {
+                Ok(b) => Some(speck_vz::config::VolumeMountConfig {
+                    host_path: b.host_path,
+                    container_path: b.container_path,
+                    read_only: b.read_only,
+                    volume_name: None,
+                }),
+                Err(e) => {
+                    tracing::warn!(
+                        bind = s,
+                        error = %e,
+                        "invalid bind string in speck.binds label; skipping"
+                    );
+                    None
+                }
+            })
+            .collect();
+
+        if !mounts.is_empty() {
+            if let Err(e) = state.guest.add_bind_mounts(mounts) {
+                tracing::warn!(
+                    container_id = id.as_str(),
+                    error = %e,
+                    "failed to update virtiofs-binds VZMultipleDirectoryShare; bind mounts unavailable"
+                );
             }
         }
     }
@@ -320,6 +366,111 @@ pub async fn put_archive() -> StatusCode {
 pub async fn exec() -> Response {
     crate::error::DockerApiError::Internal("route should be handled by exec::create".into())
         .into_response()
+}
+
+/// A validated Docker bind mount specification parsed from a `host:container[:mode]` string.
+///
+/// Mode is optional; `ro` means read-only, `rw` (or no mode) means read-write.
+/// Anonymous volumes (no host path) are not supported and will be rejected during create.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct DockerBind {
+    /// Absolute path on the host filesystem (must exist at create time).
+    pub(crate) host_path: PathBuf,
+    /// Absolute mount path inside the container (no `..` allowed).
+    pub(crate) container_path: PathBuf,
+    /// True if the mount should be read-only.
+    pub(crate) read_only: bool,
+}
+
+impl DockerBind {
+    /// Serialize back to the canonical label-storage form (`host:container` or
+    /// `host:container:ro`).  The `\u{1f}` join delimiter is applied by the caller.
+    fn to_label_string(&self) -> String {
+        let host = self.host_path.display();
+        let container = self.container_path.display();
+        if self.read_only {
+            format!("{host}:{container}:ro")
+        } else {
+            format!("{host}:{container}")
+        }
+    }
+}
+
+/// Parse and validate a single Docker bind-mount string.
+///
+/// Accepted formats:
+/// - `host_path:container_path`       — read-write
+/// - `host_path:container_path:ro`    — read-only
+/// - `host_path:container_path:rw`    — read-write (explicit)
+///
+/// Errors (HTTP 400):
+/// - Empty host or container path.
+/// - Container path is not absolute (does not start with `/`).
+/// - Container path contains `..`.
+/// - Host path does not exist on the host filesystem.
+/// - Unknown mount mode.
+fn parse_docker_bind(s: &str) -> Result<DockerBind> {
+    // Split into at most 3 parts: host, container, optional mode.
+    let parts: Vec<&str> = s.splitn(3, ':').collect();
+    let (host, container, read_only) = match parts.as_slice() {
+        [host, container] => (*host, *container, false),
+        [host, container, mode] => {
+            let ro = match *mode {
+                "ro" => true,
+                "rw" => false,
+                other => {
+                    return Err(DockerApiError::BadRequest(format!(
+                        "invalid bind mount mode '{other}'; expected 'ro' or 'rw'"
+                    )));
+                }
+            };
+            (*host, *container, ro)
+        }
+        _ => {
+            return Err(DockerApiError::BadRequest(
+                "bind mount must be in format 'host_path:container_path[:ro|:rw]'".into(),
+            ));
+        }
+    };
+
+    if host.is_empty() {
+        return Err(DockerApiError::BadRequest(
+            "bind host path cannot be empty".into(),
+        ));
+    }
+
+    if container.is_empty() {
+        return Err(DockerApiError::BadRequest(
+            "bind container path cannot be empty".into(),
+        ));
+    }
+
+    let container_path = std::path::Path::new(container);
+    if !container_path.is_absolute() {
+        return Err(DockerApiError::BadRequest(format!(
+            "bind container path must be absolute, got: {container}"
+        )));
+    }
+
+    // Reject path traversal via `..` components.
+    if container.contains("..") {
+        return Err(DockerApiError::BadRequest(format!(
+            "bind container path must not contain '..': {container}"
+        )));
+    }
+
+    let host_path = PathBuf::from(host);
+    if !host_path.exists() {
+        return Err(DockerApiError::BadRequest(format!(
+            "bind host path does not exist: {host}"
+        )));
+    }
+
+    Ok(DockerBind {
+        host_path,
+        container_path: container_path.to_owned(),
+        read_only,
+    })
 }
 
 fn validate_container_name(name: &str) -> Result<()> {
@@ -439,4 +590,164 @@ fn container_inspect_json(
         "Mounts": [],
         "NetworkSettings": { "Ports": {} },
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ---- parse_docker_bind: success cases ----
+
+    #[test]
+    fn test_containers_bind_rw_default() {
+        // /tmp always exists on macOS; read-write is the default when no mode is given.
+        let b = parse_docker_bind("/tmp:/app").expect("valid rw bind");
+        assert_eq!(b.host_path, PathBuf::from("/tmp"));
+        assert_eq!(b.container_path, PathBuf::from("/app"));
+        assert!(!b.read_only, "no mode suffix → read-write");
+    }
+
+    #[test]
+    fn test_containers_bind_ro_explicit() {
+        let b = parse_docker_bind("/tmp:/data:ro").expect("valid ro bind");
+        assert!(b.read_only, ":ro suffix → read-only");
+        assert_eq!(b.container_path, PathBuf::from("/data"));
+    }
+
+    #[test]
+    fn test_containers_bind_rw_explicit() {
+        let b = parse_docker_bind("/tmp:/data:rw").expect("valid rw bind");
+        assert!(!b.read_only, ":rw suffix → read-write");
+    }
+
+    #[test]
+    fn test_containers_bind_label_string_rw() {
+        let b = DockerBind {
+            host_path: PathBuf::from("/tmp"),
+            container_path: PathBuf::from("/app"),
+            read_only: false,
+        };
+        assert_eq!(b.to_label_string(), "/tmp:/app");
+    }
+
+    #[test]
+    fn test_containers_bind_label_string_ro() {
+        let b = DockerBind {
+            host_path: PathBuf::from("/tmp"),
+            container_path: PathBuf::from("/data"),
+            read_only: true,
+        };
+        assert_eq!(b.to_label_string(), "/tmp:/data:ro");
+    }
+
+    // ---- parse_docker_bind: rejection cases ----
+
+    #[test]
+    fn test_containers_bind_empty_string_rejected() {
+        let err = parse_docker_bind("").unwrap_err();
+        assert!(
+            matches!(err, DockerApiError::BadRequest(_)),
+            "empty bind must be 400 bad request"
+        );
+    }
+
+    #[test]
+    fn test_containers_bind_empty_host_rejected() {
+        let err = parse_docker_bind(":/app").unwrap_err();
+        assert!(
+            matches!(err, DockerApiError::BadRequest(_)),
+            "empty host path must be 400 bad request"
+        );
+    }
+
+    #[test]
+    fn test_containers_bind_empty_container_rejected() {
+        let err = parse_docker_bind("/tmp:").unwrap_err();
+        assert!(
+            matches!(err, DockerApiError::BadRequest(_)),
+            "empty container path must be 400 bad request"
+        );
+    }
+
+    #[test]
+    fn test_containers_bind_relative_container_rejected() {
+        let err = parse_docker_bind("/tmp:relative/path").unwrap_err();
+        assert!(
+            matches!(err, DockerApiError::BadRequest(_)),
+            "relative container path must be 400 bad request"
+        );
+    }
+
+    #[test]
+    fn test_containers_bind_dotdot_container_rejected() {
+        // Container path containing .. is a path-traversal risk.
+        let err = parse_docker_bind("/tmp:/app/../etc").unwrap_err();
+        assert!(
+            matches!(err, DockerApiError::BadRequest(_)),
+            "container path with .. must be 400 bad request"
+        );
+    }
+
+    #[test]
+    fn test_containers_bind_nonexistent_host_rejected() {
+        let err = parse_docker_bind("/nonexistent/path/xyz:/app").unwrap_err();
+        assert!(
+            matches!(err, DockerApiError::BadRequest(_)),
+            "non-existent host path must be 400 bad request"
+        );
+    }
+
+    #[test]
+    fn test_containers_bind_unknown_mode_rejected() {
+        let err = parse_docker_bind("/tmp:/app:shared").unwrap_err();
+        assert!(
+            matches!(err, DockerApiError::BadRequest(_)),
+            "unknown mount mode must be 400 bad request"
+        );
+    }
+
+    // ---- no anonymous volumes ----
+
+    #[test]
+    fn test_containers_bind_volume_name_only_rejected() {
+        // An anonymous volume (no host path, just a name like "myvolume:/app")
+        // with a relative host part must be rejected. Absolute paths only.
+        let err = parse_docker_bind("myvolume:/app").unwrap_err();
+        assert!(
+            matches!(err, DockerApiError::BadRequest(_)),
+            "anonymous volume (non-existent relative host) must be rejected"
+        );
+    }
+
+    // ── GAP-04 / D-05 regression guards ─────────────────────────────────
+
+    /// Verifies the label round-trip used by the start handler (D-05).
+    ///
+    /// The create handler stores validated binds as `\u{1f}`-delimited label
+    /// strings.  The start handler re-parses them before calling
+    /// `guest.add_bind_mounts`.  This test guards the contract between the
+    /// two phases.
+    #[test]
+    fn test_binds_label_roundtrip_for_start_handler() {
+        // Build the label value exactly as create() does.
+        let raw = vec!["/tmp:/app", "/tmp:/data:ro"];
+        let stored: String = raw
+            .iter()
+            .map(|s| parse_docker_bind(s).unwrap().to_label_string())
+            .collect::<Vec<_>>()
+            .join("\u{1f}");
+
+        // Re-parse exactly as start() does.
+        let reparsed: Vec<DockerBind> = stored
+            .split('\u{1f}')
+            .filter(|s| !s.is_empty())
+            .filter_map(|s| parse_docker_bind(s).ok())
+            .collect();
+
+        assert_eq!(reparsed.len(), 2, "both binds must survive the round-trip");
+        assert_eq!(reparsed[0].container_path, std::path::PathBuf::from("/app"));
+        assert!(!reparsed[0].read_only, "first bind must be read-write");
+        assert_eq!(reparsed[1].container_path, std::path::PathBuf::from("/data"));
+        assert!(reparsed[1].read_only, "second bind must be read-only");
+    }
 }
