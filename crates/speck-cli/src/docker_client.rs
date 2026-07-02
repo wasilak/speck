@@ -98,3 +98,32 @@ async fn read_body(body: Incoming) -> anyhow::Result<Vec<u8>> {
     let collected = body.collect().await?;
     Ok(collected.to_bytes().to_vec())
 }
+
+#[cfg(test)]
+mod tests {
+    const SOURCE: &str = include_str!("docker_client.rs");
+
+    #[test]
+    fn docker_client_uses_unix_socket_connector_without_tcp_fallback() {
+        assert!(
+            SOURCE.contains("tokio::net::UnixStream"),
+            "DockerClient must dial the configured Unix socket with tokio::net::UnixStream"
+        );
+        assert!(
+            SOURCE.contains("UnixConnector"),
+            "DockerClient must define an in-repo Unix connector"
+        );
+        assert!(
+            SOURCE.contains("UnixStream::connect"),
+            "connector must call UnixStream::connect using the configured socket path"
+        );
+        assert!(
+            !SOURCE.contains("HttpConnector"),
+            "DockerClient must not retain the TCP HttpConnector fallback"
+        );
+        assert!(
+            !SOURCE.contains("build_http()"),
+            "DockerClient must not build a TCP HTTP client"
+        );
+    }
+}
