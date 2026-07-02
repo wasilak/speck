@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use clap::Parser;
 
 mod commands;
-mod docker_client;
+pub mod docker_client;
 mod theme;
 
 #[derive(Parser)]
