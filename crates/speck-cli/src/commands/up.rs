@@ -297,3 +297,28 @@ pub async fn run_up(args: UpArgs, speck_home: &Path) -> anyhow::Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn run_up_uses_spawn_blocking_for_vm_start_and_ready_wait() {
+        let source = include_str!("up.rs");
+
+        let spawn_blocking = source
+            .find("tokio::task::spawn_blocking")
+            .expect("run_up should wrap blocking VM startup in tokio::task::spawn_blocking");
+        let start = source
+            .find("guest.start()")
+            .expect("run_up should still start the guest");
+        let wait = source
+            .find("guest.wait_for_ready()")
+            .expect("run_up should still wait for guest readiness");
+        let speck_net = source
+            .find("SpeckNet::new")
+            .expect("run_up should still start SpeckNet after readiness");
+
+        assert!(spawn_blocking < start, "guest.start() must be inside the blocking startup section");
+        assert!(start < wait, "guest.start() should happen before guest.wait_for_ready()");
+        assert!(wait < speck_net, "SpeckNet startup must remain after guest readiness");
+    }
+}
