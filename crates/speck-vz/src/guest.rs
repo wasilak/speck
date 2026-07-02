@@ -83,6 +83,20 @@ impl Guest {
         self.thread.add_port_map(host_port, container_port)
     }
 
+    /// Update the pre-provisioned `virtiofs-binds` VirtioFS device with Docker
+    /// bind mounts (D-05).
+    ///
+    /// Bind mounts are accumulated across containers: repeated calls append to the
+    /// list and rebuild `VZMultipleDirectoryShare` on the running VM so every
+    /// container's bind-mounted host paths remain visible.  Returns
+    /// `Err(NotRunning)` if the VM is not yet started.
+    pub fn add_bind_mounts(
+        &self,
+        binds: Vec<crate::config::VolumeMountConfig>,
+    ) -> Result<(), Error> {
+        self.thread.update_bind_mounts(binds)
+    }
+
     /// Register the netstack port-map sender with the VM thread.
     ///
     /// Delegates to [`VmThread::set_port_map_channel`]. Required by `up.rs` (Plan 06.1-02)

@@ -228,6 +228,43 @@ pub async fn start(State(state): State<AppState>, Path(id): Path<String>) -> Res
         }
     }
 
+    // Apply bind mounts from the speck.binds label stored during create() (D-05).
+    // The label holds '\u{1f}'-delimited bind strings validated at create time.
+    // Malformed or missing labels are silently skipped — bind mount failures
+    // must not cause the container start to fail.
+    if let Some(binds_label) = info.labels.get("speck.binds") {
+        let mounts: Vec<speck_vz::config::VolumeMountConfig> = binds_label
+            .split('\u{1f}')
+            .filter(|s| !s.is_empty())
+            .filter_map(|s| match parse_docker_bind(s) {
+                Ok(b) => Some(speck_vz::config::VolumeMountConfig {
+                    host_path: b.host_path,
+                    container_path: b.container_path,
+                    read_only: b.read_only,
+                    volume_name: None,
+                }),
+                Err(e) => {
+                    tracing::warn!(
+                        bind = s,
+                        error = %e,
+                        "invalid bind string in speck.binds label; skipping"
+                    );
+                    None
+                }
+            })
+            .collect();
+
+        if !mounts.is_empty() {
+            if let Err(e) = state.guest.add_bind_mounts(mounts) {
+                tracing::warn!(
+                    container_id = id.as_str(),
+                    error = %e,
+                    "failed to update virtiofs-binds VZMultipleDirectoryShare; bind mounts unavailable"
+                );
+            }
+        }
+    }
+
     crate::handlers::events::emit_event(
         &state,
         json!({"Type": "container", "Action": "start", "Actor": {"ID": id}}),
@@ -680,5 +717,37 @@ mod tests {
             matches!(err, DockerApiError::BadRequest(_)),
             "anonymous volume (non-existent relative host) must be rejected"
         );
+    }
+
+    // ── GAP-04 / D-05 regression guards ─────────────────────────────────
+
+    /// Verifies the label round-trip used by the start handler (D-05).
+    ///
+    /// The create handler stores validated binds as `\u{1f}`-delimited label
+    /// strings.  The start handler re-parses them before calling
+    /// `guest.add_bind_mounts`.  This test guards the contract between the
+    /// two phases.
+    #[test]
+    fn test_binds_label_roundtrip_for_start_handler() {
+        // Build the label value exactly as create() does.
+        let raw = vec!["/tmp:/app", "/tmp:/data:ro"];
+        let stored: String = raw
+            .iter()
+            .map(|s| parse_docker_bind(s).unwrap().to_label_string())
+            .collect::<Vec<_>>()
+            .join("\u{1f}");
+
+        // Re-parse exactly as start() does.
+        let reparsed: Vec<DockerBind> = stored
+            .split('\u{1f}')
+            .filter(|s| !s.is_empty())
+            .filter_map(|s| parse_docker_bind(s).ok())
+            .collect();
+
+        assert_eq!(reparsed.len(), 2, "both binds must survive the round-trip");
+        assert_eq!(reparsed[0].container_path, std::path::PathBuf::from("/app"));
+        assert!(!reparsed[0].read_only, "first bind must be read-write");
+        assert_eq!(reparsed[1].container_path, std::path::PathBuf::from("/data"));
+        assert!(reparsed[1].read_only, "second bind must be read-only");
     }
 }

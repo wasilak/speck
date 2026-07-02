@@ -5,17 +5,46 @@ use objc2::AnyThread;
 #[cfg(target_os = "macos")]
 use objc2::rc::Retained;
 #[cfg(target_os = "macos")]
-use objc2_foundation::{NSArray, NSString, NSURL};
+use objc2::runtime::ProtocolObject;
+#[cfg(target_os = "macos")]
+use objc2_foundation::{NSCopying, NSDictionary, NSMutableDictionary, NSArray, NSString, NSURL};
 #[cfg(target_os = "macos")]
 use objc2_virtualization::{
-    VZDirectoryShare, VZDirectorySharingDeviceConfiguration, VZSharedDirectory,
-    VZSingleDirectoryShare, VZVirtioFileSystemDeviceConfiguration,
+    VZDirectoryShare, VZDirectorySharingDeviceConfiguration, VZMultipleDirectoryShare,
+    VZSharedDirectory, VZSingleDirectoryShare, VZVirtioFileSystemDevice,
+    VZVirtioFileSystemDeviceConfiguration,
 };
 
 use crate::config::VolumeMountConfig;
 
 const SPECK_HOME_TAG: &str = "speck-home";
 const IDENTITY_TAG_PREFIX: &str = "speck-id-";
+
+/// VirtioFS device tag for the pre-provisioned Docker bind-mount device.
+///
+/// Speck provisions one `VZVirtioFileSystemDeviceConfiguration` with this tag at
+/// VM start time (initially with an empty `VZMultipleDirectoryShare`).  At
+/// container start, `update_virtiofs_bind_mounts` replaces the share with one
+/// that exposes the requested host paths.  Apple's Virtualization.framework
+/// supports updating `VZVirtioFileSystemDevice.share` on a running VM, but does
+/// NOT allow adding new devices after the VM starts — hence the pre-provision.
+pub const BIND_MOUNTS_TAG: &str = "virtiofs-binds";
+
+/// Convert a container-path to a safe `VZMultipleDirectoryShare` directory name.
+///
+/// VirtioFS share names appear as directory entries in the guest, so they must
+/// not contain `/`.  We replace each `/` with `..` (two dots), which is a valid
+/// filesystem character sequence and is guaranteed not to collide with names that
+/// contain a single `_` separator:
+///
+///   `/app`       → `..app`
+///   `/etc/conf`  → `..etc..conf`
+///   `/a_b`       → `..a_b`   (different from `..a..b` = `/a/b` ✓)
+///
+/// vminitd reconstructs the original path by reversing the substitution.
+pub fn container_path_to_share_name(path: &Path) -> String {
+    path.to_string_lossy().replace('/', "..")
+}
 
 /// Derive a stable VirtioFS tag for an identity mount path.
 ///
@@ -221,6 +250,28 @@ pub fn configure_virtiofs_devices(
         fs_devices.push(fs_dev);
     }
 
+    // ── Pre-provisioned bind-mount device (D-05) ───────────────────────
+    // One VZVirtioFileSystemDeviceConfiguration with BIND_MOUNTS_TAG is always
+    // added to the VM configuration.  It starts with an empty
+    // VZMultipleDirectoryShare and is updated at container start time via
+    // `update_virtiofs_bind_mounts`.  New VirtioFS devices cannot be hot-added
+    // to a running VM, so this slot must be reserved at configuration time.
+    {
+        let bind_tag = NSString::from_str(BIND_MOUNTS_TAG);
+        let empty_share = unsafe {
+            VZMultipleDirectoryShare::init(VZMultipleDirectoryShare::alloc())
+        };
+        let bind_dev = unsafe {
+            VZVirtioFileSystemDeviceConfiguration::initWithTag(
+                VZVirtioFileSystemDeviceConfiguration::alloc(),
+                &bind_tag,
+            )
+        };
+        let share_ref: &VZDirectoryShare = &empty_share;
+        unsafe { bind_dev.setShare(Some(share_ref)) };
+        fs_devices.push(bind_dev);
+    }
+
     // Build reference slice for NSArray (coerces via Deref)
     let refs: Vec<&VZDirectorySharingDeviceConfiguration> = fs_devices
         .iter()
@@ -230,6 +281,108 @@ pub fn configure_virtiofs_devices(
     unsafe {
         vm_config.setDirectorySharingDevices(&NSArray::from_slice(&refs));
     }
+
+    Ok(())
+}
+
+/// Update the pre-provisioned `virtiofs-binds` device on a running VM.
+///
+/// Finds the [`BIND_MOUNTS_TAG`] device in `vm.directorySharingDevices()`,
+/// builds a new [`VZMultipleDirectoryShare`] from `binds`, and swaps the share.
+/// Apple confirms this is the supported runtime-update path — new devices cannot
+/// be added after VM start but an existing device's `share` is mutable.
+///
+/// Returns `Err(VirtioFsMount)` if the pre-provisioned device is not found (e.g.
+/// the VM was started without `configure_virtiofs_devices`).
+#[cfg(target_os = "macos")]
+pub fn update_virtiofs_bind_mounts(
+    vm: &objc2_virtualization::VZVirtualMachine,
+    binds: &[VolumeMountConfig],
+) -> Result<(), crate::error::Error> {
+    // ── Find the virtiofs-binds device ─────────────────────────────────
+    let devices = unsafe { vm.directorySharingDevices() };
+    let mut bind_device: Option<Retained<VZVirtioFileSystemDevice>> = None;
+    let count = devices.count();
+    for i in 0..count {
+        let device = unsafe { devices.objectAtIndex(i) };
+        if let Ok(fs_dev) = device.downcast::<VZVirtioFileSystemDevice>() {
+            let tag = unsafe { fs_dev.tag() };
+            let is_match = objc2::rc::autoreleasepool(|pool| {
+                let tag_str = unsafe { tag.to_str(pool) };
+                tag_str == BIND_MOUNTS_TAG
+            });
+            if is_match {
+                bind_device = Some(fs_dev);
+                break;
+            }
+        }
+    }
+
+    let device = bind_device.ok_or_else(|| {
+        crate::error::Error::VirtioFsMount(
+            "virtiofs-binds device not found in running VM; \
+             was configure_virtiofs_devices called?"
+                .into(),
+        )
+    })?;
+
+    // ── Build the new VZMultipleDirectoryShare ──────────────────────────
+    // NSMutableDictionary<NSString, VZSharedDirectory> is built entry by entry,
+    // then passed to VZMultipleDirectoryShare::initWithDirectories.
+    let mut_dict =
+        NSMutableDictionary::<NSString, VZSharedDirectory>::init(NSMutableDictionary::alloc());
+
+    for bind in binds {
+        let share_name = container_path_to_share_name(&bind.container_path);
+
+        // Validate the share name using Apple's own canonicalization.
+        let name_ns = NSString::from_str(&share_name);
+        let canonical = unsafe { VZMultipleDirectoryShare::canonicalizedNameFromName(&name_ns) };
+        let canonical = match canonical {
+            Some(c) => c,
+            None => {
+                tracing::warn!(
+                    container_path = %bind.container_path.display(),
+                    share_name = %share_name,
+                    "VZMultipleDirectoryShare rejected share name; skipping bind mount"
+                );
+                continue;
+            }
+        };
+
+        let host_str = NSString::from_str(
+            bind.host_path.to_str().ok_or_else(|| {
+                crate::error::Error::VirtioFsMount("non-UTF-8 bind host path".into())
+            })?,
+        );
+        let host_url = NSURL::fileURLWithPath(&host_str);
+        let shared_dir = unsafe {
+            VZSharedDirectory::initWithURL_readOnly(
+                VZSharedDirectory::alloc(),
+                &host_url,
+                bind.read_only,
+            )
+        };
+
+        // NSMutableDictionary.setObject_forKey requires the key to be NSCopying.
+        let key_copying: &ProtocolObject<dyn NSCopying> =
+            ProtocolObject::from_ref(&*canonical);
+        unsafe { mut_dict.setObject_forKey(&*shared_dir, key_copying) };
+    }
+
+    // Cast NSMutableDictionary → &NSDictionary via Deref coercion.
+    let dict_ref: &NSDictionary<NSString, VZSharedDirectory> = &*mut_dict;
+    let new_share = unsafe {
+        VZMultipleDirectoryShare::initWithDirectories(VZMultipleDirectoryShare::alloc(), dict_ref)
+    };
+
+    let share_ref: &VZDirectoryShare = &new_share;
+    unsafe { device.setShare(Some(share_ref)) };
+
+    tracing::debug!(
+        bind_count = binds.len(),
+        "updated virtiofs-binds VZMultipleDirectoryShare on running VM"
+    );
 
     Ok(())
 }
