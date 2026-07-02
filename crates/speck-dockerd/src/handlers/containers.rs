@@ -120,7 +120,15 @@ pub async fn create(
         );
     }
     if let Some(binds) = host_config.binds {
-        labels.insert("speck.binds".into(), binds.join("\u{1f}"));
+        // Validate each bind string eagerly at create time so malformed or
+        // unsafe paths return a 400 error before any label is stored.
+        // (Rule 2 / T-07-06: path-traversal and non-existent host paths are
+        // rejected here rather than silently at container start time.)
+        let validated: Vec<String> = binds
+            .iter()
+            .map(|s| parse_docker_bind(s).map(|b| b.to_label_string()))
+            .collect::<Result<Vec<_>>>()?;
+        labels.insert("speck.binds".into(), validated.join("\u{1f}"));
     }
 
     let image_for_event = body.image.clone();
@@ -365,7 +373,67 @@ impl DockerBind {
 /// - Host path does not exist on the host filesystem.
 /// - Unknown mount mode.
 fn parse_docker_bind(s: &str) -> Result<DockerBind> {
-    todo!("parse_docker_bind not yet implemented")
+    // Split into at most 3 parts: host, container, optional mode.
+    let parts: Vec<&str> = s.splitn(3, ':').collect();
+    let (host, container, read_only) = match parts.as_slice() {
+        [host, container] => (*host, *container, false),
+        [host, container, mode] => {
+            let ro = match *mode {
+                "ro" => true,
+                "rw" => false,
+                other => {
+                    return Err(DockerApiError::BadRequest(format!(
+                        "invalid bind mount mode '{other}'; expected 'ro' or 'rw'"
+                    )));
+                }
+            };
+            (*host, *container, ro)
+        }
+        _ => {
+            return Err(DockerApiError::BadRequest(
+                "bind mount must be in format 'host_path:container_path[:ro|:rw]'".into(),
+            ));
+        }
+    };
+
+    if host.is_empty() {
+        return Err(DockerApiError::BadRequest(
+            "bind host path cannot be empty".into(),
+        ));
+    }
+
+    if container.is_empty() {
+        return Err(DockerApiError::BadRequest(
+            "bind container path cannot be empty".into(),
+        ));
+    }
+
+    let container_path = std::path::Path::new(container);
+    if !container_path.is_absolute() {
+        return Err(DockerApiError::BadRequest(format!(
+            "bind container path must be absolute, got: {container}"
+        )));
+    }
+
+    // Reject path traversal via `..` components.
+    if container.contains("..") {
+        return Err(DockerApiError::BadRequest(format!(
+            "bind container path must not contain '..': {container}"
+        )));
+    }
+
+    let host_path = PathBuf::from(host);
+    if !host_path.exists() {
+        return Err(DockerApiError::BadRequest(format!(
+            "bind host path does not exist: {host}"
+        )));
+    }
+
+    Ok(DockerBind {
+        host_path,
+        container_path: container_path.to_owned(),
+        read_only,
+    })
 }
 
 fn validate_container_name(name: &str) -> Result<()> {
