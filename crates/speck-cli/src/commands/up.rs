@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::process::Stdio;
 
 use anyhow::Context as _;
 use indicatif::ProgressBar;
@@ -26,21 +27,22 @@ async fn ensure_assets(speck_home: &Path) -> anyhow::Result<()> {
     let kernel = speck_home.join("kernel/vmlinux");
     let initrd = speck_home.join(format!("initrd/{KATA_INITRD_FILE}"));
     let rootfs = speck_home.join("rootfs.img");
-    let data   = speck_home.join("data.img");
+    let data = speck_home.join("data.img");
 
     if !kernel.exists() || !initrd.exists() {
-        fetch_kata_assets(speck_home).await
+        fetch_kata_assets(speck_home)
+            .await
             .context("failed to download kernel + initrd")?;
     }
 
     if !rootfs.exists() {
-        fetch_rootfs(speck_home).await
+        fetch_rootfs(speck_home)
+            .await
             .context("failed to download rootfs")?;
     }
 
     if !data.exists() {
-        create_data_disk(&data)
-            .context("failed to create data disk")?;
+        create_data_disk(&data).context("failed to create data disk")?;
     }
 
     Ok(())
@@ -53,7 +55,7 @@ async fn fetch_kata_assets(speck_home: &Path) -> anyhow::Result<()> {
     let initrd_dir = speck_home.join("initrd");
     let kernel_out = kernel_dir.join(KATA_KERNEL_FILE);
     let initrd_out = initrd_dir.join(KATA_INITRD_FILE);
-    let symlink    = kernel_dir.join("vmlinux");
+    let symlink = kernel_dir.join("vmlinux");
 
     println!("  Downloading Kata kernel {KATA_VERSION} (arm64)...");
 
@@ -62,20 +64,24 @@ async fn fetch_kata_assets(speck_home: &Path) -> anyhow::Result<()> {
          /{KATA_VERSION}/kata-static-{KATA_VERSION}-arm64.tar.zst"
     );
 
+    let tmp_dir =
+        std::path::PathBuf::from(format!("/tmp/speck-kata-assets-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp_dir);
+    std::fs::create_dir_all(&tmp_dir)?;
+
     // curl → zstdcat → tar, extracting only the two files we need.
+    // The shell command contains only fixed URLs/filenames; destination paths
+    // are handled below with Rust filesystem calls to avoid shell injection.
     let status = tokio::process::Command::new("bash")
         .args([
             "-c",
             &format!(
-                r#"curl -fsSL {url} | zstdcat -c | tar -C /tmp \
+                r#"curl -fsSL {url} | zstdcat -c | tar -C /tmp/speck-kata-assets-{pid} \
                     --strip-components=5 -xf - \
                     ./opt/kata/share/kata-containers/{KATA_KERNEL_FILE} \
-                    ./opt/kata/share/kata-containers/{KATA_INITRD_FILE} \
-                && mv /tmp/{KATA_KERNEL_FILE} {kernel_out} \
-                && mv /tmp/{KATA_INITRD_FILE} {initrd_out}"#,
+                    ./opt/kata/share/kata-containers/{KATA_INITRD_FILE}"#,
                 url = url,
-                kernel_out = kernel_out.display(),
-                initrd_out = initrd_out.display(),
+                pid = std::process::id(),
             ),
         ])
         .status()
@@ -83,6 +89,10 @@ async fn fetch_kata_assets(speck_home: &Path) -> anyhow::Result<()> {
         .context("failed to run curl/zstdcat — is zstd installed? (brew install zstd)")?;
 
     anyhow::ensure!(status.success(), "kernel download failed");
+
+    std::fs::rename(tmp_dir.join(KATA_KERNEL_FILE), &kernel_out)?;
+    std::fs::rename(tmp_dir.join(KATA_INITRD_FILE), &initrd_out)?;
+    let _ = std::fs::remove_dir_all(&tmp_dir);
 
     // Stable symlink: kernel/vmlinux → vmlinux-6.18.35-197
     let _ = std::fs::remove_file(&symlink);
@@ -96,29 +106,36 @@ async fn fetch_kata_assets(speck_home: &Path) -> anyhow::Result<()> {
 /// Download `speck-rootfs-{VERSION}-{BACKEND}-arm64.img.gz` from GitHub
 /// Releases, verify its SHA-256 checksum, and decompress to `rootfs.img`.
 async fn fetch_rootfs(speck_home: &Path) -> anyhow::Result<()> {
-    let dest     = speck_home.join("rootfs.img");
-    let tmp      = speck_home.join("rootfs.img.tmp");
-    let base     = format!(
-        "https://github.com/wasilak/speck/releases/download/rootfs-{ROOTFS_VERSION}"
-    );
-    let gz_name  = format!("speck-rootfs-{ROOTFS_VERSION}-{ROOTFS_BACKEND}-arm64.img.gz");
+    let dest = speck_home.join("rootfs.img");
+    let tmp = speck_home.join("rootfs.img.tmp");
+    let gz_tmp = speck_home.join("rootfs.img.gz.tmp");
+    let base =
+        format!("https://github.com/wasilak/speck/releases/download/rootfs-{ROOTFS_VERSION}");
+    let gz_name = format!("speck-rootfs-{ROOTFS_VERSION}-{ROOTFS_BACKEND}-arm64.img.gz");
     let sum_name = format!("speck-rootfs-{ROOTFS_VERSION}-{ROOTFS_BACKEND}-arm64.img.sha256");
 
     println!("  Downloading rootfs {ROOTFS_VERSION} ({ROOTFS_BACKEND})...");
 
-    // Download + decompress in one pipeline.
-    let status = tokio::process::Command::new("bash")
-        .args([
-            "-c",
-            &format!(
-                "curl -fsSL --progress-bar {base}/{gz_name} | gunzip -c > {tmp}",
-                tmp = tmp.display(),
-            ),
-        ])
+    let curl_status = tokio::process::Command::new("curl")
+        .args(["-fsSL", "--progress-bar", &format!("{base}/{gz_name}")])
+        .arg("-o")
+        .arg(&gz_tmp)
         .status()
         .await
-        .context("curl/gunzip failed")?;
+        .context("curl failed")?;
+    anyhow::ensure!(curl_status.success(), "rootfs download failed");
+
+    let tmp_file = std::fs::File::create(&tmp)
+        .with_context(|| format!("failed to create {}", tmp.display()))?;
+    let status = tokio::process::Command::new("gunzip")
+        .arg("-c")
+        .arg(&gz_tmp)
+        .stdout(Stdio::from(tmp_file))
+        .status()
+        .await
+        .context("gunzip failed")?;
     anyhow::ensure!(status.success(), "rootfs download failed");
+    let _ = std::fs::remove_file(&gz_tmp);
 
     // Verify SHA-256.
     let sum_bytes = tokio::process::Command::new("curl")
@@ -135,7 +152,8 @@ async fn fetch_rootfs(speck_home: &Path) -> anyhow::Result<()> {
         .to_string();
 
     let actual_out = tokio::process::Command::new("shasum")
-        .args(["-a", "256", &tmp.to_string_lossy()])
+        .args(["-a", "256"])
+        .arg(&tmp)
         .output()
         .await
         .context("shasum failed")?;
@@ -161,7 +179,12 @@ fn create_data_disk(path: &Path) -> anyhow::Result<()> {
     println!("  Creating data disk...");
 
     let status = std::process::Command::new("dd")
-        .args(["if=/dev/zero", &format!("of={}", tmp.display()), "bs=1M", "count=512"])
+        .args([
+            "if=/dev/zero",
+            &format!("of={}", tmp.display()),
+            "bs=1M",
+            "count=512",
+        ])
         .status()
         .context("dd failed")?;
     anyhow::ensure!(status.success(), "dd failed creating data disk");
@@ -184,10 +207,18 @@ fn kill_stale_vm_holders(paths: &[&std::path::Path]) {
             continue;
         };
         for line in out.stdout.split(|&b| b == b'\n') {
-            let Ok(s) = std::str::from_utf8(line) else { continue };
-            let Ok(pid) = s.trim().parse::<u32>() else { continue };
-            if pid == my_pid { continue; }
-            let _ = std::process::Command::new("kill").args(["-9", &pid.to_string()]).status();
+            let Ok(s) = std::str::from_utf8(line) else {
+                continue;
+            };
+            let Ok(pid) = s.trim().parse::<u32>() else {
+                continue;
+            };
+            if pid == my_pid {
+                continue;
+            }
+            let _ = std::process::Command::new("kill")
+                .args(["-9", &pid.to_string()])
+                .status();
             killed_any = true;
         }
     }
@@ -198,8 +229,12 @@ fn kill_stale_vm_holders(paths: &[&std::path::Path]) {
 }
 
 pub async fn run_up(args: UpArgs, speck_home: &Path) -> anyhow::Result<()> {
-    std::fs::create_dir_all(speck_home)
-        .with_context(|| format!("failed to create speck_home directory: {}", speck_home.display()))?;
+    std::fs::create_dir_all(speck_home).with_context(|| {
+        format!(
+            "failed to create speck_home directory: {}",
+            speck_home.display()
+        )
+    })?;
 
     // Auto-download kernel, initrd, rootfs, and data disk on first run.
     ensure_assets(speck_home).await?;
@@ -271,8 +306,7 @@ pub async fn run_up(args: UpArgs, speck_home: &Path) -> anyhow::Result<()> {
     .await
     .context("VM startup task failed")??;
 
-    let (port_map_tx, port_map_rx) =
-        tokio::sync::mpsc::channel::<speck_net::PortMapConfig>(64);
+    let (port_map_tx, port_map_rx) = tokio::sync::mpsc::channel::<speck_net::PortMapConfig>(64);
     guest.set_port_map_channel(port_map_tx)?;
     let netstack_fd = guest.netstack_fd()?;
     let dns_vsock_fd = match guest.connect_dns_vsock(53) {
@@ -286,8 +320,12 @@ pub async fn run_up(args: UpArgs, speck_home: &Path) -> anyhow::Result<()> {
         }
     };
     let net_config = speck_net::config::NetworkConfig::default();
-    let _netstack_handles = speck_net::SpeckNet::new(net_config, Some(53))
-        .spawn(netstack_fd, dns_vsock_fd, vec![], Some(port_map_rx));
+    let _netstack_handles = speck_net::SpeckNet::new(net_config, Some(53)).spawn(
+        netstack_fd,
+        dns_vsock_fd,
+        vec![],
+        Some(port_map_rx),
+    );
 
     spinner.set_message("Starting Docker API proxy...");
     let sock_path = speck_home.join("speck.sock");
@@ -325,8 +363,17 @@ mod tests {
             .find("SpeckNet::new")
             .expect("run_up should still start SpeckNet after readiness");
 
-        assert!(spawn_blocking < start, "guest.start() must be inside the blocking startup section");
-        assert!(start < wait, "guest.start() should happen before guest.wait_for_ready()");
-        assert!(wait < speck_net, "SpeckNet startup must remain after guest readiness");
+        assert!(
+            spawn_blocking < start,
+            "guest.start() must be inside the blocking startup section"
+        );
+        assert!(
+            start < wait,
+            "guest.start() should happen before guest.wait_for_ready()"
+        );
+        assert!(
+            wait < speck_net,
+            "SpeckNet startup must remain after guest readiness"
+        );
     }
 }

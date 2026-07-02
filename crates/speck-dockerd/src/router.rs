@@ -1,4 +1,5 @@
 use axum::Router;
+use axum::extract::DefaultBodyLimit;
 use axum::routing::{delete, get, post};
 
 use crate::handlers::{attach, build, containers, events, exec, images, networks, system, volumes};
@@ -32,7 +33,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/images/{name}/json", get(images::image_inspect))
         .route("/images/{name}/push", post(images::image_push))
         .route("/images/{name}", delete(images::image_remove))
-        .route("/build", post(build::build))
+        .route(
+            "/build",
+            post(build::build).layer(DefaultBodyLimit::max(build::MAX_BUILD_CONTEXT_BYTES)),
+        )
         .route("/networks", get(networks::network_list))
         .route("/networks/create", post(networks::network_create))
         .route(

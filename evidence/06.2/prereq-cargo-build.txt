@@ -1,0 +1,99 @@
+warning: field `dns_vsock_port` is never read
+  --> crates/speck-net/src/lib.rs:36:5
+   |
+34 | pub struct SpeckNet {
+   |            -------- field in this struct
+35 |     config: config::NetworkConfig,
+36 |     dns_vsock_port: Option<u32>,
+   |     ^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+warning: method `bridge_count` is never used
+   --> crates/speck-net/src/reorigin.rs:120:12
+    |
+ 17 | impl ReoriginBridge {
+    | ------------------- method in this implementation
+...
+120 |     pub fn bridge_count(&self) -> usize {
+    |            ^^^^^^^^^^^^
+warning: unused import: `VZDirectoryShare`
+  --> crates/speck-vz/src/virtiofs.rs:11:5
+   |
+11 |     VZDirectoryShare, VZDirectorySharingDeviceConfiguration, VZSharedDirectory,
+   |     ^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+warning: unused import: `std::sync::Arc`
+ --> crates/speck-dockerd/src/buildkit.rs:2:5
+  |
+2 | use std::sync::Arc;
+  |     ^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+warning: field `tail` is never read
+  --> crates/speck-dockerd/src/handlers/attach.rs:43:5
+   |
+33 | pub struct LogsQuery {
+   |            --------- field in this struct
+...
+43 |     tail: Option<String>,
+   |     ^^^^
+   |
+   = note: `LogsQuery` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+warning: multiple fields are never read
+  --> crates/speck-dockerd/src/handlers/build.rs:18:5
+   |
+14 | pub struct BuildQuery {
+   |            ---------- fields in this struct
+...
+18 |     q: Option<bool>,
+   |     ^
+...
+21 |     pull: Option<bool>,
+   |     ^^^^
+22 |     rm: Option<bool>,
+   |     ^^
+23 |     forcerm: Option<bool>,
+   |     ^^^^^^^
+...
+26 |     shmsize: Option<i64>,
+   |     ^^^^^^^
+27 |     ulimits: Option<String>,
+   |     ^^^^^^^
+28 |     networkmode: Option<String>,
+   |     ^^^^^^^^^^^
+...
+31 |     outputs: Option<String>,
+   |     ^^^^^^^
+   |
+   = note: `BuildQuery` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+warning: field `filters` is never read
+  --> crates/speck-dockerd/src/handlers/events.rs:17:5
+   |
+15 | pub struct EventsQuery {
+   |            ----------- field in this struct
+16 |     #[serde(default)]
+17 |     filters: Option<String>,
+   |     ^^^^^^^
+   |
+   = note: `EventsQuery` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+warning: unused import: `std::collections::HashMap`
+ --> crates/speck-cli/src/commands/run.rs:1:5
+  |
+1 | use std::collections::HashMap;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+warning: field `created` is never read
+  --> crates/speck-cli/src/commands/dashboard.rs:22:5
+   |
+17 | struct ContainerRow {
+   |        ------------ field in this struct
+...
+22 |     created: i64,
+   |     ^^^^^^^
+   |
+   = note: `ContainerRow` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+cargo build: 0 errors, 9 warnings (101 crates)

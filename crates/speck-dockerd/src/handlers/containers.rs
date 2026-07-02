@@ -407,6 +407,7 @@ impl DockerBind {
 /// - Empty host or container path.
 /// - Container path is not absolute (does not start with `/`).
 /// - Container path contains `..`.
+/// - Host path is not absolute.
 /// - Host path does not exist on the host filesystem.
 /// - Unknown mount mode.
 fn parse_docker_bind(s: &str) -> Result<DockerBind> {
@@ -460,6 +461,12 @@ fn parse_docker_bind(s: &str) -> Result<DockerBind> {
     }
 
     let host_path = PathBuf::from(host);
+    if !host_path.is_absolute() {
+        return Err(DockerApiError::BadRequest(format!(
+            "bind host path must be absolute, got: {host}"
+        )));
+    }
+
     if !host_path.exists() {
         return Err(DockerApiError::BadRequest(format!(
             "bind host path does not exist: {host}"
@@ -698,6 +705,15 @@ mod tests {
     }
 
     #[test]
+    fn test_containers_bind_relative_existing_host_rejected() {
+        let err = parse_docker_bind(".:/app").unwrap_err();
+        assert!(
+            matches!(err, DockerApiError::BadRequest(_)),
+            "relative host path must be 400 bad request even when it exists"
+        );
+    }
+
+    #[test]
     fn test_containers_bind_unknown_mode_rejected() {
         let err = parse_docker_bind("/tmp:/app:shared").unwrap_err();
         assert!(
@@ -747,7 +763,10 @@ mod tests {
         assert_eq!(reparsed.len(), 2, "both binds must survive the round-trip");
         assert_eq!(reparsed[0].container_path, std::path::PathBuf::from("/app"));
         assert!(!reparsed[0].read_only, "first bind must be read-write");
-        assert_eq!(reparsed[1].container_path, std::path::PathBuf::from("/data"));
+        assert_eq!(
+            reparsed[1].container_path,
+            std::path::PathBuf::from("/data")
+        );
         assert!(reparsed[1].read_only, "second bind must be read-only");
     }
 }

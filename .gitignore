@@ -1,4 +1,6 @@
 .planning/
 .worktrees/
+.claude/
+.serena/
 target/
 *.rlib

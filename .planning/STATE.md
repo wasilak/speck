@@ -1,160 +1,81 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.0
-milestone_name: milestone
-status: completed
-last_updated: "2026-06-30T18:13:01.319Z"
+milestone: v1.1
+milestone_name: — Production Runtime
+status: executing
+last_updated: "2026-07-02T15:20:13.415Z"
+last_activity: 2026-07-02 -- Phase 07 execution started
 progress:
-  total_phases: 7
-  completed_phases: 7
-  total_plans: 37
-  completed_plans: 37
-  percent: 100
+  total_phases: 8
+  completed_phases: 1
+  total_plans: 5
+  completed_plans: 5
+  percent: 13
 ---
 
-# State — 🎉 Phase 6 Complete — Milestone v1.0 Complete
+# State — Milestone v1.1 Production Runtime
 
-**Status:** All 32 plans across 6 phases are complete.
+**Status:** Executing Phase 07
 
-## Phase 06 Complete — Docker API Compat Layer
+## Current Position
 
-Phase 06 (Docker API Compat Layer) is complete across 5 waves and 11 plans:
+Phase: 07 (gap-closure) — EXECUTING
+Plan: 1 of 5
+Status: Executing Phase 07
+Last activity: 2026-07-02 -- Phase 07 execution started
 
-- **06-01** — speck-core types: Container, Image, Volume, Network domain types
-- **06-02** — speck-dockerd scaffold: axum server, hyper_util Unix socket + upgrades, stream.rs frame encode/decode, router + handler stubs
-- **06-03** — Docker API: system (/_ping, /version, /info) + container lifecycle + exec
-- **06-04** — Docker API: attach hijack, logs streaming, image pull/push with registry auth, events SSE, networks + volumes
-- **06-05** — Port publishing: PortPublishBridge in speck-net + smoltcp active-connect to guest IP
-- **06-06** — VirtioFS volumes: multi-device VZVirtioFileSystemDeviceConfiguration + vminitd auto-mount + Ryuk docker.sock symlink
-- **06-07** — BuildKit: vendored proto + tonic codegen + POST /build handler + Guest::buildkitd_unix_proxy()
-- **06-08** — CLI: full speck-cli with clap v4, indicatif, anstream theme, DockerClient, all subcommands
-- **06-09** — spk dashboard: ratatui TUI with container list + log tail + keyboard navigation
-- **06-10** — Codesigning + CI: xtask codesign-dev, release.yml Developer ID + notarytool, Homebrew Formula
-- **06-11** — testcontainers conformance: bollard api_conformance.rs + integration_06.rs end-to-end
+Progress: 0/8 phases complete [░░░░░░░░░░░░░░░░░░░░] 0%
 
-All crates compile cleanly: `speck-net`, `speck-core`, `speck-vz` (with tests), `speck-cli`, and `speck-guest` (cross-compiled).
+## Milestone v1.1 Phase Overview
 
-## Plan 03-04 Complete
+| Phase | Name | Requirements | Status |
+|-------|------|--------------|--------|
+| 07 | Gap Closure | GAP-01..04 | Not started |
+| 08 | Config File & VM Resources | CFG-01..03, VMCFG-01..04 | Not started |
+| 09 | Daemon Lifecycle | DAEMON-01..05 | Not started |
+| 10 | Shell Integration | SHELL-01..03 | Not started |
+| 11 | VPN-Proof DNS | DNS-01..06 | Not started |
+| 12 | Corporate CA Injection | CERT-01..04 | Not started |
+| 13 | Diagnostics | DOCTOR-01..03 | Not started |
+| 14 | Homebrew Distribution | BREW-01..03 | Not started |
 
-- Integration test `test_vsock_echo` + `test_vsock_connect_refused` written and compiles cleanly
-- `#[derive(Debug)]` added to `VzSocket` for test assertions
-- Guest binary `vminitd` built for `aarch64-unknown-linux-musl` (static ELF)
-- Initrd built at `/tmp/speck-initrd.cpio.gz` (186KB, vminitd as `/init`)
-- Cross-compilation fixed: `build.rustc` in `.cargo/config.toml` to resolve Homebrew/Rustup toolchain conflict
-- Test execution blocked on `com.apple.security.virtualization` entitlement — deferred to later development
-- `cargo check -p speck-vz --tests` passes ✅
+## Accumulated Context
 
-## Plan 03-03 Complete
+### Decisions (v1.1)
 
-- `speck-guest` crate with vminitd binary (static musl, `aarch64-unknown-linux-musl`)
-- `vsock_echo::serve()` with AF_VSOCK socket, bind to VMADDR_CID_ANY, listen, accept, echo loop
-- Kernel cmdline parser for `vsock_port=PORT` (default 1234)
-- `libc` dependency for raw socket syscalls
-- `#[cfg(target_os = "linux")]` gated module for cross-compile safety
-- `cargo check --target aarch64-unknown-linux-musl --lib` passes ✅
-- `cargo check --target aarch64-unknown-linux-musl --bin vminitd` passes ✅
-- Commits: `a2d8823`, `27d0ba9`
+- D-09: DNS — never bind host `:53`; VM-internal proxy routes to `SCDynamicStore` resolvers via vsock/high-port; WARP resolvers (`127.0.2.2/3`) are respected via split-DNS domain routing
+- DNS Phase (11) is highest technical risk: SCDynamicStore must use `SCDynamicStoreSetDispatchQueue` — not a raw OS thread, not a tokio task. Wrong model = silent no-op with zero DNS change notifications.
+- Daemon Phase (09) must use launchd LaunchAgent re-exec pattern — `fork()` after Apple framework init is UB (Mach ports not inheritable, libdispatch atfork poison). The `daemonize` crate is banned.
+- CA injection (Phase 12) must happen before containerd/buildkitd start — containerd reads TLS config at startup only (containerd issue #3071). Post-startup injection silently fails.
+- Homebrew (Phase 14) requires a signed `.pkg` artifact shipped as a Cask — Homebrew re-signs binaries, orphaning the notarization staple on a plain `.tar.gz`. `installer -pkg` does not re-sign.
 
-## Plan 03-02 Complete
+### New Crates for v1.1
 
-- `VZVirtioSocketDeviceConfiguration` wired into VM config in `do_start`
-- `VZSocketDevice` extracted from `vm.socketDevices()` after VM start, stored via `VmSocketDevice` Send wrapper
-- `VmCommand::VsockConnect{port, reply}` IPC variant + `do_vsock_connect` handler
-- `do_vsock_connect` calls `connectToPort_completionHandler` with `StackBlock`, `dup()`s fd, wraps in `VzSocket`
-- `Guest::vsock_connect(port)` public API delegating to `VmThread::vsock_connect(port)`
-- `cargo check -p speck-vz` passes ✅
-- Commit: `2f0cd5e`
+| Crate | Location | Purpose |
+|-------|----------|---------|
+| `tracing-appender` 0.2.5 | `speck-cli` | Rolling log file sink for daemon mode |
+| `serde_yaml` 0.9 | `speck-cli` | Deserialize `$SPECK_HOME/config.yaml` |
+| `system-configuration` 0.7.0 | `speck-net` | SCDynamicStore live DNS watcher |
+| `core-foundation` 0.10.1 | `speck-net` | CFString/CFArray for SCDynamicStore dispatch queue |
+| `pem` 3.0.6 | `speck-core` | Parse/split PEM blocks for CA injection |
 
-## Plan 03-01 Complete
+### Watch Out For
 
-- Feature flags: VZSocketDevice*, VZVirtioSocketDevice*, VZVirtioSocketConnection
-- `libc` dependency added
-- Error variants: `VsockConnect`, `VsockTimeout`, `VsockIo`
-- New `vsock` module with `VzSocket` wrapper (read/write/drop via libc)
-- `GuestConfig.vsock_port` field (default 1234) with builder method
-- `cargo check -p speck-vz` passes ✅
-- Commit: `1fe2a66`
+- `system-configuration` + `core-foundation` version compatibility with `objc2-foundation` — run `cargo tree` before adding to `speck-net` to detect CFType conflicts
+- Disk resize in VMCFG-03 requires guest-side `growpart + resize2fs` — resizing the `.img` only changes the block device size
+- DOCKER_HOST conflict: `spk init` writing `DOCKER_HOST` globally redirects all Docker-aware tools; must be opt-in
 
-## Phase 2 Summary
+### Todos
 
-- Kernel boot via `VZLinuxBootLoader` with Kata 3.32.0 kernel
-- VM boots to `Running` in ~120ms via `test_guest_boots_to_running`
-- 10x stress test (`ten_start_stop_cycles`) passes in ~1.76s
-- `VmThread` pattern with serial dispatch queue
-- `VmDelegate` ObjC class for stop/error callbacks
-- `do_stop` with 10s timeout (recv_timeout on mpsc channel)
-- `Drop` impls for clean teardown
-- Ad-hoc codesigning via `speck.entitlements`
-- `scripts/fetch-kernel.sh` downloads Kata kernel + initrd to `$SPECK_HOME`
-- `cargo xtask ci` passes (fmt, clippy, no-print, workspace tests, doctest)
+- [ ] Start Phase 07 planning: `/gsd-plan-phase 7`
 
-## Phase 4 Context Gathered
+### Blockers
 
-- Phase 4 Guest Networking context captured via discuss-phase
-- Decisions: smoltcp Rust-only netstack, 172.16.0.0/24 DHCP, vsock-based DNS proxy, MSS clamping, new speck-net crate
-- Context: `.planning/phases/04-guest-networking/04-CONTEXT.md`
+None.
 
-## Plan 05-01 Complete
+## Previous Milestone (v1.0) — Complete
 
-- GuestConfig extended with 5 new optional fields: rootfs_disk_path, data_disk_path, containerd_vsock_port, buildkitd_vsock_port, ready_vsock_port
-- GuestConfigBuilder has setter methods for all 5 new fields
-- GuestConfig::validate() rejects set-but-missing rootfs_disk_path and data_disk_path
-- Error enum has DiskAttachment(String) and GuestReadyTimeout variants
-- objc2-virtualization features include VZStorageDeviceConfiguration, VZVirtioBlockDeviceConfiguration, VZStorageDeviceAttachment, VZDiskImageStorageDeviceAttachment
-- Commits: `6a55189`, `a074ed9`, `b1b3200`
-
-## Plan 05-02 Complete
-
-- New `sock_forwarder.rs` module: generic vsock→Unix socket bidirectional forwarder
-  - `pub fn serve(vsock_port, unix_path)` loops accepting vsock connections and proxying each to a Unix socket
-  - Private `fn unix_connect(path)` for AF_UNIX SOCK_STREAM connections
-  - Private `fn proxy_copy(read_fd, write_fd)` for bidirectional byte copy
-  - Per-connection: `dup()` all fds, spawn two threads (one per direction)
-- vminitd extended from 51→453 lines with full boot lifecycle:
-  - `mount_early_filesystems()` — /proc (procfs), /sys (sysfs), /dev (devtmpfs)
-  - `mount_disks()` — /dev/vda→/rootfs (ext4), /dev/vdb→/rootfs/var/lib/containerd (ext4, formats if needed)
-  - `spawn_service_with_restart()` for containerd + buildkitd with 1s backoff loop
-  - `wait_for_containerd_socket()` — polls /rootfs/run/containerd/containerd.sock (50x200ms)
-  - `send_ready_signal()` — vsock listen/accept on ready_port, writes b"READY\n"
-  - Two `sock_forwarder::serve()` threads for containerd (port 9001) and buildkitd (port 9002)
-  - 3 new cmdline parsers: `containerd_vsock_port`, `buildkitd_vsock_port`, `ready_vsock_port`
-  - Old `vsock_echo::serve(port)` call removed; PID 1 now loops on infinite sleep
-- `cargo check --target aarch64-unknown-linux-musl -p speck-guest` passes ✅
-- `cargo check --target aarch64-unknown-linux-musl --bin vminitd` passes ✅
-- Commits: `3864bca`, `6ccbc24`
-
-## Plan 05-03 Complete
-
-- `scripts/fetch-rootfs.sh` — download + SHA256 verify + data.img stub creation
-- `xtask/src/main.rs` — `task_init()` extended to call `fetch-rootfs.sh` alongside `fetch-kernel.sh`
-- `.github/workflows/build-rootfs.yml` — CI arm64 ext4 image builder with containerd 2.3.2 + runc 1.5.0 + buildkitd 0.31.1
-- All verifications pass: bash -n, cargo build, YAML validation
-- Commits: `e434612`, `9d510e3`, `7710689`
-
-## Phase 5 Complete
-
-Phase 05 (containerd + BuildKit Integration) is complete across 3 waves and 5 plans:
-
-- **05-01** — GuestConfig: 5 new optional fields + DiskAttachment error variant + objc2-vz features
-- **05-02** — vminitd: sock_forwarder, disk mounting, containerd supervision, READY signal
-- **05-03** — scripts/fetch-rootfs.sh + xtask init extension + .github/workflows/build-rootfs.yml
-- **05-04** — VmThread: disk attachment (VZVirtioBlockDeviceConfiguration) + WaitForGuestReady command + containerd-client dev-dep
-- **05-05** — Guest::wait_for_ready() + Guest::containerd_unix_proxy() + bridge_vsock_unix + integration_05.rs (#[ignore]'d RUN-06 tests)
-
-## Plan 05-05 Complete
-
-- Guest::wait_for_ready() delegates to VmThread::wait_for_ready(ready_vsock_port)
-- Guest::containerd_unix_proxy() bridges vsock port 9001 to temp Unix socket (PID+port unique path)
-- bridge_vsock_unix() copies bytes bidirectionally with dup'd fds for independent ownership
-- integration_05.rs: 3 #[ignore]'d tests — test_vm_boots_with_disks, test_containerd_ready, test_image_pull_alpine
-- cargo test -p speck-vz --test integration_05 passes with 0 passed, 3 ignored
-- Commits: a71d3e7, 65db917
-
-## Decisions
-
-- [Phase ?]: do_wait_for_ready: VsockConnect and VsockTimeout are retriable (ECONNREFUSED expected until vminitd binds port); all other errors propagate immediately
-- [Phase ?]: Disk attachment requires both paths set together (rootfs_disk_path + data_disk_path); if either is None, no storage devices are attached
-- [Phase 06.2]: Actual decision: Podman rejected/uncertain due to API compatibility; classify next action — G1 startup failed before socket exposure; G2-G9 are blocked; WARP/VPN container-side proof is missing, so Podman is not accepted for MVP.
+All 32 plans across 6 phases complete. Phase 06.1 (5 integration bug fixes) in progress when v1.1 planning started — Phase 07 picks up its remaining 2 plans as the first order of business.
 
 ## Performance Metrics
 

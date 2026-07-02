@@ -1,10 +1,10 @@
 use std::ops::{Deref, DerefMut};
 use std::os::fd::AsRawFd;
 use std::os::unix::io::RawFd;
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
-use std::sync::mpsc;
 
 use block2::{RcBlock, StackBlock};
 use dispatch2::{DispatchQueue, DispatchQueueAttr};
@@ -14,14 +14,13 @@ use objc2::rc::{Retained, autoreleasepool};
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::{NSArray, NSError, NSFileHandle, NSString, NSURL};
 use objc2_virtualization::{
-    VZConsoleDeviceConfiguration, VZDiskImageStorageDeviceAttachment,
-    VZEntropyDeviceConfiguration, VZFileHandleNetworkDeviceAttachment,
-    VZFileSerialPortAttachment, VZGenericPlatformConfiguration, VZLinuxBootLoader, VZMACAddress,
-    VZNetworkDeviceAttachment, VZNetworkDeviceConfiguration, VZSerialPortAttachment,
-    VZSocketDevice, VZSocketDeviceConfiguration, VZStorageDeviceAttachment,
-    VZStorageDeviceConfiguration,     VZVirtioBlockDeviceConfiguration,
-    VZVirtioConsoleDeviceConfiguration, VZVirtioConsolePortConfiguration,
-    VZVirtioEntropyDeviceConfiguration,
+    VZConsoleDeviceConfiguration, VZDiskImageStorageDeviceAttachment, VZEntropyDeviceConfiguration,
+    VZFileHandleNetworkDeviceAttachment, VZFileSerialPortAttachment,
+    VZGenericPlatformConfiguration, VZLinuxBootLoader, VZMACAddress, VZNetworkDeviceAttachment,
+    VZNetworkDeviceConfiguration, VZSerialPortAttachment, VZSocketDevice,
+    VZSocketDeviceConfiguration, VZStorageDeviceAttachment, VZStorageDeviceConfiguration,
+    VZVirtioBlockDeviceConfiguration, VZVirtioConsoleDeviceConfiguration,
+    VZVirtioConsolePortConfiguration, VZVirtioEntropyDeviceConfiguration,
     VZVirtioNetworkDeviceConfiguration, VZVirtioSocketConnection, VZVirtioSocketDevice,
     VZVirtioSocketDeviceConfiguration, VZVirtualMachine, VZVirtualMachineConfiguration,
 };
@@ -330,8 +329,7 @@ impl VmThread {
                             }
                         }
                         VmCommand::SetPortMapChannel { tx, reply } => {
-                            let mut ctrl =
-                                control.lock().unwrap_or_else(|e| e.into_inner());
+                            let mut ctrl = control.lock().unwrap_or_else(|e| e.into_inner());
                             ctrl.port_map_tx = Some(tx);
                             drop(ctrl);
                             let _ = reply.send(Ok(()));
@@ -340,8 +338,7 @@ impl VmThread {
                             // Step 1: accumulate bind mounts under the mutex and
                             // collect the full list (VM reference stays in ctrl).
                             let all_binds = {
-                                let mut ctrl =
-                                    control.lock().unwrap_or_else(|e| e.into_inner());
+                                let mut ctrl = control.lock().unwrap_or_else(|e| e.into_inner());
                                 if ctrl.state != InternalState::Running {
                                     let _ = reply.send(Err(Error::NotRunning));
                                     continue;
@@ -359,13 +356,9 @@ impl VmThread {
                             let (done_tx, done_rx) =
                                 mpsc::channel::<std::result::Result<(), Error>>();
                             queue.exec_sync(move || {
-                                let ctrl =
-                                    control_clone.lock().unwrap_or_else(|e| e.into_inner());
+                                let ctrl = control_clone.lock().unwrap_or_else(|e| e.into_inner());
                                 let result = if let Some(ref vm) = *ctrl.machine {
-                                    crate::virtiofs::update_virtiofs_bind_mounts(
-                                        vm,
-                                        &all_binds,
-                                    )
+                                    crate::virtiofs::update_virtiofs_bind_mounts(vm, &all_binds)
                                 } else {
                                     Err(Error::NotRunning)
                                 };
@@ -489,9 +482,8 @@ impl VmThread {
             let virtio_console = VZVirtioConsoleDeviceConfiguration::init(
                 VZVirtioConsoleDeviceConfiguration::alloc(),
             );
-            let port0 = VZVirtioConsolePortConfiguration::init(
-                VZVirtioConsolePortConfiguration::alloc(),
-            );
+            let port0 =
+                VZVirtioConsolePortConfiguration::init(VZVirtioConsolePortConfiguration::alloc());
             port0.setIsConsole(true);
 
             let attachment = VZFileSerialPortAttachment::initWithURL_append_error(
@@ -502,9 +494,7 @@ impl VmThread {
             .map_err(|e| {
                 let desc = e.localizedDescription();
                 let desc = autoreleasepool(|pool| desc.to_str(pool).to_string());
-                Error::VmFramework(format!(
-                    "failed to create serial port attachment: {desc}"
-                ))
+                Error::VmFramework(format!("failed to create serial port attachment: {desc}"))
             })?;
             let attachment_ref: &VZSerialPortAttachment = &attachment;
             port0.setAttachment(Some(attachment_ref));
@@ -843,9 +833,8 @@ impl VmThread {
                                 let raw_fd = unsafe { (*connection).fileDescriptor() };
                                 let dup_fd = unsafe { libc::dup(raw_fd) };
                                 if dup_fd >= 0 {
-                                    let mut c = control_for_block
-                                        .lock()
-                                        .unwrap_or_else(|e| e.into_inner());
+                                    let mut c =
+                                        control_for_block.lock().unwrap_or_else(|e| e.into_inner());
                                     c.dns_vsock_fd = Some(dup_fd);
                                     let _ = done_tx_for_block.send(Ok(dup_fd));
                                 } else {
@@ -858,8 +847,8 @@ impl VmThread {
                                     let ns_error = unsafe { &*error };
                                     let desc = ns_error.localizedDescription();
                                     let err_str = unsafe { desc.to_str(pool).to_string() };
-                                    let _ = done_tx_for_block
-                                        .send(Err(Error::VsockConnect(err_str)));
+                                    let _ =
+                                        done_tx_for_block.send(Err(Error::VsockConnect(err_str)));
                                 });
                             } else {
                                 let _ = done_tx_for_block.send(Err(Error::VsockConnect(
@@ -888,6 +877,15 @@ impl VmThread {
         control: &Arc<Mutex<VmControl>>,
         queue: &DispatchQueue,
         port: u32,
+    ) -> Result<VzSocket, Error> {
+        Self::do_vsock_connect_with_timeout(control, queue, port, Duration::from_secs(30))
+    }
+
+    fn do_vsock_connect_with_timeout(
+        control: &Arc<Mutex<VmControl>>,
+        queue: &DispatchQueue,
+        port: u32,
+        timeout: Duration,
     ) -> Result<VzSocket, Error> {
         // Quick check that a socket device exists before dispatching to the queue.
         {
@@ -950,7 +948,7 @@ impl VmThread {
             }
         });
 
-        match done_rx.recv_timeout(Duration::from_secs(30)) {
+        match done_rx.recv_timeout(timeout) {
             Ok(result) => result,
             Err(_) => Err(Error::VsockTimeout),
         }
@@ -958,15 +956,23 @@ impl VmThread {
 
     /// Poll the guest's ready vsock port until the b"READY\n" signal arrives.
     ///
-    /// Retries up to 30 times with 200 ms sleep between attempts (~6 s max).
+    /// Retries up to 30 times with a 200 ms connect timeout per attempt (~6 s max).
     /// ECONNREFUSED / VsockTimeout are expected until vminitd binds the port.
+    const READY_MAX_ATTEMPTS: usize = 30;
+    const READY_ATTEMPT_TIMEOUT: Duration = Duration::from_millis(200);
+
     fn do_wait_for_ready(
         control: &Arc<Mutex<VmControl>>,
         queue: &DispatchQueue,
         ready_vsock_port: u32,
     ) -> Result<(), Error> {
-        for _ in 0..500 {
-            match Self::do_vsock_connect(control, queue, ready_vsock_port) {
+        for _ in 0..Self::READY_MAX_ATTEMPTS {
+            match Self::do_vsock_connect_with_timeout(
+                control,
+                queue,
+                ready_vsock_port,
+                Self::READY_ATTEMPT_TIMEOUT,
+            ) {
                 Ok(sock) => {
                     let mut buf = [0u8; 6];
                     let mut n = 0;
@@ -983,9 +989,10 @@ impl VmThread {
                         return Err(Error::VsockConnect("unexpected READY signal".into()));
                     }
                 }
-                Err(Error::VsockConnect(_)) | Err(Error::VsockTimeout) => {
+                Err(Error::VsockConnect(_)) => {
                     std::thread::sleep(Duration::from_millis(200));
                 }
+                Err(Error::VsockTimeout) => {}
                 Err(e) => return Err(e),
             }
         }

@@ -1,0 +1,14 @@
+UAT-F01 failure details
+
+Primary failure:
+- Row: UAT-R01 / prerequisite spk up
+- Evidence: evidence/06.2/prereq-spk-up.txt and evidence/06.2/uat-r01-docker-version.txt
+- Failure class: Speck runtime startup bug
+- Detail: ./target/aarch64-apple-darwin/debug/spk up panicked before exposing the Speck Docker socket. The panic is "Cannot block the current thread from within a runtime" from crates/speck-vz/src/vm_thread.rs blocking_send calls.
+- Impact: Docker API, Compose, Testcontainers, and container-side WARP/VPN checks cannot run in this UAT attempt because no backend socket is available.
+
+Secondary failure:
+- Row: UAT-R02
+- Evidence: evidence/06.2/uat-r02-docker-ps.txt
+- Failure class: Speck runtime startup bug
+- Detail: Docker client cannot connect to unix://$HOME/.local/share/speck/speck.sock because spk up did not complete startup.

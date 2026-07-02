@@ -1,0 +1,13 @@
+UAT-F02 blocked details
+
+Blocked rows:
+- UAT-R03 through UAT-R11: require a running Speck Docker API socket. Rerun after fixing the spk up runtime panic captured in evidence/06.2/prereq-spk-up.txt.
+- UAT-W03 through UAT-W07: require a running Speck backend and container execution. Rerun after fixing startup. UAT-W04/UAT-W05/UAT-W07 also require concrete VPN-only hostname/endpoint values to replace the placeholders in the UAT checklist.
+- UAT-W08: WARP/VPN product gate remains blocked because container-side WARP/VPN checks could not run.
+- UAT-C02 through UAT-C05: require a running Speck Docker API socket. Rerun after fixing startup.
+- UAT-T01 through UAT-T04: require a selected Testcontainers suite and a running Speck Docker API socket. Rerun after fixing startup and selecting the suite command.
+
+Prerequisites observed:
+- cargo build passed: evidence/06.2/prereq-cargo-build.txt
+- codesign-dev passed: evidence/06.2/prereq-codesign-dev.txt
+- spk up failed: evidence/06.2/prereq-spk-up.txt

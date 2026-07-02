@@ -224,30 +224,30 @@ fn unix_vsock_proxy(
     // Remove stale socket file if it exists (e.g., from a previous run).
     let _ = std::fs::remove_file(&sock_path);
 
-    let listener =
-        std::os::unix::net::UnixListener::bind(&sock_path).map_err(Error::NetworkIo)?;
+    let listener = std::os::unix::net::UnixListener::bind(&sock_path).map_err(Error::NetworkIo)?;
 
     // Persistent proxy thread: accepts multiple clients, each gets its own vsock connection.
-    std::thread::spawn(move || loop {
-        match listener.accept() {
-            Ok((stream, _)) => match connector() {
-                Ok(vsock) => {
-                    std::thread::spawn(move || bridge_vsock_unix(vsock, stream));
-                }
+    std::thread::spawn(move || {
+        loop {
+            match listener.accept() {
+                Ok((stream, _)) => match connector() {
+                    Ok(vsock) => {
+                        std::thread::spawn(move || bridge_vsock_unix(vsock, stream));
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "vsock connect failed for {label} proxy client");
+                    }
+                },
                 Err(e) => {
-                    tracing::warn!(error = %e, "vsock connect failed for {label} proxy client");
+                    tracing::warn!(error = %e, "{label} unix listener accept error; proxy exiting");
+                    break;
                 }
-            },
-            Err(e) => {
-                tracing::warn!(error = %e, "{label} unix listener accept error; proxy exiting");
-                break;
             }
         }
     });
 
     Ok(())
 }
-
 
 /// Bidirectional byte bridge between a [`VzSocket`] (vsock) and a [`UnixStream`].
 ///
@@ -265,7 +265,13 @@ fn bridge_vsock_unix(vsock: VzSocket, stream: std::os::unix::net::UnixStream) {
     }
     let vsock_dup = unsafe { VzSocket::from_raw_fd(dup_fd) };
 
-    let stream_clone = stream.try_clone().expect("clone unix stream");
+    let stream_clone = match stream.try_clone() {
+        Ok(stream) => stream,
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to clone unix stream for vsock bridge; dropping connection");
+            return;
+        }
+    };
 
     // Cancellation pipe: the vsock→unix thread writes a byte when it finishes;
     // the unix→vsock poll() wakes up and exits cleanly.
@@ -304,16 +310,32 @@ fn bridge_vsock_unix(vsock: VzSocket, stream: std::os::unix::net::UnixStream) {
         let vsock_write = vsock_dup;
         unsafe {
             let flags = libc::fcntl(stream_fd, libc::F_GETFL, 0);
-            libc::fcntl(stream_fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
+            if flags < 0 || libc::fcntl(stream_fd, libc::F_SETFL, flags | libc::O_NONBLOCK) < 0 {
+                tracing::warn!(error = %std::io::Error::last_os_error(), "failed to set unix stream nonblocking; dropping connection");
+                libc::write(cancel_w, b"\0".as_ptr() as *const libc::c_void, 1);
+                libc::close(cancel_w);
+                libc::close(cancel_r);
+                return;
+            }
         }
         let mut buf = [0u8; 65536];
         'outer: loop {
             let mut fds = [
-                libc::pollfd { fd: stream_fd, events: libc::POLLIN, revents: 0 },
-                libc::pollfd { fd: cancel_r,  events: libc::POLLIN, revents: 0 },
+                libc::pollfd {
+                    fd: stream_fd,
+                    events: libc::POLLIN,
+                    revents: 0,
+                },
+                libc::pollfd {
+                    fd: cancel_r,
+                    events: libc::POLLIN,
+                    revents: 0,
+                },
             ];
             let ret = unsafe { libc::poll(fds.as_mut_ptr(), 2, -1) };
-            if ret <= 0 { break; }
+            if ret <= 0 {
+                break;
+            }
 
             if fds[1].revents & libc::POLLIN != 0 {
                 break;
@@ -327,7 +349,9 @@ fn bridge_vsock_unix(vsock: VzSocket, stream: std::os::unix::net::UnixStream) {
                     if n <= 0 {
                         if n < 0 {
                             let e = std::io::Error::last_os_error();
-                            if e.kind() == std::io::ErrorKind::WouldBlock { break; }
+                            if e.kind() == std::io::ErrorKind::WouldBlock {
+                                break;
+                            }
                         }
                         break 'outer;
                     }

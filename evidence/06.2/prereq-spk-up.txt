@@ -1,0 +1,218 @@
+
+thread 'main' (27424246) panicked at crates/speck-vz/src/vm_thread.rs:797:14:
+Cannot block the current thread from within a runtime. This happens because a function attempted to block the current thread while the thread is being used to drive asynchronous tasks.
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'main' (27424246) panicked at crates/speck-vz/src/vm_thread.rs:821:14:
+Cannot block the current thread from within a runtime. This happens because a function attempted to block the current thread while the thread is being used to drive asynchronous tasks.
+stack backtrace:
+   0:        0x100aac860 - std[7d7552da0923e8b2]::backtrace_rs::backtrace::libunwind::trace
+                               at /rustc/ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96/library/std/src/../../backtrace/src/backtrace/libunwind.rs:117:9
+   1:        0x100aac860 - std[7d7552da0923e8b2]::backtrace_rs::backtrace::trace_unsynchronized::<std[7d7552da0923e8b2]::sys::backtrace::_print_fmt::{closure#1}>
+                               at /rustc/ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96/library/std/src/../../backtrace/src/backtrace/mod.rs:66:14
+   2:        0x100aac860 - std[7d7552da0923e8b2]::sys::backtrace::_print_fmt
+                               at /rustc/ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96/library/std/src/sys/backtrace.rs:74:9
+   3:        0x100aac860 - <<std[7d7552da0923e8b2]::sys::backtrace::BacktraceLock>::print::DisplayBacktrace as core[4b39a0a778b8475a]::fmt::Display>::fmt
+                               at /rustc/ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96/library/std/src/sys/backtrace.rs:44:26
+   4:        0x100ac27c0 - <core[4b39a0a778b8475a]::fmt::rt::Argument>::fmt
+                               at /rustc/ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96/library/core/src/fmt/rt.rs:152:76
+   5:        0x100ac27c0 - core[4b39a0a778b8475a]::fmt::write
+                               at /rustc/ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96/library/core/src/fmt/mod.rs:1687:22
+   6:        0x100ab2d6c - std[7d7552da0923e8b2]::io::default_write_fmt::<std[7d7552da0923e8b2]::sys::stdio::unix::Stderr>
+                               at /rustc/ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96/library/std/src/io/mod.rs:621:11
+   7:        0x100ab2d6c - <std[7d7552da0923e8b2]::sys::stdio::unix::Stderr as std[7d7552da0923e8b2]::io::Write>::write_fmt
+                               at /rustc/ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96/library/std/src/io/mod.rs:1976:13
+   8:        0x100a929a4 - <std[7d7552da0923e8b2]::sys::backtrace::BacktraceLock>::print
+                               at /rustc/ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96/library/std/src/sys/backtrace.rs:47:25
+   9:        0x100a929a4 - std[7d7552da0923e8b2]::panicking::default_hook::{closure#0}
+                               at /rustc/ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96/library/std/src/panicking.rs:292:27
+  10:        0x100aa5d54 - std[7d7552da0923e8b2]::panicking::default_hook
+                               at /rustc/ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96/library/std/src/panicking.rs:319:9
+  11:        0x100aa607c - std[7d7552da0923e8b2]::panicking::panic_with_hook
+                               at /rustc/ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96/library/std/src/panicking.rs:825:13
+  12:        0x100a92a50 - std[7d7552da0923e8b2]::panicking::panic_handler::{closure#0}
+                               at /rustc/ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96/library/std/src/panicking.rs:698:13
+  13:        0x100a87dc4 - std[7d7552da0923e8b2]::sys::backtrace::__rust_end_short_backtrace::<std[7d7552da0923e8b2]::panicking::panic_handler::{closure#0}, !>
+                               at /rustc/ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96/library/std/src/sys/backtrace.rs:182:18
+  14:        0x100a933a8 - __rustc[8068f81614cfe5c]::rust_begin_unwind
+                               at /rustc/ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96/library/std/src/panicking.rs:689:5
+  15:        0x100aeb354 - core[4b39a0a778b8475a]::panicking::panic_fmt
+                               at /rustc/ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96/library/core/src/panicking.rs:80:14
+  16:        0x100aeb094 - core[4b39a0a778b8475a]::panicking::panic_display::<&str>
+                               at /rustc/ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96/library/core/src/panicking.rs:259:5
+  17:        0x100aeb094 - core[4b39a0a778b8475a]::option::expect_failed
+                               at /rustc/ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96/library/core/src/option.rs:2260:5
+  18:        0x10058fcb4 - core::option::Option<T>::expect::hb5df9864a4b0c45a
+                               at /Users/piotrek/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/src/rust/library/core/src/option.rs:971:21
+  19:        0x100549878 - tokio::future::block_on::block_on::h85c883d18bfb2f54
+                               at /Users/piotrek/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.52.3/src/future/block_on.rs:6:74
+  20:        0x10057f2f8 - tokio::sync::mpsc::bounded::Sender<T>::blocking_send::h966e18d5fde7b101
+                               at /Users/piotrek/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.52.3/src/sync/mpsc/bounded.rs:1047:9
+  21:        0x100588f3c - speck_vz::vm_thread::VmThread::send_shutdown::h03498bd041b450fb
+                               at /Users/piotrek/git/speck/crates/speck-vz/src/vm_thread.rs:821:14
+  22:        0x10056c2c0 - <speck_vz::guest::Guest as core::ops::drop::Drop>::drop::h14d5ad90fadfac43
+                               at /Users/piotrek/git/speck/crates/speck-vz/src/guest.rs:291:29
+  23:        0x10056a8a0 - core::ptr::drop_in_place<speck_vz::guest::Guest>::he652171319416ec1
+                               at /Users/piotrek/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/src/rust/library/core/src/ptr/mod.rs:810:1
+  24:        0x1003c17c4 - spk::commands::up::run_up::{{closure}}::ha5797e06dfe7c5d0
+                               at /Users/piotrek/git/speck/crates/speck-cli/src/commands/up.rs:103:1
+  25:        0x1003041f8 - spk::main::{{closure}}::h3ab7216c4e4cd648
+                               at /Users/piotrek/git/speck/crates/speck-cli/src/main.rs:128:71
+  26:        0x10036eac4 - tokio::runtime::park::CachedParkThread::block_on::{{closure}}::hc7a003be9b621a77
+                               at /Users/piotrek/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.52.3/src/runtime/park.rs:284:71
+  27:        0x10036e5b0 - tokio::task::coop::with_budget::hba2a6343def59a7d
+                               at /Users/piotrek/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.52.3/src/task/coop/mod.rs:167:5
+  28:        0x10036e5b0 - tokio::task::coop::budget::h0dd44f7aee7feee7
+                               at /Users/piotrek/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.52.3/src/task/coop/mod.rs:133:5
+  29:        0x10036e5b0 - tokio::runtime::park::CachedParkThread::block_on::h9e696354659d9ecf
+                               at /Users/piotrek/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.52.3/src/runtime/park.rs:284:31
+  30:        0x1003052e8 - tokio::runtime::context::blocking::BlockingRegionGuard::block_on::hfe25a0dfdaf9fcd9
+                               at /Users/piotrek/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.52.3/src/runtime/context/blocking.rs:66:14
+  31:        0x100358400 - tokio::runtime::scheduler::multi_thread::MultiThread::block_on::{{closure}}::h46d481b30ee0b429
+                               at /Users/piotrek/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.52.3/src/runtime/scheduler/multi_thread/mod.rs:92:22
+  32:        0x100311edc - tokio::runtime::context::runtime::enter_runtime::h517dc9cc260c5948
+                               at /Users/piotrek/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.52.3/src/runtime/context/runtime.rs:65:16
+  33:        0x100358360 - tokio::runtime::scheduler::multi_thread::MultiThread::block_on::h384f240b9308ea93
+                               at /Users/piotrek/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.52.3/src/runtime/scheduler/multi_thread/mod.rs:91:9
+  34:        0x1002b7ff0 - tokio::runtime::runtime::Runtime::block_on_inner::hb918ad9a3ac201ac
+                               at /Users/piotrek/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.52.3/src/runtime/runtime.rs:373:50
+  35:        0x1002b8214 - tokio::runtime::runtime::Runtime::block_on::h230ecaa36a1991ea
+                               at /Users/piotrek/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.52.3/src/runtime/runtime.rs:345:18
+  36:        0x1003fb8f0 - spk::main::hb5fab116cda55c2d
+                               at /Users/piotrek/git/speck/crates/speck-cli/src/main.rs:140:7
+  37:        0x1003cceb0 - core::ops::function::FnOnce::call_once::h1e223528cd12228b
+                               at /Users/piotrek/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/src/rust/library/core/src/ops/function.rs:250:5
+  38:        0x1003cba90 - std::sys::backtrace::__rust_begin_short_backtrace::h7caa3bdc24c9ff6d
+                               at /Users/piotrek/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/src/rust/library/std/src/sys/backtrace.rs:166:18
+  39:        0x10036b968 - std::rt::lang_start::{{closure}}::h1a0bed5a68ec9b25
+                               at /Users/piotrek/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/src/rust/library/std/src/rt.rs:206:18
+  40:        0x100aa4e20 - <&dyn core[4b39a0a778b8475a]::ops::function::Fn<(), Output = i32> + core[4b39a0a778b8475a]::marker::Sync + core[4b39a0a778b8475a]::panic::unwind_safe::RefUnwindSafe as core[4b39a0a778b8475a]::ops::function::FnOnce<()>>::call_once
+                               at /rustc/ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96/library/core/src/ops/function.rs:287:21
+  41:        0x100aa4e20 - std[7d7552da0923e8b2]::panicking::catch_unwind::do_call::<&dyn core[4b39a0a778b8475a]::ops::function::Fn<(), Output = i32> + core[4b39a0a778b8475a]::marker::Sync + core[4b39a0a778b8475a]::panic::unwind_safe::RefUnwindSafe, i32>
+                               at /rustc/ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96/library/std/src/panicking.rs:581:40
+  42:        0x100aa4e20 - std[7d7552da0923e8b2]::panicking::catch_unwind::<i32, &dyn core[4b39a0a778b8475a]::ops::function::Fn<(), Output = i32> + core[4b39a0a778b8475a]::marker::Sync + core[4b39a0a778b8475a]::panic::unwind_safe::RefUnwindSafe>
+                               at /rustc/ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96/library/std/src/panicking.rs:544:19
+  43:        0x100aa4e20 - std[7d7552da0923e8b2]::panic::catch_unwind::<&dyn core[4b39a0a778b8475a]::ops::function::Fn<(), Output = i32> + core[4b39a0a778b8475a]::marker::Sync + core[4b39a0a778b8475a]::panic::unwind_safe::RefUnwindSafe, i32>
+                               at /rustc/ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96/library/std/src/panic.rs:359:14
+  44:        0x100aa4e20 - std[7d7552da0923e8b2]::rt::lang_start_internal::{closure#0}
+                               at /rustc/ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96/library/std/src/rt.rs:175:24
+  45:        0x100aa4e20 - std[7d7552da0923e8b2]::panicking::catch_unwind::do_call::<std[7d7552da0923e8b2]::rt::lang_start_internal::{closure#0}, isize>
+                               at /rustc/ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96/library/std/src/panicking.rs:581:40
+  46:        0x100aa4e20 - std[7d7552da0923e8b2]::panicking::catch_unwind::<isize, std[7d7552da0923e8b2]::rt::lang_start_internal::{closure#0}>
+                               at /rustc/ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96/library/std/src/panicking.rs:544:19
+  47:        0x100aa4e20 - std[7d7552da0923e8b2]::panic::catch_unwind::<std[7d7552da0923e8b2]::rt::lang_start_internal::{closure#0}, isize>
+                               at /rustc/ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96/library/std/src/panic.rs:359:14
+  48:        0x100aa4e20 - std[7d7552da0923e8b2]::rt::lang_start_internal
+                               at /rustc/ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96/library/std/src/rt.rs:171:5
+  49:        0x10036b940 - std::rt::lang_start::hc8bf841af1dcd5f6
+                               at /Users/piotrek/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/src/rust/library/std/src/rt.rs:205:5
+  50:        0x100401d24 - _main
+
+thread 'main' (27424246) panicked at crates/speck-vz/src/vm_thread.rs:925:29:
+Cannot block the current thread from within a runtime. This happens because a function attempted to block the current thread while the thread is being used to drive asynchronous tasks.
+stack backtrace:
+   0:        0x100aac860 - std[7d7552da0923e8b2]::backtrace_rs::backtrace::libunwind::trace
+                               at /rustc/ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96/library/std/src/../../backtrace/src/backtrace/libunwind.rs:117:9
+   1:        0x100aac860 - std[7d7552da0923e8b2]::backtrace_rs::backtrace::trace_unsynchronized::<std[7d7552da0923e8b2]::sys::backtrace::_print_fmt::{closure#1}>
+                               at /rustc/ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96/library/std/src/../../backtrace/src/backtrace/mod.rs:66:14
+   2:        0x100aac860 - std[7d7552da0923e8b2]::sys::backtrace::_print_fmt
+                               at /rustc/ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96/library/std/src/sys/backtrace.rs:74:9
+   3:        0x100aac860 - <<std[7d7552da0923e8b2]::sys::backtrace::BacktraceLock>::print::DisplayBacktrace as core[4b39a0a778b8475a]::fmt::Display>::fmt
+                               at /rustc/ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96/library/std/src/sys/backtrace.rs:44:26
+   4:        0x100ac27c0 - <core[4b39a0a778b8475a]::fmt::rt::Argument>::fmt
+                               at /rustc/ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96/library/core/src/fmt/rt.rs:152:76
+   5:        0x100ac27c0 - core[4b39a0a778b8475a]::fmt::write
+                               at /rustc/ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96/library/core/src/fmt/mod.rs:1687:22
+   6:        0x100ab2d6c - std[7d7552da0923e8b2]::io::default_write_fmt::<std[7d7552da0923e8b2]::sys::stdio::unix::Stderr>
+                               at /rustc/ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96/library/std/src/io/mod.rs:621:11
+   7:        0x100ab2d6c - <std[7d7552da0923e8b2]::sys::stdio::unix::Stderr as std[7d7552da0923e8b2]::io::Write>::write_fmt
+                               at /rustc/ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96/library/std/src/io/mod.rs:1976:13
+   8:        0x100a929a4 - <std[7d7552da0923e8b2]::sys::backtrace::BacktraceLock>::print
+                               at /rustc/ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96/library/std/src/sys/backtrace.rs:47:25
+   9:        0x100a929a4 - std[7d7552da0923e8b2]::panicking::default_hook::{closure#0}
+                               at /rustc/ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96/library/std/src/panicking.rs:292:27
+  10:        0x100aa5d54 - std[7d7552da0923e8b2]::panicking::default_hook
+                               at /rustc/ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96/library/std/src/panicking.rs:319:9
+  11:        0x100aa607c - std[7d7552da0923e8b2]::panicking::panic_with_hook
+                               at /rustc/ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96/library/std/src/panicking.rs:825:13
+  12:        0x100a92a50 - std[7d7552da0923e8b2]::panicking::panic_handler::{closure#0}
+                               at /rustc/ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96/library/std/src/panicking.rs:698:13
+  13:        0x100a87dc4 - std[7d7552da0923e8b2]::sys::backtrace::__rust_end_short_backtrace::<std[7d7552da0923e8b2]::panicking::panic_handler::{closure#0}, !>
+                               at /rustc/ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96/library/std/src/sys/backtrace.rs:182:18
+  14:        0x100a933a8 - __rustc[8068f81614cfe5c]::rust_begin_unwind
+                               at /rustc/ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96/library/std/src/panicking.rs:689:5
+  15:        0x100aeb354 - core[4b39a0a778b8475a]::panicking::panic_fmt
+                               at /rustc/ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96/library/core/src/panicking.rs:80:14
+  16:        0x100aeb094 - core[4b39a0a778b8475a]::panicking::panic_display::<&str>
+                               at /rustc/ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96/library/core/src/panicking.rs:259:5
+  17:        0x100aeb094 - core[4b39a0a778b8475a]::option::expect_failed
+                               at /rustc/ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96/library/core/src/option.rs:2260:5
+  18:        0x10058fcb4 - core::option::Option<T>::expect::hb5df9864a4b0c45a
+                               at /Users/piotrek/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/src/rust/library/core/src/option.rs:971:21
+  19:        0x100549878 - tokio::future::block_on::block_on::h85c883d18bfb2f54
+                               at /Users/piotrek/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.52.3/src/future/block_on.rs:6:74
+  20:        0x10057f2f8 - tokio::sync::mpsc::bounded::Sender<T>::blocking_send::h966e18d5fde7b101
+                               at /Users/piotrek/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.52.3/src/sync/mpsc/bounded.rs:1047:9
+  21:        0x10056c8a0 - <speck_vz::vm_thread::VmThread as core::ops::drop::Drop>::drop::hee042faa422e4dfd
+                               at /Users/piotrek/git/speck/crates/speck-vz/src/vm_thread.rs:925:29
+  22:        0x10056ac98 - core::ptr::drop_in_place<speck_vz::vm_thread::VmThread>::h4c00e830ca9575f3
+                               at /Users/piotrek/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/src/rust/library/core/src/ptr/mod.rs:810:1
+  23:        0x10056a8b0 - core::ptr::drop_in_place<speck_vz::guest::Guest>::he652171319416ec1
+                               at /Users/piotrek/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/src/rust/library/core/src/ptr/mod.rs:810:1
+  24:        0x1003c17c4 - spk::commands::up::run_up::{{closure}}::ha5797e06dfe7c5d0
+                               at /Users/piotrek/git/speck/crates/speck-cli/src/commands/up.rs:103:1
+  25:        0x1003041f8 - spk::main::{{closure}}::h3ab7216c4e4cd648
+                               at /Users/piotrek/git/speck/crates/speck-cli/src/main.rs:128:71
+  26:        0x10036eac4 - tokio::runtime::park::CachedParkThread::block_on::{{closure}}::hc7a003be9b621a77
+                               at /Users/piotrek/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.52.3/src/runtime/park.rs:284:71
+  27:        0x10036e5b0 - tokio::task::coop::with_budget::hba2a6343def59a7d
+                               at /Users/piotrek/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.52.3/src/task/coop/mod.rs:167:5
+  28:        0x10036e5b0 - tokio::task::coop::budget::h0dd44f7aee7feee7
+                               at /Users/piotrek/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.52.3/src/task/coop/mod.rs:133:5
+  29:        0x10036e5b0 - tokio::runtime::park::CachedParkThread::block_on::h9e696354659d9ecf
+                               at /Users/piotrek/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.52.3/src/runtime/park.rs:284:31
+  30:        0x1003052e8 - tokio::runtime::context::blocking::BlockingRegionGuard::block_on::hfe25a0dfdaf9fcd9
+                               at /Users/piotrek/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.52.3/src/runtime/context/blocking.rs:66:14
+  31:        0x100358400 - tokio::runtime::scheduler::multi_thread::MultiThread::block_on::{{closure}}::h46d481b30ee0b429
+                               at /Users/piotrek/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.52.3/src/runtime/scheduler/multi_thread/mod.rs:92:22
+  32:        0x100311edc - tokio::runtime::context::runtime::enter_runtime::h517dc9cc260c5948
+                               at /Users/piotrek/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.52.3/src/runtime/context/runtime.rs:65:16
+  33:        0x100358360 - tokio::runtime::scheduler::multi_thread::MultiThread::block_on::h384f240b9308ea93
+                               at /Users/piotrek/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.52.3/src/runtime/scheduler/multi_thread/mod.rs:91:9
+  34:        0x1002b7ff0 - tokio::runtime::runtime::Runtime::block_on_inner::hb918ad9a3ac201ac
+                               at /Users/piotrek/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.52.3/src/runtime/runtime.rs:373:50
+  35:        0x1002b8214 - tokio::runtime::runtime::Runtime::block_on::h230ecaa36a1991ea
+                               at /Users/piotrek/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.52.3/src/runtime/runtime.rs:345:18
+  36:        0x1003fb8f0 - spk::main::hb5fab116cda55c2d
+                               at /Users/piotrek/git/speck/crates/speck-cli/src/main.rs:140:7
+  37:        0x1003cceb0 - core::ops::function::FnOnce::call_once::h1e223528cd12228b
+                               at /Users/piotrek/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/src/rust/library/core/src/ops/function.rs:250:5
+  38:        0x1003cba90 - std::sys::backtrace::__rust_begin_short_backtrace::h7caa3bdc24c9ff6d
+                               at /Users/piotrek/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/src/rust/library/std/src/sys/backtrace.rs:166:18
+  39:        0x10036b968 - std::rt::lang_start::{{closure}}::h1a0bed5a68ec9b25
+                               at /Users/piotrek/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/src/rust/library/std/src/rt.rs:206:18
+  40:        0x100aa4e20 - <&dyn core[4b39a0a778b8475a]::ops::function::Fn<(), Output = i32> + core[4b39a0a778b8475a]::marker::Sync + core[4b39a0a778b8475a]::panic::unwind_safe::RefUnwindSafe as core[4b39a0a778b8475a]::ops::function::FnOnce<()>>::call_once
+                               at /rustc/ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96/library/core/src/ops/function.rs:287:21
+  41:        0x100aa4e20 - std[7d7552da0923e8b2]::panicking::catch_unwind::do_call::<&dyn core[4b39a0a778b8475a]::ops::function::Fn<(), Output = i32> + core[4b39a0a778b8475a]::marker::Sync + core[4b39a0a778b8475a]::panic::unwind_safe::RefUnwindSafe, i32>
+                               at /rustc/ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96/library/std/src/panicking.rs:581:40
+  42:        0x100aa4e20 - std[7d7552da0923e8b2]::panicking::catch_unwind::<i32, &dyn core[4b39a0a778b8475a]::ops::function::Fn<(), Output = i32> + core[4b39a0a778b8475a]::marker::Sync + core[4b39a0a778b8475a]::panic::unwind_safe::RefUnwindSafe>
+                               at /rustc/ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96/library/std/src/panicking.rs:544:19
+  43:        0x100aa4e20 - std[7d7552da0923e8b2]::panic::catch_unwind::<&dyn core[4b39a0a778b8475a]::ops::function::Fn<(), Output = i32> + core[4b39a0a778b8475a]::marker::Sync + core[4b39a0a778b8475a]::panic::unwind_safe::RefUnwindSafe, i32>
+                               at /rustc/ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96/library/std/src/panic.rs:359:14
+  44:        0x100aa4e20 - std[7d7552da0923e8b2]::rt::lang_start_internal::{closure#0}
+                               at /rustc/ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96/library/std/src/rt.rs:175:24
+  45:        0x100aa4e20 - std[7d7552da0923e8b2]::panicking::catch_unwind::do_call::<std[7d7552da0923e8b2]::rt::lang_start_internal::{closure#0}, isize>
+                               at /rustc/ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96/library/std/src/panicking.rs:581:40
+  46:        0x100aa4e20 - std[7d7552da0923e8b2]::panicking::catch_unwind::<isize, std[7d7552da0923e8b2]::rt::lang_start_internal::{closure#0}>
+                               at /rustc/ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96/library/std/src/panicking.rs:544:19
+  47:        0x100aa4e20 - std[7d7552da0923e8b2]::panic::catch_unwind::<std[7d7552da0923e8b2]::rt::lang_start_internal::{closure#0}, isize>
+                               at /rustc/ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96/library/std/src/panic.rs:359:14
+  48:        0x100aa4e20 - std[7d7552da0923e8b2]::rt::lang_start_internal
+                               at /rustc/ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96/library/std/src/rt.rs:171:5
+  49:        0x10036b940 - std::rt::lang_start::hc8bf841af1dcd5f6
+                               at /Users/piotrek/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/src/rust/library/std/src/rt.rs:205:5
+  50:        0x100401d24 - _main
+
+thread 'main' (27424246) panicked at /rustc/ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96/library/core/src/panicking.rs:233:5:
+panic in a destructor during cleanup
+thread caused non-unwinding panic. aborting.

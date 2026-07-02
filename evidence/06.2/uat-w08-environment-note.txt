@@ -1,0 +1,19 @@
+UAT-W08 environment note
+
+This UAT attempt could not execute container-side WARP/VPN checks because spk up failed before exposing the Speck Docker API socket.
+
+Host-side DNS and route state was captured:
+- evidence/06.2/uat-w01-host-scutil-dns.txt
+- evidence/06.2/uat-w02-host-netstat-rn.txt
+
+Container-side WARP/VPN rows remain blocked:
+- UAT-W03: container /etc/resolv.conf
+- UAT-W04: VPN-only internal hostname lookup
+- UAT-W05: VPN-only internal endpoint health check
+- UAT-W06: Cloudflare trace from inside container
+- UAT-W07: WARP/VPN toggle loop
+
+Rerun requirement:
+1. Fix the spk up runtime panic captured in evidence/06.2/prereq-spk-up.txt.
+2. Provide concrete values for <vpn-only-internal-hostname> and <vpn-only-internal-endpoint>.
+3. Rerun UAT-W03 through UAT-W07 with WARP/VPN enabled.
