@@ -2407,8 +2407,10 @@ name = "speck-vz"
 version = "0.1.0"
 dependencies = [
  "block2",
+ "bollard",
  "containerd-client",
  "dispatch2",
+ "futures-util",
  "libc",
  "objc2",
  "objc2-foundation",
@@ -2417,6 +2419,7 @@ dependencies = [
  "socket2 0.5.10",
  "speck-core",
  "speck-net",
+ "tar",
  "thiserror 2.0.18",
  "tokio",
  "tracing",

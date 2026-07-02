@@ -61,7 +61,10 @@ tracing = "0.1"
 speck-net = { path = "../speck-net" }
 
 [dev-dependencies]
+bollard = "0.21.0"
 containerd-client = "0.9.0"
+futures-util = "0.3"
 speck-net = { path = "../speck-net" }
 smoltcp = "0.13"
-tokio = { version = "1.52", features = ["rt", "macros"] }
+tar = "0.4"
+tokio = { version = "1.52", features = ["rt", "macros", "net", "time"] }
