@@ -4,6 +4,7 @@ use clap::Parser;
 use tracing_subscriber::EnvFilter;
 
 mod commands;
+mod config;
 mod docker_client;
 mod theme;
 
@@ -52,6 +53,12 @@ struct UpArgs {
     rootfs: Option<PathBuf>,
     #[arg(long)]
     data_disk: Option<PathBuf>,
+    #[arg(long)]
+    cpus: Option<u64>,
+    #[arg(long)]
+    memory: Option<u64>,
+    #[arg(long)]
+    disk: Option<u64>,
 }
 
 #[derive(Parser)]
