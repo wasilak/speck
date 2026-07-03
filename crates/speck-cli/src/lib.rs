@@ -5,6 +5,7 @@ use clap::Parser;
 mod commands;
 mod config;
 pub mod docker_client;
+mod shell;
 mod theme;
 
 #[derive(Parser)]

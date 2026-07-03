@@ -850,4 +850,38 @@ mod tests {
 
         assert!(containers < guest_stop);
     }
+
+    #[test]
+    fn run_up_uses_shared_shell_renderer_for_exports() {
+        let source = include_str!("up.rs");
+        let run_up_start = source.find("pub async fn run_up").unwrap();
+        let tests_start = source.find("#[cfg(test)]").unwrap();
+        let run_up = &source[run_up_start..tests_start];
+
+        assert!(
+            run_up.contains("shell::render_env"),
+            "run_up production code must call shell::render_env instead of hardcoding export strings"
+        );
+        assert!(
+            run_up.contains("shell::render_speck_home"),
+            "run_up production code must call shell::render_speck_home for the SPECK_HOME export"
+        );
+    }
+
+    #[test]
+    fn run_up_production_no_literal_docker_host_export() {
+        let source = include_str!("up.rs");
+        let run_up_start = source.find("pub async fn run_up").unwrap();
+        let tests_start = source.find("#[cfg(test)]").unwrap();
+        let run_up = &source[run_up_start..tests_start];
+
+        assert!(
+            !run_up.contains("export DOCKER_HOST="),
+            "run_up production code must not hardcode `export DOCKER_HOST=`; use shell::render_env instead"
+        );
+        assert!(
+            !run_up.contains("export SPECK_HOME="),
+            "run_up production code must not hardcode `export SPECK_HOME=`; use shell::render_speck_home instead"
+        );
+    }
 }
