@@ -142,6 +142,11 @@ mod tests {
     const MAIN_SOURCE: &str = include_str!("main.rs");
     const CLI_MANIFEST: &str = include_str!("../Cargo.toml");
 
+    fn production_source() -> &'static str {
+        let end = MAIN_SOURCE.find("#[cfg(test)]").unwrap_or(MAIN_SOURCE.len());
+        &MAIN_SOURCE[..end]
+    }
+
     #[test]
     fn up_args_do_not_use_clap_env_annotations() {
         assert!(
@@ -206,6 +211,43 @@ mod tests {
         assert!(
             MAIN_SOURCE.contains("foreground: bool"),
             "UpArgs must expose --foreground as a bool flag"
+        );
+    }
+
+    #[test]
+    fn env_command_registered() {
+        let production = production_source();
+        assert!(
+            production.contains("Env("),
+            "spk env subcommand must be registered as a variant in the Commands enum"
+        );
+    }
+
+    #[test]
+    fn env_command_dispatched() {
+        let main_fn = &MAIN_SOURCE[MAIN_SOURCE
+            .rfind("async fn main()")
+            .expect("main.rs must define async main")..];
+        assert!(
+            main_fn.contains("commands::env::run_env"),
+            "the env subcommand dispatch arm must invoke the run_env entrypoint"
+        );
+    }
+
+    #[test]
+    fn env_args_exposes_shell_flag_with_supported_values() {
+        let production = production_source();
+        assert!(
+            production.contains("shell: String"),
+            "EnvArgs must carry a String field for the --shell selector"
+        );
+        assert!(
+            production.contains("posix"),
+            "EnvArgs --shell must advertise posix as a supported value"
+        );
+        assert!(
+            production.contains("fish"),
+            "EnvArgs --shell must advertise fish as a supported value"
         );
     }
 
