@@ -122,6 +122,17 @@ fn resolve_speck_home() -> PathBuf {
     PathBuf::from(home).join(".local/share/speck")
 }
 
+fn init_tracing(log_level: &str) -> anyhow::Result<()> {
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::try_new(log_level)?)
+        .try_init()
+        .map_err(|err| anyhow::anyhow!(err))
+}
+
+fn default_tracing_filter() -> String {
+    std::env::var("RUST_LOG").unwrap_or_else(|_| "info".into())
+}
+
 #[cfg(test)]
 mod tests {
     const MAIN_SOURCE: &str = include_str!("main.rs");
@@ -189,24 +200,55 @@ mod tests {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env())
-        .init();
-
     let cli = Cli::parse();
     let speck_home = resolve_speck_home();
 
     match cli.command {
-        Commands::Up(args) => commands::up::run_up(args, &speck_home).await?,
-        Commands::Down => commands::down::run_down(&speck_home).await?,
-        Commands::Run(args) => commands::run::run_run(args, &speck_home).await?,
-        Commands::Ps => commands::ps::run_ps(&speck_home).await?,
-        Commands::Exec(args) => commands::exec::run_exec(args, &speck_home).await?,
-        Commands::Stop(args) => commands::stop::run_stop(args, &speck_home).await?,
-        Commands::Rm(args) => commands::rm::run_rm(args, &speck_home).await?,
-        Commands::Build(args) => commands::build::run_build(args, &speck_home).await?,
-        Commands::Dashboard => commands::dashboard::run_dashboard(&speck_home).await?,
-        Commands::Completion(args) => commands::completion::run_completion(args),
+        Commands::Up(args) => {
+            let (file_config, warnings) = config::load_config_file(&speck_home)?;
+            let effective = config::resolve_effective_config(file_config, &args)?;
+            init_tracing(&effective.log_level)?;
+            for warning in warnings {
+                eprintln!("warning: unknown config key: {}", warning.path);
+            }
+            commands::up::run_up(args, &speck_home, effective).await?
+        }
+        Commands::Down => {
+            init_tracing(&default_tracing_filter())?;
+            commands::down::run_down(&speck_home).await?
+        }
+        Commands::Run(args) => {
+            init_tracing(&default_tracing_filter())?;
+            commands::run::run_run(args, &speck_home).await?
+        }
+        Commands::Ps => {
+            init_tracing(&default_tracing_filter())?;
+            commands::ps::run_ps(&speck_home).await?
+        }
+        Commands::Exec(args) => {
+            init_tracing(&default_tracing_filter())?;
+            commands::exec::run_exec(args, &speck_home).await?
+        }
+        Commands::Stop(args) => {
+            init_tracing(&default_tracing_filter())?;
+            commands::stop::run_stop(args, &speck_home).await?
+        }
+        Commands::Rm(args) => {
+            init_tracing(&default_tracing_filter())?;
+            commands::rm::run_rm(args, &speck_home).await?
+        }
+        Commands::Build(args) => {
+            init_tracing(&default_tracing_filter())?;
+            commands::build::run_build(args, &speck_home).await?
+        }
+        Commands::Dashboard => {
+            init_tracing(&default_tracing_filter())?;
+            commands::dashboard::run_dashboard(&speck_home).await?
+        }
+        Commands::Completion(args) => {
+            init_tracing(&default_tracing_filter())?;
+            commands::completion::run_completion(args)
+        }
     }
 
     Ok(())

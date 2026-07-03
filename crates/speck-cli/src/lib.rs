@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use clap::Parser;
 
 mod commands;
+mod config;
 pub mod docker_client;
 mod theme;
 
@@ -51,6 +52,12 @@ struct UpArgs {
     rootfs: Option<PathBuf>,
     #[arg(long)]
     data_disk: Option<PathBuf>,
+    #[arg(long)]
+    cpus: Option<u64>,
+    #[arg(long)]
+    memory: Option<u64>,
+    #[arg(long)]
+    disk: Option<u64>,
 }
 
 #[derive(Parser)]

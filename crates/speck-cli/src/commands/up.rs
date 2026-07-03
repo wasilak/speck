@@ -6,6 +6,7 @@ use indicatif::ProgressBar;
 use speck_net::config::NetworkConfig;
 use speck_vz::config::GuestConfig;
 
+use crate::config::EffectiveConfig;
 use crate::UpArgs;
 use crate::theme::{NEON_CYAN, RESET};
 
@@ -228,7 +229,11 @@ fn kill_stale_vm_holders(paths: &[&std::path::Path]) {
     }
 }
 
-pub async fn run_up(args: UpArgs, speck_home: &Path) -> anyhow::Result<()> {
+pub async fn run_up(
+    args: UpArgs,
+    speck_home: &Path,
+    _effective: EffectiveConfig,
+) -> anyhow::Result<()> {
     std::fs::create_dir_all(speck_home).with_context(|| {
         format!(
             "failed to create speck_home directory: {}",
