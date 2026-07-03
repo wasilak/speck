@@ -530,9 +530,45 @@ mod linux {
             }
         }
 
+        grow_data_filesystem_if_needed("/dev/vdb", "/rootfs/var/lib/containerd");
+
         // Create runtime directories needed by containerd
         let _ = std::fs::create_dir_all("/rootfs/run");
         let _ = std::fs::create_dir_all("/rootfs/tmp");
+    }
+
+    /// Grow the mounted ext4 data filesystem to match the current block device size.
+    ///
+    /// This is fatal because continuing with the old filesystem size after the
+    /// host grew `data.img` would silently violate the configured VM disk size.
+    fn grow_data_filesystem_if_needed(device: &str, mountpoint: &str) {
+        if !std::path::Path::new(mountpoint).exists() {
+            eprintln!("vminitd: data filesystem mountpoint missing for {device}: {mountpoint}");
+            std::process::exit(1);
+        }
+
+        let resize_tool = "/sbin/resize2fs";
+        if !std::path::Path::new(resize_tool).exists() {
+            eprintln!("vminitd: data filesystem resize tool missing or failed for {device}: {resize_tool} not found");
+            std::process::exit(1);
+        }
+
+        eprintln!("vminitd: growing data filesystem on {device}");
+        match run_resize_tool(resize_tool, &[device]) {
+            Ok(status) if status.success() => {}
+            Ok(status) => {
+                eprintln!("vminitd: resize2fs failed with {status}");
+                std::process::exit(1);
+            }
+            Err(e) => {
+                eprintln!("vminitd: data filesystem resize tool missing or failed for {device}: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+
+    fn run_resize_tool(tool: &str, args: &[&str]) -> io::Result<std::process::ExitStatus> {
+        std::process::Command::new(tool).args(args).status()
     }
 
     /// Return true only when a bounded signature probe positively reports that
@@ -1391,9 +1427,13 @@ mod tests {
         let grow = SOURCE
             .find(&grow_call)
             .expect("mount_disks should grow /dev/vdb after mounting it");
-        let runtime_dir = SOURCE
+        let runtime_dir = SOURCE[grow..]
             .find("std::fs::create_dir_all(\"/rootfs/run\")")
+            .map(|offset| grow + offset)
             .expect("mount_disks should create /rootfs/run");
+        let boot_mount = SOURCE
+            .find("mount_disks();")
+            .expect("boot path should mount disks before services");
         let dockerd_spawn = SOURCE
             .find("spawn_dockerd_with_restart")
             .expect("boot path should support dockerd startup");
@@ -1403,7 +1443,7 @@ mod tests {
 
         assert!(data_mount < grow, "data filesystem must grow only after /dev/vdb mount succeeds");
         assert!(grow < runtime_dir, "data filesystem must grow before runtime directories are created");
-        assert!(grow < dockerd_spawn, "data filesystem must grow before dockerd starts");
-        assert!(grow < service_spawn, "data filesystem must grow before containerd/buildkitd start");
+        assert!(boot_mount < dockerd_spawn, "disk mounting/growth must happen before dockerd starts");
+        assert!(boot_mount < service_spawn, "disk mounting/growth must happen before containerd/buildkitd start");
     }
 }
