@@ -21,7 +21,7 @@ const KATA_INITRD_FILE: &str = "kata-alpine-3.22.initrd";
 ///
 /// This makes `spk up` self-bootstrapping: first run works with no separate
 /// init step, exactly like `colima start`.
-async fn ensure_assets(speck_home: &Path) -> anyhow::Result<()> {
+async fn ensure_assets(speck_home: &Path, requested_disk_gb: u64) -> anyhow::Result<()> {
     std::fs::create_dir_all(speck_home.join("kernel"))?;
     std::fs::create_dir_all(speck_home.join("initrd"))?;
 
@@ -42,9 +42,7 @@ async fn ensure_assets(speck_home: &Path) -> anyhow::Result<()> {
             .context("failed to download rootfs")?;
     }
 
-    if !data.exists() {
-        create_data_disk(&data).context("failed to create data disk")?;
-    }
+    reconcile_data_disk(&data, requested_disk_gb).context("failed to reconcile data disk")?;
 
     Ok(())
 }
@@ -174,24 +172,50 @@ async fn fetch_rootfs(speck_home: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Create a blank 512 MiB ext4 data disk image.
-fn create_data_disk(path: &Path) -> anyhow::Result<()> {
-    let tmp = path.with_extension("img.tmp");
-    println!("  Creating data disk...");
+pub fn requested_disk_bytes(requested_gb: u64) -> anyhow::Result<u64> {
+    requested_gb
+        .checked_mul(1024)
+        .and_then(|bytes| bytes.checked_mul(1024))
+        .and_then(|bytes| bytes.checked_mul(1024))
+        .context("requested disk size overflows u64 bytes")
+}
 
-    let status = std::process::Command::new("dd")
-        .args([
-            "if=/dev/zero",
-            &format!("of={}", tmp.display()),
-            "bs=1M",
-            "count=512",
-        ])
-        .status()
-        .context("dd failed")?;
-    anyhow::ensure!(status.success(), "dd failed creating data disk");
+pub fn reconcile_data_disk(path: &Path, requested_gb: u64) -> anyhow::Result<()> {
+    let requested_bytes = requested_disk_bytes(requested_gb)?;
 
-    std::fs::rename(&tmp, path)?;
-    println!("  Data disk ready: {}", path.display());
+    if !path.exists() {
+        let tmp = path.with_extension("img.tmp");
+        let _ = std::fs::remove_file(&tmp);
+        println!("  Creating data disk ({requested_gb} GiB)...");
+        let file = std::fs::File::create(&tmp)
+            .with_context(|| format!("failed to create {}", tmp.display()))?;
+        file.set_len(requested_bytes)
+            .with_context(|| format!("failed to size {}", tmp.display()))?;
+        std::fs::rename(&tmp, path)
+            .with_context(|| format!("failed to install {}", path.display()))?;
+        println!("  Data disk ready: {}", path.display());
+        return Ok(());
+    }
+
+    let current_bytes = std::fs::metadata(path)
+        .with_context(|| format!("failed to inspect {}", path.display()))?
+        .len();
+    if requested_bytes < current_bytes {
+        anyhow::bail!(
+            "disk shrink not supported: requested {requested_gb} GiB but current disk is {} GiB",
+            current_bytes / 1024 / 1024 / 1024
+        );
+    }
+    if requested_bytes > current_bytes {
+        println!("  Growing data disk to {requested_gb} GiB...");
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(path)
+            .with_context(|| format!("failed to open {}", path.display()))?;
+        file.set_len(requested_bytes)
+            .with_context(|| format!("failed to grow {}", path.display()))?;
+    }
+
     Ok(())
 }
 
@@ -232,7 +256,7 @@ fn kill_stale_vm_holders(paths: &[&std::path::Path]) {
 pub async fn run_up(
     args: UpArgs,
     speck_home: &Path,
-    _effective: EffectiveConfig,
+    effective: EffectiveConfig,
 ) -> anyhow::Result<()> {
     std::fs::create_dir_all(speck_home).with_context(|| {
         format!(
@@ -242,7 +266,7 @@ pub async fn run_up(
     })?;
 
     // Auto-download kernel, initrd, rootfs, and data disk on first run.
-    ensure_assets(speck_home).await?;
+    ensure_assets(speck_home, effective.vm.disk_gb).await?;
 
     let kernel_path = args
         .kernel
@@ -424,7 +448,9 @@ mod tests {
     #[test]
     fn run_up_no_longer_uses_fixed_512_mib_data_disk_creation() {
         let source = include_str!("up.rs");
-        let run_up = &source[source.find("pub async fn run_up").unwrap()..];
+        let run_up_start = source.find("pub async fn run_up").unwrap();
+        let tests_start = source.find("#[cfg(test)]").unwrap();
+        let run_up = &source[run_up_start..tests_start];
 
         assert!(run_up.contains("ensure_assets(speck_home, effective.vm.disk_gb).await"));
         assert!(!run_up.contains("create_data_disk"));
