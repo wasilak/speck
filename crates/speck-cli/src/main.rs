@@ -158,6 +158,33 @@ mod tests {
             "sysinfo must be a speck-cli dependency"
         );
     }
+
+    #[test]
+    fn main_initializes_tracing_from_effective_log_level_before_run_up() {
+        let main_fn = &MAIN_SOURCE[MAIN_SOURCE
+            .rfind("async fn main()")
+            .expect("main.rs must define async main")..];
+        let load_config = main_fn
+            .find("load_config_file(&speck_home)")
+            .expect("Commands::Up must load $SPECK_HOME/config.yaml before dispatch");
+        let resolve_config = main_fn
+            .find("resolve_effective_config(file_config, &args)")
+            .expect("Commands::Up must resolve EffectiveConfig before dispatch");
+        let init_tracing = main_fn
+            .find("init_tracing(&effective.log_level)")
+            .expect("Commands::Up must initialize tracing from EffectiveConfig.log_level");
+        let run_up = main_fn
+            .find("commands::up::run_up(args, &speck_home, effective).await")
+            .expect("Commands::Up must pass pre-resolved EffectiveConfig to run_up");
+
+        assert!(load_config < resolve_config);
+        assert!(resolve_config < init_tracing);
+        assert!(init_tracing < run_up);
+        assert!(
+            main_fn.contains("warning: unknown config key:"),
+            "unknown config keys must print the exact warning prefix"
+        );
+    }
 }
 
 #[tokio::main]
