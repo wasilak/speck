@@ -1,8 +1,65 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
-pub async fn run_down(_speck_home: &Path) -> anyhow::Result<()> {
-    println!("spk down: send SIGTERM to running 'spk up' process to shut down the VM.");
-    println!("Alternatively, Ctrl-C the 'spk up' process.");
+use anyhow::Context as _;
+use tokio::io::AsyncReadExt;
+use tokio::net::UnixStream;
+
+const LAUNCHD_LABEL: &str = "io.speck.vm";
+
+pub async fn run_down(speck_home: &Path) -> anyhow::Result<()> {
+    // Step 1 — Liveness check: confirm the daemon is running before issuing bootout
+    let sock_path = speck_home.join("run/control.sock");
+    let mut stream = UnixStream::connect(&sock_path)
+        .await
+        .context("daemon is not running (control socket not reachable — start with spk up)")?;
+    let mut buf = [0u8; 8];
+    let _ = stream.read(&mut buf).await;
+    drop(stream);
+    tracing::info!("daemon is alive, proceeding with shutdown");
+
+    // Step 2 — Issue bootout: triggers SIGTERM → daemon performs graceful VM shutdown
+    let out = std::process::Command::new("id")
+        .arg("-u")
+        .output()
+        .context("failed to run id -u")?;
+    let uid_str = std::str::from_utf8(&out.stdout)
+        .context("non-UTF8 uid")?
+        .trim()
+        .to_owned();
+    let status = tokio::process::Command::new("launchctl")
+        .args(["bootout", &format!("gui/{uid_str}/{LAUNCHD_LABEL}")])
+        .status()
+        .await
+        .context("launchctl bootout failed")?;
+    if !status.success() {
+        tracing::warn!("launchctl bootout returned non-zero (daemon may already be stopping)");
+    }
+
+    // Step 3 — Remove io.speck.vm.plist to prevent auto-registration on next login
+    let home = std::env::var("HOME").context("HOME not set")?;
+    let plist_path = PathBuf::from(home)
+        .join("Library/LaunchAgents")
+        .join("io.speck.vm.plist");
+    match std::fs::remove_file(&plist_path) {
+        Ok(()) => tracing::info!("plist removed"),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => tracing::warn!(error = %e, "failed to remove plist"),
+    }
+
+    // Step 4 — Poll for clean shutdown: wait until control.sock disappears (timeout 30s)
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while sock_path.exists() {
+        if Instant::now() >= deadline {
+            tracing::warn!("daemon did not stop within 30 seconds");
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+
+    // Step 5 — User-facing confirmation
+    println!("Speck stopped.");
+
     Ok(())
 }
 
