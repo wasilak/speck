@@ -6,7 +6,7 @@ use indicatif::ProgressBar;
 use speck_net::config::NetworkConfig;
 use speck_vz::config::GuestConfig;
 
-use crate::config::EffectiveConfig;
+use crate::config::{EffectiveConfig, EffectiveVmConfig};
 use crate::UpArgs;
 use crate::theme::{NEON_CYAN, RESET};
 
@@ -219,6 +219,84 @@ pub fn reconcile_data_disk(path: &Path, requested_gb: u64) -> anyhow::Result<()>
     Ok(())
 }
 
+pub fn read_vm_resource_snapshot(speck_home: &Path) -> anyhow::Result<Option<EffectiveVmConfig>> {
+    let path = speck_home.join("run/vm-config.json");
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let contents = std::fs::read_to_string(&path)
+        .with_context(|| format!("failed to read {}", path.display()))?;
+    let snapshot = serde_json::from_str(&contents)
+        .with_context(|| format!("failed to decode {}", path.display()))?;
+    Ok(Some(snapshot))
+}
+
+pub fn write_vm_resource_snapshot(speck_home: &Path, vm: &EffectiveVmConfig) -> anyhow::Result<()> {
+    let run_dir = speck_home.join("run");
+    std::fs::create_dir_all(&run_dir)
+        .with_context(|| format!("failed to create {}", run_dir.display()))?;
+    let path = run_dir.join("vm-config.json");
+    let tmp = run_dir.join("vm-config.json.tmp");
+    let contents = serde_json::to_vec_pretty(vm).context("failed to encode VM resource snapshot")?;
+    std::fs::write(&tmp, contents).with_context(|| format!("failed to write {}", tmp.display()))?;
+    std::fs::rename(&tmp, &path)
+        .with_context(|| format!("failed to install {}", path.display()))?;
+    Ok(())
+}
+
+pub fn runtime_holders_exist(paths: &[&Path]) -> bool {
+    let my_pid = std::process::id();
+
+    for path in paths {
+        let Ok(out) = std::process::Command::new("lsof")
+            .args(["-t", &path.to_string_lossy()])
+            .output()
+        else {
+            continue;
+        };
+        for line in out.stdout.split(|&b| b == b'\n') {
+            let Ok(s) = std::str::from_utf8(line) else {
+                continue;
+            };
+            let Ok(pid) = s.trim().parse::<u32>() else {
+                continue;
+            };
+            if pid != my_pid {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
+pub fn ensure_no_active_vm_resource_mismatch(
+    speck_home: &Path,
+    rootfs_disk_path: &Path,
+    data_disk_path: &Path,
+    requested: &EffectiveVmConfig,
+) -> anyhow::Result<()> {
+    if !runtime_holders_exist(&[rootfs_disk_path, data_disk_path]) {
+        return Ok(());
+    }
+
+    let Some(previous) = read_vm_resource_snapshot(speck_home)? else {
+        return Ok(());
+    };
+    if previous.cpus != requested.cpus || previous.memory_mb != requested.memory_mb {
+        anyhow::bail!(
+            "VM resource change requires restart: old cpus={} memory_mb={}, new cpus={} memory_mb={}. Stop the VM and run spk up again.",
+            previous.cpus,
+            previous.memory_mb,
+            requested.cpus,
+            requested.memory_mb
+        );
+    }
+
+    Ok(())
+}
+
 /// Kill any processes that hold an exclusive lock on the given disk image paths.
 fn kill_stale_vm_holders(paths: &[&std::path::Path]) {
     let my_pid = std::process::id();
@@ -293,13 +371,22 @@ pub async fn run_up(
         .clone()
         .unwrap_or_else(|| speck_home.join("data.img"));
 
+    ensure_no_active_vm_resource_mismatch(
+        speck_home,
+        &rootfs_disk_path,
+        &data_disk_path,
+        &effective.vm,
+    )?;
+
     kill_stale_vm_holders(&[&rootfs_disk_path, &data_disk_path]);
 
     let mut builder = GuestConfig::builder()
         .kernel_path(kernel_path)
         .initrd_path(initrd_path)
-        .rootfs_disk_path(rootfs_disk_path)
-        .data_disk_path(data_disk_path)
+        .rootfs_disk_path(rootfs_disk_path.clone())
+        .data_disk_path(data_disk_path.clone())
+        .cpu_count(effective.vm.cpus)
+        .memory_size_bytes(effective.vm.memory_mb * 1024 * 1024)
         .containerd_vsock_port(9001)
         .buildkitd_vsock_port(9002)
         .ready_vsock_port(9000)
@@ -334,6 +421,8 @@ pub async fn run_up(
     })
     .await
     .context("VM startup task failed")??;
+
+    write_vm_resource_snapshot(speck_home, &effective.vm)?;
 
     let (port_map_tx, port_map_rx) = tokio::sync::mpsc::channel::<speck_net::PortMapConfig>(64);
     guest.set_port_map_channel(port_map_tx)?;

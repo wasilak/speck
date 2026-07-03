@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use anyhow::Context as _;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 const CONFIG_FILE: &str = "config.yaml";
 const CONFIG_VERSION: u64 = 1;
@@ -51,7 +51,7 @@ impl Default for EffectiveConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct EffectiveVmConfig {
     pub cpus: u64,
     pub memory_mb: u64,
