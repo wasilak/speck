@@ -168,11 +168,21 @@ Plans:
 
   1. Running `spk up`, closing the terminal, then running `docker ps` in a new terminal still lists running containers — daemon survives terminal close
   2. Running `spk down` stops the VM and the background process cleanly; subsequent `docker ps` fails to connect
-  3. Running `spk restart` brings the runtime back up without manual intervention — graceful stop followed by fresh start
+  3. Running `spk down && spk up` performs a graceful stop followed by a fresh start (DAEMON-04 deferred from first-class `spk restart` per CONTEXT.md §Deferred)
   4. Running `spk up --foreground` streams structured logs to stdout until interrupted — suitable for CI environments
   5. `$SPECK_HOME/speck.log` grows with log entries while the daemon is running; daemon liveness is detected via `$SPECK_HOME/run/control.sock`, not a PID file
 
-**Plans**: TBD
+**Plans**: 3 plans
+
+Plans:
+**Wave 1**
+
+- [ ] 09-01-PLAN.md — tracing-appender gate + SizeRotatingFileAppender logging module (Wave 1, has checkpoint)
+- [ ] 09-03-PLAN.md — spk down: full run_down implementation — ping socket, bootout, plist removal, shutdown poll (Wave 1)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 09-02-PLAN.md — LaunchAgent re-exec in main.rs + daemonize() + control socket + SIGTERM + shutdown_gracefully() in up.rs (Wave 2)
 
 ### Phase 10: Shell Environment Integration
 
