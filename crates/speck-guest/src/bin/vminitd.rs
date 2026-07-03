@@ -1464,14 +1464,19 @@ mod tests {
             .find("vminitd: resize2fs failed")
             .map(|offset| helper + offset)
             .expect("unsuccessful resize2fs exit should emit an explicit diagnostic");
-        let fatal_exit = SOURCE[helper..]
+        let missing_fatal_exit = SOURCE[missing_or_failed..]
             .find("std::process::exit(1)")
-            .map(|offset| helper + offset)
-            .expect("resize failure must fail closed by exiting PID 1");
+            .map(|offset| missing_or_failed + offset)
+            .expect("missing resize tool must fail closed by exiting PID 1");
+        let failed_fatal_exit = SOURCE[resize_failed..]
+            .find("std::process::exit(1)")
+            .map(|offset| resize_failed + offset)
+            .expect("failed resize2fs status must fail closed by exiting PID 1");
 
         assert!(helper < resize_tool, "helper should name the resize2fs tool it runs");
         assert!(resize_tool < missing_or_failed, "tool probe should happen before missing-tool diagnostic");
         assert!(resize_tool < resize_failed, "tool invocation should happen before failed-status diagnostic");
-        assert!(resize_tool < fatal_exit, "resize errors must exit non-zero after selecting resize2fs");
+        assert!(missing_or_failed < missing_fatal_exit, "missing resize tool must exit non-zero after diagnostic");
+        assert!(resize_failed < failed_fatal_exit, "failed resize2fs status must exit non-zero after diagnostic");
     }
 }
