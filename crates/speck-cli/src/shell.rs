@@ -10,16 +10,32 @@ pub enum EnvShell {
 /// `TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE`, derived from `speck_home`.
 ///
 /// The socket path is `speck_home/speck.sock`; the Docker host string uses
-/// the `unix://` scheme. STUB: real implementation lands in the GREEN commit.
-pub fn render_env(_speck_home: &Path, _shell: EnvShell) -> String {
-    String::new()
+/// the `unix://` scheme. POSIX shells receive `export KEY=VALUE` lines, fish
+/// receives `set -gx KEY VALUE` lines. Output always ends with a trailing
+/// newline so callers can concatenate it safely.
+pub fn render_env(speck_home: &Path, shell: EnvShell) -> String {
+    let sock_path = speck_home.join("speck.sock");
+    let docker_host = format!("unix://{}", sock_path.display());
+    match shell {
+        EnvShell::Posix => format!(
+            "export DOCKER_HOST={docker_host}\nexport TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock\n"
+        ),
+        EnvShell::Fish => format!(
+            "set -gx DOCKER_HOST {docker_host};\nset -gx TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE /var/run/docker.sock;\n"
+        ),
+    }
 }
 
 /// Render the single shell export/set line for `SPECK_HOME`.
 ///
-/// STUB: real implementation lands in the GREEN commit.
-pub fn render_speck_home(_speck_home: &Path, _shell: EnvShell) -> String {
-    String::new()
+/// POSIX shells receive `export SPECK_HOME=<home>`, fish receives
+/// `set -gx SPECK_HOME <home>;`. Output always ends with a trailing newline.
+pub fn render_speck_home(speck_home: &Path, shell: EnvShell) -> String {
+    let home = speck_home.display();
+    match shell {
+        EnvShell::Posix => format!("export SPECK_HOME={home}\n"),
+        EnvShell::Fish => format!("set -gx SPECK_HOME {home};\n"),
+    }
 }
 
 #[cfg(test)]

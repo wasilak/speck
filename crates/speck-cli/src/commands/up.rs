@@ -12,6 +12,7 @@ use tokio::signal::unix::{signal, SignalKind};
 
 use crate::config::{EffectiveConfig, EffectiveVmConfig};
 use crate::docker_client::DockerClient;
+use crate::shell::{self, EnvShell};
 use crate::UpArgs;
 use crate::theme::{NEON_CYAN, RESET};
 
@@ -524,8 +525,8 @@ pub async fn run_up(
     spinner.finish_with_message(format!("{NEON_CYAN}Speck is running{RESET}"));
 
     println!();
-    println!("export DOCKER_HOST=unix://{}", sock_path.display());
-    println!("export SPECK_HOME={}", speck_home.display());
+    print!("{}", shell::render_env(speck_home, EnvShell::Posix));
+    print!("{}", shell::render_speck_home(speck_home, EnvShell::Posix));
     println!();
 
     std::fs::create_dir_all(speck_home.join("run"))?;
