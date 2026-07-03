@@ -1337,3 +1337,44 @@ mod linux {
         Some(octets)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    const SOURCE: &str = include_str!("vminitd.rs");
+
+    #[test]
+    fn guest_resize_tooling_provisioning_path_exists() {
+        let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(2)
+            .expect("speck-guest lives under crates/speck-guest");
+        let check_script = repo_root.join("scripts/check-guest-resize-tools.sh");
+        let provision_script = repo_root.join("scripts/provision-guest-resize-tools.sh");
+
+        let check_source = std::fs::read_to_string(&check_script)
+            .expect("Phase 08 must include an initrd inspection gate script");
+        let provision_source = std::fs::read_to_string(&provision_script)
+            .expect("Phase 08 must include an initrd provisioning remediation script");
+
+        assert!(
+            SOURCE.contains("/sbin/resize2fs"),
+            "Phase 08 must verify/provision /sbin/resize2fs before relying on it"
+        );
+        assert!(
+            check_source.contains("/sbin/resize2fs")
+                && check_source.contains("/sbin/mke2fs")
+                && check_source.contains("/sbin/blkid"),
+            "Inspection script must verify all exact required guest tool paths"
+        );
+        assert!(
+            provision_source.contains("/sbin/resize2fs")
+                && provision_source.contains("/sbin/mke2fs")
+                && provision_source.contains("/sbin/blkid"),
+            "Provisioning script must provision all exact required guest tool paths"
+        );
+        assert!(
+            provision_source.contains("kata-alpine-3.22.initrd.pre-resize-tools.bak"),
+            "Provisioning must preserve a pre-resize-tools initrd backup"
+        );
+    }
+}
