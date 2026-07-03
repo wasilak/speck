@@ -456,4 +456,84 @@ mod tests {
         assert!(!run_up.contains("create_data_disk"));
         assert!(!run_up.contains("count=512"));
     }
+
+    #[test]
+    fn run_up_applies_effective_cpu_and_memory_to_guest_config() {
+        let source = include_str!("up.rs");
+        let run_up_start = source.find("pub async fn run_up").unwrap();
+        let tests_start = source.find("#[cfg(test)]").unwrap();
+        let run_up = &source[run_up_start..tests_start];
+        let cpu = run_up
+            .find(".cpu_count(effective.vm.cpus)")
+            .expect("run_up must pass effective vm.cpus into GuestConfig::builder()");
+        let memory = run_up
+            .find(".memory_size_bytes(effective.vm.memory_mb * 1024 * 1024)")
+            .expect("run_up must pass effective vm.memory_mb into GuestConfig::builder()");
+        let build = run_up.find(".build()").expect("run_up must build GuestConfig");
+
+        assert!(cpu < build);
+        assert!(memory < build);
+    }
+
+    #[test]
+    fn resource_change_requires_restart_when_runtime_active() {
+        let dir = std::env::temp_dir().join(format!("speck-up-resource-mismatch-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let rootfs = dir.join("rootfs.img");
+        let data = dir.join("data.img");
+        std::fs::write(&rootfs, b"rootfs").unwrap();
+        std::fs::write(&data, b"data").unwrap();
+        write_vm_resource_snapshot(
+            &dir,
+            &crate::config::EffectiveVmConfig {
+                cpus: 4,
+                memory_mb: 2048,
+                disk_gb: 20,
+            },
+        )
+        .unwrap();
+
+        let mut holder = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!("exec 3<{}; sleep 5", data.display()))
+            .spawn()
+            .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(250));
+
+        let err = ensure_no_active_vm_resource_mismatch(
+            &dir,
+            &rootfs,
+            &data,
+            &crate::config::EffectiveVmConfig {
+                cpus: 2,
+                memory_mb: 2048,
+                disk_gb: 20,
+            },
+        )
+        .unwrap_err()
+        .to_string();
+
+        let _ = holder.kill();
+        let _ = holder.wait();
+        assert!(err.starts_with("VM resource change requires restart:"));
+        assert!(err.contains("old cpus=4"));
+        assert!(err.contains("new cpus=2"));
+    }
+
+    #[test]
+    fn vm_resource_snapshot_round_trips_effective_vm_config() {
+        let dir = std::env::temp_dir().join(format!("speck-up-snapshot-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let vm = crate::config::EffectiveVmConfig {
+            cpus: 3,
+            memory_mb: 3072,
+            disk_gb: 40,
+        };
+
+        write_vm_resource_snapshot(&dir, &vm).unwrap();
+
+        assert_eq!(read_vm_resource_snapshot(&dir).unwrap(), Some(vm));
+    }
 }
