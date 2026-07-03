@@ -161,6 +161,133 @@ pub fn collect_unknown_keys(value: &serde_yaml::Value) -> Vec<ConfigWarning> {
     warnings
 }
 
+pub fn resolve_effective_config(
+    file: AppConfig,
+    cli: &crate::UpArgs,
+) -> anyhow::Result<EffectiveConfig> {
+    let physical_cores = physical_core_count()?;
+    resolve_effective_config_with_physical_cores(file, cli, physical_cores)
+}
+
+fn resolve_effective_config_with_physical_cores(
+    file: AppConfig,
+    cli: &crate::UpArgs,
+    physical_cores: u64,
+) -> anyhow::Result<EffectiveConfig> {
+    let mut effective = EffectiveConfig::default();
+
+    if let Some(cpus) = file.vm.cpus {
+        effective.vm.cpus = cpus;
+    }
+    if let Some(memory_mb) = file.vm.memory_mb {
+        effective.vm.memory_mb = memory_mb;
+    }
+    if let Some(disk_gb) = file.vm.disk_gb {
+        effective.vm.disk_gb = disk_gb;
+    }
+    if let Some(log_level) = file.log_level {
+        effective.log_level = log_level;
+    }
+
+    if let Some(cpus) = cli.cpus {
+        effective.vm.cpus = cpus;
+    }
+    if let Some(memory_mb) = cli.memory {
+        effective.vm.memory_mb = memory_mb;
+    }
+    if let Some(disk_gb) = cli.disk {
+        effective.vm.disk_gb = disk_gb;
+    }
+
+    if let Some(cpus) = parse_env_u64("SPECK_VM_CPUS", "vCPU count")? {
+        effective.vm.cpus = cpus;
+    }
+    if let Some(memory_mb) = parse_env_u64("SPECK_VM_MEMORY_MB", "MiB")? {
+        effective.vm.memory_mb = memory_mb;
+    }
+    if let Some(disk_gb) = parse_env_u64("SPECK_VM_DISK_GB", "GiB")? {
+        effective.vm.disk_gb = disk_gb;
+    }
+    if let Ok(log_level) = std::env::var("SPECK_LOG_LEVEL") {
+        effective.log_level = log_level;
+        validate_log_level("SPECK_LOG_LEVEL", &effective.log_level)?;
+    } else {
+        validate_log_level("log_level", &effective.log_level)?;
+    }
+
+    validate_effective_vm_config_with_physical_cores(&effective.vm, physical_cores)?;
+    Ok(effective)
+}
+
+pub fn parse_env_u64(var_name: &str, unit: &str) -> anyhow::Result<Option<u64>> {
+    let value = match std::env::var(var_name) {
+        Ok(value) => value,
+        Err(std::env::VarError::NotPresent) => return Ok(None),
+        Err(err) => anyhow::bail!("{var_name} must be valid UTF-8 {unit}: {err}"),
+    };
+
+    let parsed = value.parse::<u64>().with_context(|| {
+        format!("{var_name} must be an unsigned integer {unit}; got `{value}`")
+    })?;
+    Ok(Some(parsed))
+}
+
+pub fn validate_effective_vm_config(config: &EffectiveVmConfig) -> anyhow::Result<()> {
+    let physical_cores = physical_core_count()?;
+    validate_effective_vm_config_with_physical_cores(config, physical_cores)
+}
+
+fn validate_effective_vm_config_with_physical_cores(
+    config: &EffectiveVmConfig,
+    physical_cores: u64,
+) -> anyhow::Result<()> {
+    anyhow::ensure!(config.cpus > 0, "vm.cpus must be at least 1");
+    anyhow::ensure!(
+        config.cpus <= physical_cores,
+        "vm.cpus ({}) exceeds host physical core count ({})",
+        config.cpus,
+        physical_cores
+    );
+    anyhow::ensure!(
+        config.memory_mb >= 512,
+        "vm.memory_mb must be at least 512 MiB"
+    );
+    anyhow::ensure!(config.disk_gb > 0, "vm.disk_gb must be at least 1 GiB");
+    Ok(())
+}
+
+pub fn physical_core_count() -> anyhow::Result<u64> {
+    if let Some(count) = sysinfo::System::physical_core_count() {
+        return u64::try_from(count).context("physical core count overflow");
+    }
+
+    let output = std::process::Command::new("sysctl")
+        .args(["-n", "hw.physicalcpu"])
+        .output()
+        .context("failed to determine host physical core count with sysctl")?;
+    anyhow::ensure!(
+        output.status.success(),
+        "sysctl hw.physicalcpu failed while determining host physical core count"
+    );
+    let stdout = String::from_utf8(output.stdout).context("sysctl output was not UTF-8")?;
+    let count = stdout
+        .trim()
+        .parse::<u64>()
+        .context("sysctl hw.physicalcpu did not return an integer")?;
+    anyhow::ensure!(count > 0, "host physical core count must be greater than 0");
+    Ok(count)
+}
+
+fn validate_log_level(source: &str, value: &str) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        !value.chars().any(char::is_whitespace),
+        "{source} must be a valid tracing EnvFilter directive"
+    );
+    tracing_subscriber::EnvFilter::try_new(value)
+        .with_context(|| format!("{source} must be a valid tracing EnvFilter directive"))?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
