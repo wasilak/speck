@@ -164,6 +164,9 @@ pub fn collect_unknown_keys(value: &serde_yaml::Value) -> Vec<ConfigWarning> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn temp_speck_home(name: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!(
@@ -195,5 +198,161 @@ mod tests {
             "version: 1\nvm:\n  cpus: 4\n  typo: true\nunexpected: value\n",
         );
         assert!(strict.is_err(), "strict schema must reject unknown keys");
+    }
+
+    #[test]
+    fn precedence_env_cli_file_default() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        clear_speck_env();
+        unsafe {
+            std::env::set_var("SPECK_VM_CPUS", "8");
+        }
+        let cli = crate::UpArgs {
+            kernel: None,
+            initrd: None,
+            rootfs: None,
+            data_disk: None,
+            cpus: Some(2),
+            memory: None,
+            disk: None,
+        };
+        let file = AppConfig {
+            vm: FileVmConfig {
+                cpus: Some(4),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let effective = resolve_effective_config_with_physical_cores(file, &cli, 16).unwrap();
+
+        assert_eq!(effective.vm.cpus, 8);
+        assert_eq!(effective.vm.memory_mb, 2048);
+        assert_eq!(effective.vm.disk_gb, 20);
+        clear_speck_env();
+    }
+
+    #[test]
+    fn env_overrides_all_config_fields() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        clear_speck_env();
+        unsafe {
+            std::env::set_var("SPECK_VM_CPUS", "6");
+            std::env::set_var("SPECK_VM_MEMORY_MB", "4096");
+            std::env::set_var("SPECK_VM_DISK_GB", "40");
+            std::env::set_var("SPECK_LOG_LEVEL", "debug");
+        }
+        let cli = crate::UpArgs {
+            kernel: None,
+            initrd: None,
+            rootfs: None,
+            data_disk: None,
+            cpus: Some(2),
+            memory: Some(2048),
+            disk: Some(20),
+        };
+        let file = AppConfig {
+            vm: FileVmConfig {
+                cpus: Some(4),
+                memory_mb: Some(3072),
+                disk_gb: Some(30),
+            },
+            log_level: Some("info".into()),
+            ..Default::default()
+        };
+
+        let effective = resolve_effective_config_with_physical_cores(file, &cli, 16).unwrap();
+
+        assert_eq!(effective.vm.cpus, 6);
+        assert_eq!(effective.vm.memory_mb, 4096);
+        assert_eq!(effective.vm.disk_gb, 40);
+        assert_eq!(effective.log_level, "debug");
+        clear_speck_env();
+    }
+
+    #[test]
+    fn invalid_env_value_names_variable_and_unit() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        clear_speck_env();
+        unsafe {
+            std::env::set_var("SPECK_VM_MEMORY_MB", "abc");
+        }
+        let cli = empty_cli_args();
+
+        let err = resolve_effective_config_with_physical_cores(AppConfig::default(), &cli, 16)
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("SPECK_VM_MEMORY_MB"));
+        assert!(err.contains("MiB"));
+        clear_speck_env();
+    }
+
+    #[test]
+    fn invalid_log_level_names_env_var() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        clear_speck_env();
+        unsafe {
+            std::env::set_var("SPECK_LOG_LEVEL", "not a valid filter");
+        }
+        let cli = empty_cli_args();
+
+        let err = resolve_effective_config_with_physical_cores(AppConfig::default(), &cli, 16)
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("SPECK_LOG_LEVEL"));
+        clear_speck_env();
+    }
+
+    #[test]
+    fn rejects_cpu_count_above_physical_cores() {
+        let config = EffectiveVmConfig {
+            cpus: 9,
+            memory_mb: 2048,
+            disk_gb: 20,
+        };
+
+        let err = validate_effective_vm_config_with_physical_cores(&config, 8)
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("physical core"));
+    }
+
+    #[test]
+    fn rejects_memory_below_512_mib() {
+        let config = EffectiveVmConfig {
+            cpus: 2,
+            memory_mb: 511,
+            disk_gb: 20,
+        };
+
+        let err = validate_effective_vm_config_with_physical_cores(&config, 8)
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("512 MiB"));
+    }
+
+    fn empty_cli_args() -> crate::UpArgs {
+        crate::UpArgs {
+            kernel: None,
+            initrd: None,
+            rootfs: None,
+            data_disk: None,
+            cpus: None,
+            memory: None,
+            disk: None,
+        }
+    }
+
+    fn clear_speck_env() {
+        unsafe {
+            std::env::remove_var("SPECK_VM_CPUS");
+            std::env::remove_var("SPECK_VM_MEMORY_MB");
+            std::env::remove_var("SPECK_VM_DISK_GB");
+            std::env::remove_var("SPECK_LOG_LEVEL");
+        }
     }
 }
