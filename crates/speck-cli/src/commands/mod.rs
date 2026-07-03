@@ -3,6 +3,7 @@ pub mod completion;
 pub mod dashboard;
 pub mod down;
 pub mod exec;
+pub mod logging;
 pub mod ps;
 pub mod rm;
 pub mod run;
