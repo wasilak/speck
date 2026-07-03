@@ -115,6 +115,44 @@ fn resolve_speck_home() -> PathBuf {
     PathBuf::from(home).join(".local/share/speck")
 }
 
+#[cfg(test)]
+mod tests {
+    const MAIN_SOURCE: &str = include_str!("main.rs");
+    const CLI_MANIFEST: &str = include_str!("../Cargo.toml");
+
+    #[test]
+    fn up_args_do_not_use_clap_env_annotations() {
+        assert!(
+            MAIN_SOURCE.contains("mod config;"),
+            "main.rs must expose the speck-cli config module"
+        );
+        assert!(
+            MAIN_SOURCE.contains("cpus: Option<u64>"),
+            "UpArgs must include --cpus as Option<u64>"
+        );
+        assert!(
+            MAIN_SOURCE.contains("memory: Option<u64>"),
+            "UpArgs must include --memory as Option<u64>"
+        );
+        assert!(
+            MAIN_SOURCE.contains("disk: Option<u64>"),
+            "UpArgs must include --disk as Option<u64>"
+        );
+        assert!(
+            !MAIN_SOURCE.contains("env = \"SPECK_VM_"),
+            "SPECK_VM_* env precedence must be resolved manually, not by clap env annotations"
+        );
+        assert!(
+            CLI_MANIFEST.contains("serde_yaml"),
+            "serde_yaml must be a speck-cli dependency"
+        );
+        assert!(
+            CLI_MANIFEST.contains("sysinfo"),
+            "sysinfo must be a speck-cli dependency"
+        );
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
