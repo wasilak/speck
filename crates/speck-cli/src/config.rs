@@ -342,6 +342,7 @@ mod tests {
             cpus: Some(2),
             memory: None,
             disk: None,
+            foreground: false,
         };
         let file = AppConfig {
             vm: FileVmConfig {
@@ -377,6 +378,7 @@ mod tests {
             cpus: Some(2),
             memory: Some(2048),
             disk: Some(20),
+            foreground: false,
         };
         let file = AppConfig {
             vm: FileVmConfig {
@@ -471,6 +473,7 @@ mod tests {
             cpus: None,
             memory: None,
             disk: None,
+            foreground: false,
         }
     }
 

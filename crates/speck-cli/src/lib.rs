@@ -58,6 +58,8 @@ struct UpArgs {
     memory: Option<u64>,
     #[arg(long)]
     disk: Option<u64>,
+    #[arg(long)]
+    foreground: bool,
 }
 
 #[derive(Parser)]

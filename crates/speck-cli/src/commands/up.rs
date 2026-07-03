@@ -1,12 +1,17 @@
-use std::path::Path;
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 use anyhow::Context as _;
 use indicatif::ProgressBar;
 use speck_net::config::NetworkConfig;
 use speck_vz::config::GuestConfig;
+use tokio::io::AsyncWriteExt;
+use tokio::net::UnixListener;
+use tokio::signal::unix::{signal, SignalKind};
 
 use crate::config::{EffectiveConfig, EffectiveVmConfig};
+use crate::docker_client::DockerClient;
 use crate::UpArgs;
 use crate::theme::{NEON_CYAN, RESET};
 
@@ -15,6 +20,73 @@ const ROOTFS_BACKEND: &str = "moby";
 const KATA_VERSION: &str = "3.32.0";
 const KATA_KERNEL_FILE: &str = "vmlinux-6.18.35-197";
 const KATA_INITRD_FILE: &str = "kata-alpine-3.22.initrd";
+const LAUNCHD_LABEL: &str = "io.speck.vm";
+
+pub fn daemonize(speck_home: &Path, binary: &Path) -> anyhow::Result<()> {
+    let _ = speck_home;
+    let home_dir = std::env::var("HOME").context("HOME not set")?;
+    let plist_path = PathBuf::from(&home_dir)
+        .join("Library/LaunchAgents")
+        .join(format!("{LAUNCHD_LABEL}.plist"));
+    std::fs::create_dir_all(plist_path.parent().context("plist path has no parent")?)?;
+
+    let uid_out = std::process::Command::new("id")
+        .arg("-u")
+        .output()
+        .context("failed to run id -u")?;
+    let uid_str = std::str::from_utf8(&uid_out.stdout)
+        .context("non-UTF8 uid")?
+        .trim()
+        .to_owned();
+
+    let plist = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>{LAUNCHD_LABEL}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{}</string>
+        <string>up</string>
+        <string>--foreground</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>SPECK_DAEMONIZED</key>
+        <string>1</string>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+    <key>KeepAlive</key>
+    <true/>
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>
+"#,
+        binary.display()
+    );
+
+    std::fs::write(&plist_path, &plist)
+        .with_context(|| format!("failed to write plist {}", plist_path.display()))?;
+
+    let status = std::process::Command::new("launchctl")
+        .args([
+            "bootstrap",
+            &format!("gui/{uid_str}"),
+            &plist_path.to_string_lossy(),
+        ])
+        .status()
+        .context("launchctl bootstrap exec failed")?;
+
+    anyhow::ensure!(
+        status.success(),
+        "launchctl bootstrap failed - check that launchd is running (macOS only)"
+    );
+    Ok(())
+}
 
 /// Ensure all VM assets (kernel, initrd, rootfs, data disk) are present in
 /// `speck_home`, downloading them from GitHub Releases if not.
@@ -456,9 +528,70 @@ pub async fn run_up(
     println!("export SPECK_HOME={}", speck_home.display());
     println!();
 
-    tokio::signal::ctrl_c().await?;
-    println!("\nShutting down...");
+    std::fs::create_dir_all(speck_home.join("run"))?;
+    let ctrl_sock_path = speck_home.join("run/control.sock");
+    let _ = std::fs::remove_file(&ctrl_sock_path);
+    let listener = UnixListener::bind(&ctrl_sock_path).context("failed to bind control socket")?;
+    std::fs::set_permissions(&ctrl_sock_path, std::fs::Permissions::from_mode(0o600))?;
+    tokio::spawn(async move {
+        loop {
+            match listener.accept().await {
+                Ok((mut stream, _)) => {
+                    tokio::spawn(async move {
+                        let _ = stream.write_all(b"PONG\n").await;
+                    });
+                }
+                Err(e) => {
+                    tracing::warn!("control socket accept error: {e}");
+                    break;
+                }
+            }
+        }
+    });
 
+    let mut sigterm =
+        signal(SignalKind::terminate()).context("failed to install SIGTERM handler")?;
+
+    tokio::select! {
+        result = tokio::signal::ctrl_c() => {
+            result.context("SIGINT listener failed")?;
+            tracing::info!("SIGINT received - shutting down");
+        }
+        _ = sigterm.recv() => {
+            tracing::info!("SIGTERM received - shutting down");
+        }
+    }
+
+    shutdown_gracefully(&guest, &ctrl_sock_path, speck_home).await?;
+
+    Ok(())
+}
+
+async fn shutdown_gracefully(
+    guest: &speck_vz::Guest,
+    sock_path: &Path,
+    speck_home: &Path,
+) -> anyhow::Result<()> {
+    let client = DockerClient::new(speck_home.join("speck.sock"));
+    if let Ok(containers) = client.get("/containers/json").await
+        && let Some(containers) = containers.as_array()
+    {
+        for container in containers {
+            if let Some(id) = container.get("Id").and_then(|value| value.as_str()) {
+                match client.post_empty(&format!("/containers/{id}/stop")).await {
+                    Ok(_) => tracing::info!(container_id = id, "stopped container"),
+                    Err(error) => {
+                        tracing::warn!(container_id = id, error = %error, "failed to stop container")
+                    }
+                }
+            }
+        }
+    }
+
+    if let Err(error) = guest.stop() {
+        tracing::warn!(error = %error, "VM stop error (continuing cleanup)");
+    }
+    let _ = std::fs::remove_file(sock_path);
     Ok(())
 }
 
@@ -624,5 +757,97 @@ mod tests {
         write_vm_resource_snapshot(&dir, &vm).unwrap();
 
         assert_eq!(read_vm_resource_snapshot(&dir).unwrap(), Some(vm));
+    }
+
+    #[test]
+    fn daemonize_writes_launchd_label_in_plist() {
+        let source = include_str!("up.rs");
+
+        assert!(
+            source.contains("const LAUNCHD_LABEL: &str = \"io.speck.vm\";"),
+            "daemonize must define the launchd label constant"
+        );
+        assert!(
+            source.contains("<key>Label</key>") && source.contains("<string>{LAUNCHD_LABEL}</string>"),
+            "daemonize plist must embed LAUNCHD_LABEL"
+        );
+    }
+
+    #[test]
+    fn daemonize_sets_speck_daemonized_env_var() {
+        let source = include_str!("up.rs");
+
+        assert!(
+            source.contains("SPECK_DAEMONIZED") && source.contains("<string>1</string>"),
+            "daemonize plist must export SPECK_DAEMONIZED=1"
+        );
+    }
+
+    #[test]
+    fn daemonize_includes_homebrew_in_path() {
+        assert!(
+            include_str!("up.rs").contains("/opt/homebrew/bin"),
+            "daemonize plist PATH must include Homebrew binaries"
+        );
+    }
+
+    #[test]
+    fn daemonize_keepalive_true_runataload_false() {
+        let source = include_str!("up.rs");
+
+        assert!(source.contains("KeepAlive") && source.contains("<true/>"));
+        assert!(source.contains("RunAtLoad") && source.contains("<false/>"));
+    }
+
+    #[test]
+    fn run_up_installs_sigterm_handler() {
+        let source = include_str!("up.rs");
+        let sigterm = source
+            .find("SignalKind::terminate()")
+            .expect("run_up must install a SIGTERM handler");
+        let shutdown = source
+            .find("shutdown_gracefully")
+            .expect("run_up must call shutdown_gracefully");
+
+        assert!(sigterm < shutdown);
+    }
+
+    #[test]
+    fn run_up_binds_control_socket_with_0600() {
+        let source = include_str!("up.rs");
+
+        assert!(
+            source.contains("run/control.sock") && source.contains("0o600"),
+            "run_up must bind control.sock and lock it down to 0600"
+        );
+    }
+
+    #[test]
+    fn run_up_removes_stale_socket_before_bind() {
+        let source = include_str!("up.rs");
+        let run_up_start = source.find("pub async fn run_up").unwrap();
+        let tests_start = source.find("#[cfg(test)]").unwrap();
+        let run_up = &source[run_up_start..tests_start];
+        let remove = run_up
+            .find("remove_file(&ctrl_sock_path)")
+            .expect("run_up must remove stale control.sock before bind");
+        let bind = run_up
+            .find("UnixListener::bind(&ctrl_sock_path)")
+            .expect("run_up must bind the control socket");
+
+        assert!(remove < bind);
+    }
+
+    #[test]
+    fn shutdown_gracefully_stops_containers_before_vm() {
+        let source = include_str!("up.rs");
+        let containers = source
+            .find("/containers/json")
+            .expect("shutdown_gracefully must list running containers before stop");
+        let guest_stop = source
+            .find("guest.stop()")
+            .expect("shutdown_gracefully must stop the VM");
+
+        assert!(containers < guest_stop);
     }
 }

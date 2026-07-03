@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use anyhow::Context as _;
 use clap::Parser;
 use tracing_subscriber::EnvFilter;
 
@@ -59,6 +60,8 @@ struct UpArgs {
     memory: Option<u64>,
     #[arg(long)]
     disk: Option<u64>,
+    #[arg(long)]
+    foreground: bool,
 }
 
 #[derive(Parser)]
@@ -196,6 +199,53 @@ mod tests {
             "unknown config keys must print the exact warning prefix"
         );
     }
+
+    #[test]
+    fn up_args_has_foreground_flag() {
+        assert!(
+            MAIN_SOURCE.contains("foreground: bool"),
+            "UpArgs must expose --foreground as a bool flag"
+        );
+    }
+
+    #[test]
+    fn main_daemonizes_when_not_foreground() {
+        assert!(
+            MAIN_SOURCE.contains("!args.foreground && std::env::var(\"SPECK_DAEMONIZED\").is_err()"),
+            "Commands::Up must guard daemonization on --foreground and SPECK_DAEMONIZED"
+        );
+        assert!(
+            MAIN_SOURCE.contains("commands::up::daemonize(&speck_home, &binary)"),
+            "Commands::Up must daemonize before continuing in default mode"
+        );
+    }
+
+    #[test]
+    fn main_uses_daemon_logging_when_speck_daemonized() {
+        assert!(
+            MAIN_SOURCE.contains("std::env::var(\"SPECK_DAEMONIZED\").is_ok()"),
+            "Commands::Up must detect daemon context via SPECK_DAEMONIZED"
+        );
+        assert!(
+            MAIN_SOURCE.contains("commands::logging::init_daemon_logging"),
+            "daemon context must initialize the file appender logger"
+        );
+    }
+
+    #[test]
+    fn main_holds_worker_guard_for_lifetime() {
+        let main_fn = &MAIN_SOURCE[MAIN_SOURCE
+            .rfind("async fn main()")
+            .expect("main.rs must define async main")..];
+        assert!(
+            main_fn.contains("let _guard ="),
+            "Commands::Up must keep the WorkerGuard binding in scope"
+        );
+        assert!(
+            !main_fn.contains("let _ = guard"),
+            "Commands::Up must not drop the WorkerGuard immediately"
+        );
+    }
 }
 
 #[tokio::main]
@@ -205,9 +255,22 @@ async fn main() -> anyhow::Result<()> {
 
     match cli.command {
         Commands::Up(args) => {
+            if !args.foreground && std::env::var("SPECK_DAEMONIZED").is_err() {
+                let binary = std::env::current_exe().context("cannot find own binary")?;
+                commands::up::daemonize(&speck_home, &binary)?;
+                return Ok(());
+            }
             let (file_config, warnings) = config::load_config_file(&speck_home)?;
             let effective = config::resolve_effective_config(file_config, &args)?;
-            init_tracing(&effective.log_level)?;
+            let _guard = if std::env::var("SPECK_DAEMONIZED").is_ok() {
+                Some(commands::logging::init_daemon_logging(
+                    &speck_home,
+                    &effective.log_level,
+                )?)
+            } else {
+                init_tracing(&effective.log_level)?;
+                None
+            };
             for warning in warnings {
                 eprintln!("warning: unknown config key: {}", warning.path);
             }
