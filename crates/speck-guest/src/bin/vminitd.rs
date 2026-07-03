@@ -1446,4 +1446,32 @@ mod tests {
         assert!(boot_mount < dockerd_spawn, "disk mounting/growth must happen before dockerd starts");
         assert!(boot_mount < service_spawn, "disk mounting/growth must happen before containerd/buildkitd start");
     }
+
+    #[test]
+    fn data_filesystem_growth_fails_closed_on_missing_resize_tool() {
+        let helper = SOURCE
+            .find("fn grow_data_filesystem_if_needed")
+            .expect("guest data filesystem growth helper should exist");
+        let resize_tool = SOURCE[helper..]
+            .find("/sbin/resize2fs")
+            .map(|offset| helper + offset)
+            .expect("growth helper should invoke /sbin/resize2fs");
+        let missing_or_failed = SOURCE[helper..]
+            .find("vminitd: data filesystem resize tool missing or failed")
+            .map(|offset| helper + offset)
+            .expect("missing resize tool should emit an explicit vminitd diagnostic");
+        let resize_failed = SOURCE[helper..]
+            .find("vminitd: resize2fs failed")
+            .map(|offset| helper + offset)
+            .expect("unsuccessful resize2fs exit should emit an explicit diagnostic");
+        let fatal_exit = SOURCE[helper..]
+            .find("std::process::exit(1)")
+            .map(|offset| helper + offset)
+            .expect("resize failure must fail closed by exiting PID 1");
+
+        assert!(helper < resize_tool, "helper should name the resize2fs tool it runs");
+        assert!(resize_tool < missing_or_failed, "tool probe should happen before missing-tool diagnostic");
+        assert!(resize_tool < resize_failed, "tool invocation should happen before failed-status diagnostic");
+        assert!(resize_tool < fatal_exit, "resize errors must exit non-zero after selecting resize2fs");
+    }
 }
