@@ -351,6 +351,8 @@ pub async fn run_up(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
     fn run_up_uses_spawn_blocking_for_vm_start_and_ready_wait() {
         let source = include_str!("up.rs");
@@ -380,5 +382,52 @@ mod tests {
             wait < speck_net,
             "SpeckNet startup must remain after guest readiness"
         );
+    }
+
+    fn temp_disk_path(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("speck-up-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join("data.img")
+    }
+
+    #[test]
+    fn data_disk_reconcile_creates_requested_size() {
+        let path = temp_disk_path("create");
+
+        reconcile_data_disk(&path, 20).unwrap();
+
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), 20 * 1024 * 1024 * 1024);
+    }
+
+    #[test]
+    fn data_disk_reconcile_grows_existing_image() {
+        let path = temp_disk_path("grow");
+        std::fs::File::create(&path).unwrap().set_len(10 * 1024 * 1024 * 1024).unwrap();
+
+        reconcile_data_disk(&path, 20).unwrap();
+
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), 20 * 1024 * 1024 * 1024);
+    }
+
+    #[test]
+    fn data_disk_reconcile_rejects_shrink() {
+        let path = temp_disk_path("shrink");
+        std::fs::File::create(&path).unwrap().set_len(20 * 1024 * 1024 * 1024).unwrap();
+
+        let err = reconcile_data_disk(&path, 10).unwrap_err().to_string();
+
+        assert!(err.starts_with("disk shrink not supported:"));
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), 20 * 1024 * 1024 * 1024);
+    }
+
+    #[test]
+    fn run_up_no_longer_uses_fixed_512_mib_data_disk_creation() {
+        let source = include_str!("up.rs");
+        let run_up = &source[source.find("pub async fn run_up").unwrap()..];
+
+        assert!(run_up.contains("ensure_assets(speck_home, effective.vm.disk_gb).await"));
+        assert!(!run_up.contains("create_data_disk"));
+        assert!(!run_up.contains("count=512"));
     }
 }
