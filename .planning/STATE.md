@@ -2,36 +2,36 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: — Production Runtime
-status: executing
-last_updated: "2026-07-02T15:20:13.415Z"
-last_activity: 2026-07-02 -- Phase 07 execution started
+status: verifying
+last_updated: "2026-07-03T09:20:00.613Z"
+last_activity: 2026-07-03 -- Phase 08 Plan 02 completed
 progress:
   total_phases: 8
-  completed_phases: 1
-  total_plans: 5
-  completed_plans: 5
-  percent: 13
+  completed_phases: 2
+  total_plans: 8
+  completed_plans: 8
+  percent: 25
 ---
 
 # State — Milestone v1.1 Production Runtime
 
-**Status:** Executing Phase 07
+**Status:** Phase complete — ready for verification
 
 ## Current Position
 
-Phase: 07 (gap-closure) — EXECUTING
-Plan: 1 of 5
-Status: Executing Phase 07
-Last activity: 2026-07-02 -- Phase 07 execution started
+Phase: 08 (config-file-vm-resource-controls) — COMPLETE
+Plan: 3 of 3
+Status: Phase complete — ready for verification
+Last activity: 2026-07-03 -- Phase 08 Plan 02 completed
 
-Progress: 0/8 phases complete [░░░░░░░░░░░░░░░░░░░░] 0%
+Progress: 2/8 phases complete [█████░░░░░░░░░░░░░░░] 25%
 
 ## Milestone v1.1 Phase Overview
 
 | Phase | Name | Requirements | Status |
 |-------|------|--------------|--------|
-| 07 | Gap Closure | GAP-01..04 | Not started |
-| 08 | Config File & VM Resources | CFG-01..03, VMCFG-01..04 | Not started |
+| 07 | Gap Closure | GAP-01..04 | Complete |
+| 08 | Config File & VM Resources | CFG-01..03, VMCFG-01..04 | Complete |
 | 09 | Daemon Lifecycle | DAEMON-01..05 | Not started |
 | 10 | Shell Integration | SHELL-01..03 | Not started |
 | 11 | VPN-Proof DNS | DNS-01..06 | Not started |
@@ -48,6 +48,12 @@ Progress: 0/8 phases complete [░░░░░░░░░░░░░░░░�
 - Daemon Phase (09) must use launchd LaunchAgent re-exec pattern — `fork()` after Apple framework init is UB (Mach ports not inheritable, libdispatch atfork poison). The `daemonize` crate is banned.
 - CA injection (Phase 12) must happen before containerd/buildkitd start — containerd reads TLS config at startup only (containerd issue #3071). Post-startup injection silently fails.
 - Homebrew (Phase 14) requires a signed `.pkg` artifact shipped as a Cask — Homebrew re-signs binaries, orphaning the notarization staple on a plain `.tar.gz`. `installer -pkg` does not re-sign.
+- Phase 08 Plan 01: Keep `SPECK_VM_*` out of clap env annotations so env vars can override explicit CLI flags.
+- Phase 08 Plan 01: Keep YAML parsing isolated in `speck-cli::config`; `speck-vz` remains format-agnostic.
+- Phase 08 Plan 01: Validate `SPECK_LOG_LEVEL` into `EffectiveConfig.log_level` so Plan 08-02 can initialize tracing from the resolved value.
+- Phase 08 Plan 02: `spk up` resolves config before tracing and passes `EffectiveConfig` into `run_up`; `run_up` does not resolve config internally.
+- Phase 08 Plan 02: Host data disk sizing is grow-only via `File::set_len`; shrink returns `disk shrink not supported:` without truncation.
+- Phase 08 Plan 02: CPU/memory changes with active runtime holders fail fast using `$SPECK_HOME/run/vm-config.json` old/new values.
 
 ### New Crates for v1.1
 
@@ -64,18 +70,15 @@ Progress: 0/8 phases complete [░░░░░░░░░░░░░░░░�
 - `system-configuration` + `core-foundation` version compatibility with `objc2-foundation` — run `cargo tree` before adding to `speck-net` to detect CFType conflicts
 - Disk resize in VMCFG-03 requires guest-side `growpart + resize2fs` — resizing the `.img` only changes the block device size
 - DOCKER_HOST conflict: `spk init` writing `DOCKER_HOST` globally redirects all Docker-aware tools; must be opt-in
+- Phase 09 can use `$SPECK_HOME/run/vm-config.json` as an initial resource-state source until the daemon control socket exists.
 
 ### Todos
 
-- [ ] Start Phase 07 planning: `/gsd-plan-phase 7`
+- [ ] Start Phase 09 planning: `/gsd-plan-phase 9`
 
 ### Blockers
 
 None.
-
-## Previous Milestone (v1.0) — Complete
-
-All 32 plans across 6 phases complete. Phase 06.1 (5 integration bug fixes) in progress when v1.1 planning started — Phase 07 picks up its remaining 2 plans as the first order of business.
 
 ## Performance Metrics
 
@@ -86,3 +89,12 @@ All 32 plans across 6 phases complete. Phase 06.1 (5 integration bug fixes) in p
 | Phase 06.2 P06.2-07 | 5 min | 2 tasks | 2 files |
 | Phase 06.2 P06.2-08 | resume close-out | 2 tasks | 12 files |
 | Phase 06.2 P06.2-09 | 6 min | 2 tasks | 3 files |
+| Phase 08 P01 | 18min | 3 tasks | 4 files |
+| Phase 08 P03 | 24min | 3 tasks | 3 files |
+| Phase 08 P02 | 11min | 3 tasks | 5 files |
+
+## Decisions
+
+- Phase 08 Plan 02: Initialize `spk up` tracing from `EffectiveConfig.log_level` after config resolution and before startup warnings/run_up dispatch.
+- Phase 08 Plan 02: Use grow-only `File::set_len` data disk reconciliation and reject shrink with `disk shrink not supported:`.
+- Phase 08 Plan 02: Persist effective VM resources in `$SPECK_HOME/run/vm-config.json` and compare CPU/memory when runtime holders exist.

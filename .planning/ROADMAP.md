@@ -99,7 +99,7 @@ Plans:
 ### Phases
 
 - [x] **Phase 07: Gap Closure** — Close remaining v1.0 gaps so `spk run` works end-to-end (completed 2026-07-02)
-- [ ] **Phase 08: Config File & VM Resource Controls** — Persistent config file with VM right-sizing and env/flag/file precedence
+- [x] **Phase 08: Config File & VM Resource Controls** — Persistent config file with VM right-sizing and env/flag/file precedence (completed 2026-07-03)
 - [ ] **Phase 09: Daemon Lifecycle** — Background daemon via launchd LaunchAgent with `spk down` and `spk restart`
 - [ ] **Phase 10: Shell Environment Integration** — `spk env` for immediate use; idempotent `spk init` for persistent `DOCKER_HOST`
 - [ ] **Phase 11: VPN-Proof DNS** — Live DNS reload via SCDynamicStore/vsock; no host `:53` binding; split-DNS + SERVFAIL translation
@@ -147,7 +147,17 @@ Plans:
   4. Adding an unknown key to `config.yaml` produces a startup warning; the process does not panic or refuse to start
   5. Changing `--cpus` or `--memory` on a running VM causes `spk up` to print a restart-required message before proceeding
 
-**Plans**: TBD
+**Plans**: 3 plans
+
+Plans:
+**Wave 1**
+
+- [x] 08-01-PLAN.md — Config schema, CLI flags, env/CLI/file/default resolver, and CPU/memory validation (Wave 1)
+- [x] 08-03-PLAN.md — Guest-side ext4 growth for configured data disk size (Wave 1)
+
+**Wave 2** *(blocked on Wave 1 config resolver completion)*
+
+- [x] 08-02-PLAN.md — Wire resolved config into `spk up`, grow-only host disk reconciliation, and restart-required detection (Wave 2)
 
 ### Phase 09: Daemon Lifecycle
 
@@ -239,7 +249,7 @@ Plans:
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 07. Gap Closure | 5/5 | Complete   | 2026-07-02 |
-| 08. Config File & VM Resources | 0/TBD | Not started | - |
+| 08. Config File & VM Resources | 3/3 | Complete   | 2026-07-03 |
 | 09. Daemon Lifecycle | 0/TBD | Not started | - |
 | 10. Shell Integration | 0/TBD | Not started | - |
 | 11. VPN-Proof DNS | 0/TBD | Not started | - |
