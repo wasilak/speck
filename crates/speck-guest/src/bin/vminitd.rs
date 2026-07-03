@@ -1377,4 +1377,33 @@ mod tests {
             "Provisioning must preserve a pre-resize-tools initrd backup"
         );
     }
+
+    #[test]
+    fn mount_disks_grows_data_filesystem_before_runtime_dirs() {
+        let data_mount = SOURCE
+            .find("b\"/dev/vdb\\0\"")
+            .expect("mount_disks should mount /dev/vdb");
+        let grow_call = [
+            "grow_data_filesystem_if_needed(\"/dev/vdb\"",
+            ", \"/rootfs/var/lib/containerd\")",
+        ]
+        .concat();
+        let grow = SOURCE
+            .find(&grow_call)
+            .expect("mount_disks should grow /dev/vdb after mounting it");
+        let runtime_dir = SOURCE
+            .find("std::fs::create_dir_all(\"/rootfs/run\")")
+            .expect("mount_disks should create /rootfs/run");
+        let dockerd_spawn = SOURCE
+            .find("spawn_dockerd_with_restart")
+            .expect("boot path should support dockerd startup");
+        let service_spawn = SOURCE
+            .find("spawn_service_with_restart")
+            .expect("boot path should support containerd/buildkitd startup");
+
+        assert!(data_mount < grow, "data filesystem must grow only after /dev/vdb mount succeeds");
+        assert!(grow < runtime_dir, "data filesystem must grow before runtime directories are created");
+        assert!(grow < dockerd_spawn, "data filesystem must grow before dockerd starts");
+        assert!(grow < service_spawn, "data filesystem must grow before containerd/buildkitd start");
+    }
 }
