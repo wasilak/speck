@@ -510,12 +510,14 @@ pub async fn run_up(
             None
         }
     };
+    let (_resolver_tx, resolver_rx) = speck_net::spawn_resolver_watcher();
     let net_config = speck_net::config::NetworkConfig::default();
     let _netstack_handles = speck_net::SpeckNet::new(net_config, Some(53)).spawn(
         netstack_fd,
         dns_vsock_fd,
         vec![],
         Some(port_map_rx),
+        resolver_rx,
     );
 
     spinner.set_message("Starting Docker API proxy...");
