@@ -298,6 +298,35 @@ mod tests {
             "Commands::Up must not drop the WorkerGuard immediately"
         );
     }
+
+    #[test]
+    fn init_command_registered() {
+        let production = production_source();
+        assert!(
+            production.contains("Init("),
+            "spk init subcommand must be registered as a variant in the Commands enum"
+        );
+    }
+
+    #[test]
+    fn init_command_dispatched() {
+        let main_fn = &MAIN_SOURCE[MAIN_SOURCE
+            .rfind("async fn main()")
+            .expect("main.rs must define async main")..];
+        assert!(
+            main_fn.contains("commands::init::run_init"),
+            "the init subcommand dispatch arm must invoke the run_init entrypoint"
+        );
+    }
+
+    #[test]
+    fn init_args_has_set_docker_host_flag() {
+        let production = production_source();
+        assert!(
+            production.contains("set_docker_host"),
+            "InitArgs must expose the --set-docker-host opt-in flag as set_docker_host"
+        );
+    }
 }
 
 #[tokio::main]
