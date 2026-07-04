@@ -213,3 +213,39 @@ fn build_servfail_response(query_header: &[u8]) -> Vec<u8> {
         0x00, 0x00, // ARCOUNT = 0
     ]
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nxdomain_to_servfail_rewrites_rcode() {
+        let mut buf = vec![0u8; 12];
+        buf[3] = 0x03; // RCODE = NXDOMAIN
+        translate_nxdomain_to_servfail(&mut buf);
+        assert_eq!(buf[3] & 0x0f, 2);
+    }
+
+    #[test]
+    fn servfail_passthrough_unchanged() {
+        let mut buf = vec![0u8; 12];
+        buf[3] = 0x02; // RCODE = SERVFAIL
+        translate_nxdomain_to_servfail(&mut buf);
+        assert_eq!(buf[3] & 0x0f, 2);
+    }
+
+    #[test]
+    fn noerror_not_touched() {
+        let mut buf = vec![0u8; 12];
+        buf[3] = 0x00; // RCODE = NOERROR
+        translate_nxdomain_to_servfail(&mut buf);
+        assert_eq!(buf[3] & 0x0f, 0);
+    }
+
+    #[test]
+    fn too_short_does_not_panic() {
+        let mut buf = vec![0u8; 3];
+        translate_nxdomain_to_servfail(&mut buf);
+        // No panic — early return guard prevents access to buf[3]
+    }
+}
