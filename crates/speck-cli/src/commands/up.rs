@@ -502,23 +502,45 @@ pub async fn run_up(
     let netstack_fd = guest.netstack_fd()?;
     let dns_vsock_fd = match guest.connect_dns_vsock(53) {
         Ok(fd) => {
-            eprintln!("[spk] DNS vsock connected, fd={fd}");
+            tracing::info!(fd, "DNS vsock connected");
             Some(fd)
         }
         Err(e) => {
-            eprintln!("[spk] DNS vsock connect failed: {e}");
+            tracing::warn!(error = %e, "DNS vsock connect failed — VPN-proof DNS disabled");
             None
         }
     };
     let (_resolver_tx, resolver_rx) = speck_net::spawn_resolver_watcher();
     let net_config = speck_net::config::NetworkConfig::default();
-    let _netstack_handles = speck_net::SpeckNet::new(net_config, Some(53)).spawn(
+    let netstack_handles = speck_net::SpeckNet::new(net_config, Some(53)).spawn(
         netstack_fd,
         dns_vsock_fd,
         vec![],
         Some(port_map_rx),
         resolver_rx,
     );
+    // Supervise netstack tasks so failures surface via structured logs instead of
+    // being silently dropped when the JoinHandles are discarded (WR-05).
+    {
+        use futures::stream::{FuturesUnordered, StreamExt as _};
+        let mut set: FuturesUnordered<
+            tokio::task::JoinHandle<std::result::Result<(), speck_net::Error>>,
+        > = netstack_handles.into_iter().collect();
+        tokio::spawn(async move {
+            while let Some(join_result) = set.next().await {
+                match join_result {
+                    Ok(Ok(())) => tracing::warn!(
+                        "netstack task exited unexpectedly — VPN-proof networking may be degraded"
+                    ),
+                    Ok(Err(e)) => tracing::error!(
+                        error = %e,
+                        "netstack task error — VPN-proof networking may be degraded"
+                    ),
+                    Err(e) => tracing::error!(error = %e, "netstack task panicked"),
+                }
+            }
+        });
+    }
 
     spinner.set_message("Starting Docker API proxy...");
     let sock_path = speck_home.join("speck.sock");
