@@ -25,7 +25,12 @@ pub enum ShellTarget {
 /// On macOS the default interactive shell is zsh, so an unset or unrecognized
 /// `SHELL` value falls back to [`ShellTarget::Zsh`].
 pub fn detect_shell() -> ShellTarget {
-    unimplemented!("detect_shell is a RED stub — implement in GREEN")
+    match std::env::var("SHELL") {
+        Ok(ref s) if s.contains("bash") => ShellTarget::Bash,
+        Ok(ref s) if s.contains("fish") => ShellTarget::Fish,
+        Ok(ref s) if s.contains("zsh") => ShellTarget::Zsh,
+        _ => ShellTarget::Zsh,
+    }
 }
 
 /// Render the idempotent bootstrap block for the given shell target.
@@ -36,9 +41,25 @@ pub fn detect_shell() -> ShellTarget {
 /// eval "$(spk env)"; fi`; Fish emits `if command -q spk; spk env --shell fish |
 /// source; end`.
 pub fn render_init_block(target: ShellTarget) -> String {
-    let _ = target;
-    unimplemented!("render_init_block is a RED stub — implement in GREEN")
+    match target {
+        ShellTarget::Bash | ShellTarget::Zsh => format!(
+            "{begin}\nif command -v spk >/dev/null 2>&1; then\n  eval \"$(spk env)\"\nfi\n{end}\n",
+            begin = BEGIN_MARKER,
+            end = END_MARKER,
+        ),
+        ShellTarget::Fish => format!(
+            "{begin}\nif command -q spk\n  spk env --shell fish | source\nend\n{end}\n",
+            begin = BEGIN_MARKER,
+            end = END_MARKER,
+        ),
+    }
 }
+
+/// Sentinel marker marking the start of a Speck bootstrap block.
+pub const BEGIN_MARKER: &str = "# BEGIN speck";
+
+/// Sentinel marker marking the end of a Speck bootstrap block.
+pub const END_MARKER: &str = "# END speck";
 
 /// Render shell-ready export/set statements for `DOCKER_HOST` and
 /// `TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE`, derived from `speck_home`.
@@ -287,8 +308,8 @@ mod tests {
             "fish init block must use `end` to close the if block; got: {block:?}"
         );
         assert!(
-            !block.contains("fi"),
-            "fish init block must NOT use POSIX `fi`; got: {block:?}"
+            !block.contains("\nfi\n"),
+            "fish init block must NOT use POSIX `fi` as a standalone closing keyword; got: {block:?}"
         );
     }
 }

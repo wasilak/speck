@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context as _;
 
-use crate::shell::{self, EnvShell, ShellTarget};
+use crate::shell::{self, EnvShell, ShellTarget, BEGIN_MARKER, END_MARKER};
 
 /// Arguments for `spk init`.
 ///
@@ -16,6 +16,61 @@ pub struct InitArgs {
     pub shell: Option<String>,
 }
 
+/// Resolve the shell target from the `--shell` override or auto-detection.
+fn resolve_shell(override_shell: &Option<String>) -> anyhow::Result<ShellTarget> {
+    match override_shell.as_deref() {
+        Some("bash") => Ok(ShellTarget::Bash),
+        Some("zsh") => Ok(ShellTarget::Zsh),
+        Some("fish") => Ok(ShellTarget::Fish),
+        Some(other) => anyhow::bail!("unsupported shell `{other}` (expected bash, zsh, or fish)"),
+        None => Ok(shell::detect_shell()),
+    }
+}
+
+/// Resolve the target dotfile path for the given shell target.
+///
+/// Bash uses `~/.bashrc`, Zsh uses `~/.zshrc`, and Fish uses
+/// `$XDG_CONFIG_HOME/fish/conf.d/speck.fish` (falling back to
+/// `~/.config/fish/conf.d/speck.fish`).
+fn resolve_target_file(target: ShellTarget) -> anyhow::Result<PathBuf> {
+    match target {
+        ShellTarget::Bash => Ok(PathBuf::from(std::env::var("HOME").context("HOME not set")?)
+            .join(".bashrc")),
+        ShellTarget::Zsh => Ok(PathBuf::from(std::env::var("HOME").context("HOME not set")?)
+            .join(".zshrc")),
+        ShellTarget::Fish => {
+            let config_home = match std::env::var("XDG_CONFIG_HOME") {
+                Ok(x) => PathBuf::from(x),
+                Err(_) => PathBuf::from(std::env::var("HOME").context("HOME not set")?)
+                    .join(".config"),
+            };
+            Ok(config_home.join("fish/conf.d/speck.fish"))
+        }
+    }
+}
+
+/// Replace the existing `# BEGIN speck` … `# END speck` region in `content`
+/// with `block`, or append `block` if no sentinel markers are present.
+fn replace_or_append_block(content: &str, block: &str) -> String {
+    if let Some(begin) = content.find(BEGIN_MARKER) {
+        if let Some(end_rel) = content[begin..].find(END_MARKER) {
+            let end_abs = begin + end_rel + END_MARKER.len();
+            let mut result = String::with_capacity(content.len() + block.len());
+            result.push_str(&content[..begin]);
+            result.push_str(block);
+            result.push_str(&content[end_abs..]);
+            return result;
+        }
+    }
+    if content.is_empty() {
+        block.to_string()
+    } else if content.ends_with('\n') {
+        format!("{content}{block}")
+    } else {
+        format!("{content}\n{block}")
+    }
+}
+
 /// Initialize Speck shell integration (one-time setup).
 ///
 /// Performs four steps:
@@ -25,9 +80,53 @@ pub struct InitArgs {
 ///    With `--set-docker-host`: write idempotent block to the target file.
 /// 4. Print confirmation or instructions.
 pub async fn run_init(args: InitArgs, speck_home: &Path) -> anyhow::Result<()> {
-    let _ = args;
-    let _ = speck_home;
-    unimplemented!("run_init is a RED stub — implement in GREEN")
+    // Step 1 — Resolve shell target
+    let target = resolve_shell(&args.shell)?;
+
+    // Step 2 — Check DOCKER_HOST conflict
+    if let Ok(docker_host) = std::env::var("DOCKER_HOST") {
+        if !docker_host.contains("speck.sock") {
+            eprintln!(
+                "Warning: DOCKER_HOST is currently set to `{docker_host}` — spk init will override it."
+            );
+        }
+    }
+
+    // Step 3 — Preview/persist based on --set-docker-host
+    if !args.set_docker_host {
+        println!("Run `spk init --set-docker-host` to persist Speck environment in your shell.");
+        println!();
+        println!("--- Preview (POSIX) ---");
+        print!("{}", shell::render_env(speck_home, EnvShell::Posix));
+        print!("{}", shell::render_speck_home(speck_home, EnvShell::Posix));
+        println!("---");
+        return Ok(());
+    }
+
+    // Step 4 — Persist: write idempotent block
+    let target_file = resolve_target_file(target)?;
+    let block = shell::render_init_block(target);
+
+    match target {
+        ShellTarget::Bash | ShellTarget::Zsh => {
+            let existing = std::fs::read_to_string(&target_file).unwrap_or_default();
+            let updated = replace_or_append_block(&existing, &block);
+            std::fs::write(&target_file, updated)
+                .with_context(|| format!("failed to write {}", target_file.display()))?;
+        }
+        ShellTarget::Fish => {
+            if let Some(parent) = target_file.parent() {
+                std::fs::create_dir_all(parent).with_context(|| {
+                    format!("failed to create {}", parent.display())
+                })?;
+            }
+            std::fs::write(&target_file, &block)
+                .with_context(|| format!("failed to write {}", target_file.display()))?;
+        }
+    }
+
+    println!("Speck environment persisted to {}", target_file.display());
+    Ok(())
 }
 
 #[cfg(test)]
