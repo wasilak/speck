@@ -41,6 +41,8 @@ enum Commands {
     Dashboard,
     /// Generate shell completions
     Completion(CompletionArgs),
+    /// Print shell environment exports for this session
+    Env(EnvArgs),
 }
 
 #[derive(Parser)]
@@ -114,4 +116,11 @@ struct BuildArgs {
 #[derive(Parser)]
 struct CompletionArgs {
     shell: clap_complete::Shell,
+}
+
+#[derive(Parser)]
+struct EnvArgs {
+    /// Target shell syntax for env exports: `posix` (bash/zsh) or `fish`.
+    #[arg(long, default_value = "posix", value_parser = ["posix", "fish"])]
+    shell: String,
 }

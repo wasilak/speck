@@ -43,6 +43,8 @@ enum Commands {
     Dashboard,
     /// Generate shell completions
     Completion(CompletionArgs),
+    /// Print shell environment exports for this session
+    Env(EnvArgs),
 }
 
 #[derive(Parser)]
@@ -116,6 +118,13 @@ struct BuildArgs {
 #[derive(Parser)]
 struct CompletionArgs {
     shell: clap_complete::Shell,
+}
+
+#[derive(Parser)]
+struct EnvArgs {
+    /// Target shell syntax for env exports: `posix` (bash/zsh) or `fish`.
+    #[arg(long, default_value = "posix", value_parser = ["posix", "fish"])]
+    shell: String,
 }
 
 fn resolve_speck_home() -> PathBuf {
@@ -354,6 +363,10 @@ async fn main() -> anyhow::Result<()> {
         Commands::Completion(args) => {
             init_tracing(&default_tracing_filter())?;
             commands::completion::run_completion(args)
+        }
+        Commands::Env(args) => {
+            init_tracing(&default_tracing_filter())?;
+            commands::env::run_env(args, &speck_home)
         }
     }
 

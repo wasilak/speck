@@ -2,6 +2,7 @@ pub mod build;
 pub mod completion;
 pub mod dashboard;
 pub mod down;
+pub mod env;
 pub mod exec;
 pub mod logging;
 pub mod ps;

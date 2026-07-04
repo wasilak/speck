@@ -1,6 +1,7 @@
 use std::path::Path;
 
 /// Shell dialect supported by `spk env` and printed by `spk up`.
+#[derive(Clone, Copy)]
 pub enum EnvShell {
     Posix,
     Fish,
