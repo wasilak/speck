@@ -2,10 +2,9 @@
 //!
 //! Parses the kernel cmdline for port and disk configuration, mounts early
 //! filesystems (/proc, /sys, /dev), mounts the rootfs and data disks,
-//! spawns and supervises containerd + buildkitd with restart loops,
-//! health-checks containerd readiness, sends a READY signal to the host
-//! over vsock, and starts vsock→Unix socket forwarders for containerd
-//! and buildkitd gRPC access.
+//! spawns dockerd with auto-restart, health-checks the Docker socket,
+//! sends a READY signal to the host over vsock, and starts a vsock→Unix
+//! socket forwarder for the Docker Engine API.
 //!
 //! Built as a static musl binary, placed at /init in a cpio initrd.
 #[cfg(not(target_os = "linux"))]
@@ -31,17 +30,11 @@ mod linux {
 
         let _port = parse_cmdline_vsock_port("/proc/cmdline").unwrap_or(1234);
         let dns_port = parse_cmdline_dns_port("/proc/cmdline");
-        let containerd_port = parse_cmdline_containerd_vsock_port("/proc/cmdline").unwrap_or(9001);
-        let buildkitd_port = parse_cmdline_buildkitd_vsock_port("/proc/cmdline").unwrap_or(9002);
         let ready_port = parse_cmdline_ready_vsock_port("/proc/cmdline").unwrap_or(9000);
-        let container_backend = parse_cmdline_container_backend("/proc/cmdline");
         let docker_port = parse_cmdline_docker_vsock_port("/proc/cmdline").unwrap_or(9003);
         let guest_ip = parse_cmdline_guest_ip("/proc/cmdline");
         let gateway = parse_cmdline_gateway("/proc/cmdline");
-        eprintln!(
-            "vminitd: backend={} docker_port={docker_port}",
-            container_backend.as_deref().unwrap_or("containerd")
-        );
+        eprintln!("vminitd: docker_port={docker_port}");
         if let Some(ip) = guest_ip.as_deref() {
             eprintln!("vminitd: guest_ip={ip}");
         }
@@ -97,74 +90,35 @@ mod linux {
             eprintln!("vminitd: wrote /rootfs/etc/resolv.conf → nameserver 127.0.0.1");
         }
 
-        if container_backend.as_deref() == Some("dockerd") {
-            // ── Docker Engine (moby) backend ──────────────────────────────────
-            // Mount proc/sys/dev/run into /rootfs so dockerd can see them.
-            mount_rootfs_runtime_filesystems();
+        // Mount proc/sys/dev/run into /rootfs so dockerd can see them.
+        mount_rootfs_runtime_filesystems();
 
-            // Create the socket directory inside the chroot.
-            if let Err(e) = std::fs::create_dir_all("/rootfs/run/speck") {
-                eprintln!("vminitd: failed to create /rootfs/run/speck: {e}");
-            }
-
-            let dockerd_bin = detect_dockerd_bin_in_chroot();
-            eprintln!("vminitd: using dockerd at chroot-relative path {dockerd_bin}");
-            spawn_dockerd_with_restart(dockerd_bin);
-
-            if !wait_for_dockerd_socket(150) {
-                eprintln!("vminitd: dockerd socket did not become ready within timeout");
-                std::process::exit(1);
-            }
-            eprintln!("vminitd: dockerd socket ready");
-
-            send_ready_signal(ready_port);
-
-            // Forward dockerd's Unix socket over vsock port 9003.
-            std::thread::spawn(move || {
-                if let Err(e) = speck_guest::sock_forwarder::serve(
-                    docker_port,
-                    "/rootfs/run/speck/dockerd.sock",
-                ) {
-                    eprintln!("vminitd: dockerd forwarder error: {e}");
-                }
-            });
-        } else {
-            // ── Containerd backend (default) ──────────────────────────────────
-            // Spawn and supervise containerd and buildkitd
-            spawn_service_with_restart(
-                "containerd",
-                "/rootfs/usr/bin/containerd",
-                vec!["--config", "/rootfs/etc/containerd/config.toml"],
-            );
-            spawn_service_with_restart("buildkitd", "/rootfs/usr/local/bin/buildkitd", vec![]);
-
-            // Wait for containerd socket to become reachable
-            if !wait_for_containerd_socket(50) {
-                eprintln!("vminitd: containerd did not become ready within timeout");
-                std::process::exit(1);
-            }
-
-            // Signal READY to the host (D-05)
-            send_ready_signal(ready_port);
-
-            // Start vsock→Unix socket forwarders (D-07, D-09)
-            std::thread::spawn(move || {
-                if let Err(e) = speck_guest::sock_forwarder::serve(
-                    containerd_port,
-                    "/rootfs/run/containerd/containerd.sock",
-                ) {
-                    eprintln!("vminitd: containerd forwarder error: {e}");
-                }
-            });
-            std::thread::spawn(move || {
-                if let Err(e) = speck_guest::sock_forwarder::serve(
-                    buildkitd_port,
-                    "/rootfs/run/buildkit/buildkitd.sock",
-                ) {
-                    eprintln!("vminitd: buildkitd forwarder error: {e}");
-                }
-            });
+        // Create the socket directory inside the chroot.
+        if let Err(e) = std::fs::create_dir_all("/rootfs/run/speck") {
+            eprintln!("vminitd: failed to create /rootfs/run/speck: {e}");
         }
+
+        let dockerd_bin = detect_dockerd_bin_in_chroot();
+        eprintln!("vminitd: using dockerd at chroot-relative path {dockerd_bin}");
+        spawn_dockerd_with_restart(dockerd_bin);
+
+        if !wait_for_dockerd_socket(150) {
+            eprintln!("vminitd: dockerd socket did not become ready within timeout");
+            std::process::exit(1);
+        }
+        eprintln!("vminitd: dockerd socket ready");
+
+        send_ready_signal(ready_port);
+
+        // Forward dockerd's Unix socket over vsock port 9003.
+        std::thread::spawn(move || {
+            if let Err(e) = speck_guest::sock_forwarder::serve(
+                docker_port,
+                "/rootfs/run/speck/dockerd.sock",
+            ) {
+                eprintln!("vminitd: dockerd forwarder error: {e}");
+            }
+        });
 
         // PID 1 must never exit
         loop {
@@ -192,28 +146,6 @@ mod linux {
         let content = std::fs::read_to_string(path).ok()?;
         for word in content.split_whitespace() {
             if let Some(port_str) = word.strip_prefix("dns_vsock_port=") {
-                return port_str.parse::<u32>().ok();
-            }
-        }
-        None
-    }
-
-    /// Parse `containerd_vsock_port=PORT` from the kernel command line.
-    fn parse_cmdline_containerd_vsock_port(path: &str) -> Option<u32> {
-        let content = std::fs::read_to_string(path).ok()?;
-        for word in content.split_whitespace() {
-            if let Some(port_str) = word.strip_prefix("containerd_vsock_port=") {
-                return port_str.parse::<u32>().ok();
-            }
-        }
-        None
-    }
-
-    /// Parse `buildkitd_vsock_port=PORT` from the kernel command line.
-    fn parse_cmdline_buildkitd_vsock_port(path: &str) -> Option<u32> {
-        let content = std::fs::read_to_string(path).ok()?;
-        for word in content.split_whitespace() {
-            if let Some(port_str) = word.strip_prefix("buildkitd_vsock_port=") {
                 return port_str.parse::<u32>().ok();
             }
         }
@@ -257,23 +189,7 @@ mod linux {
         None
     }
 
-    /// Parse `container_backend=VALUE` from the kernel command line.
-    ///
-    /// Returns `Some("podman")`, `Some("containerd")`, or `None` when the key
-    /// is absent.  Absence means "use the default (containerd) behavior".
-    fn parse_cmdline_container_backend(path: &str) -> Option<String> {
-        let content = std::fs::read_to_string(path).ok()?;
-        for word in content.split_whitespace() {
-            if let Some(val) = word.strip_prefix("container_backend=") {
-                if !val.is_empty() {
-                    return Some(val.to_string());
-                }
-            }
-        }
-        None
-    }
-
-    /// Parse `podman_vsock_port=PORT` from the kernel command line.
+    /// Parse `docker_vsock_port=PORT` from the kernel command line.
     ///
     /// The default is 9003 when the key is absent.
     fn parse_cmdline_docker_vsock_port(path: &str) -> Option<u32> {
@@ -350,7 +266,7 @@ mod linux {
     /// Bind-mount /proc, /sys, /dev from the initrd namespace into /rootfs,
     /// and mount a fresh tmpfs at /rootfs/run.
     ///
-    /// This is required before running Podman (or any process) in a chroot
+    /// This is required before running dockerd (or any process) in a chroot
     /// rooted at /rootfs: the chroot'd process must be able to see proc, sys,
     /// and dev, which only exist in the outer namespace after
     /// `mount_early_filesystems()` runs.
@@ -610,16 +526,10 @@ mod linux {
     }
 
     // ---------------------------------------------------------------------------
-    // Podman socket readiness
+    // Docker Engine socket readiness
     // ---------------------------------------------------------------------------
 
-    /// Poll `/rootfs/run/speck/podman.sock` until Podman accepts connections.
-    ///
-    /// The socket path is from vminitd's namespace (outside the chroot).
-    /// Podman writes to `/run/speck/podman.sock` inside the chroot, which is
-    /// `/rootfs/run/speck/podman.sock` from vminitd's perspective because the
-    /// tmpfs at `/rootfs/run` is shared between the outer namespace and the
-    /// chroot'd process.
+    /// Poll `/rootfs/run/speck/dockerd.sock` until dockerd accepts connections.
     ///
     /// Returns `true` if the socket became reachable within `max_attempts`
     /// (200 ms interval). Returns `false` if all attempts are exhausted.
@@ -627,26 +537,6 @@ mod linux {
         for attempt in 0..max_attempts {
             if unix_connect_once("/rootfs/run/speck/dockerd.sock") {
                 eprintln!("vminitd: dockerd socket ready after {attempt} attempts");
-                return true;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(200));
-        }
-        false
-    }
-
-    // ---------------------------------------------------------------------------
-    // containerd health check
-    // ---------------------------------------------------------------------------
-
-    /// Wait for containerd's Unix socket to become reachable.
-    ///
-    /// Polls `/rootfs/run/containerd/containerd.sock` by attempting to connect.
-    /// Returns `true` if the socket accept a connection within `max_attempts`
-    /// (200ms interval). Returns `false` if all attempts are exhausted.
-    fn wait_for_containerd_socket(max_attempts: u32) -> bool {
-        for attempt in 0..max_attempts {
-            if unix_connect_once("/rootfs/run/containerd/containerd.sock") {
-                eprintln!("vminitd: containerd socket ready after {attempt} attempts");
                 return true;
             }
             std::thread::sleep(std::time::Duration::from_millis(200));
@@ -1022,15 +912,10 @@ mod linux {
     }
 
     // ---------------------------------------------------------------------------
-    // Podman backend helpers
+    // Docker Engine backend
     // ---------------------------------------------------------------------------
 
-    /// Return the Podman binary path as it appears INSIDE the chroot (/rootfs).
-    ///
-    /// Checks `/rootfs/usr/bin/podman` first (most distros), then falls back
-    /// to `/rootfs/usr/local/bin/podman` (manual installs).  Returns the path
-    /// without the `/rootfs` prefix because the caller passes it to a process
-    /// that already has `/rootfs` as its root.
+    /// Return the dockerd binary path as it appears INSIDE the chroot (/rootfs).
     fn detect_dockerd_bin_in_chroot() -> &'static str {
         if std::path::Path::new("/rootfs/usr/bin/dockerd").exists() {
             "/usr/bin/dockerd"
@@ -1077,42 +962,6 @@ mod linux {
                     }
                     Err(e) => {
                         eprintln!("vminitd: failed to spawn dockerd: {e} — retrying");
-                    }
-                }
-                std::thread::sleep(std::time::Duration::from_secs(1));
-            }
-        });
-    }
-
-    // ---------------------------------------------------------------------------
-    // Service supervision
-    // ---------------------------------------------------------------------------
-
-    /// Spawn a background thread that runs `program` with `args` in a restart
-    /// loop. On crash, waits 1 second before restarting (backoff D-06).
-    fn spawn_service_with_restart(
-        name: &'static str,
-        program: &'static str,
-        args: Vec<&'static str>,
-    ) {
-        std::thread::spawn(move || {
-            loop {
-                match std::process::Command::new(program).args(&args).spawn() {
-                    Ok(mut child) => {
-                        eprintln!("vminitd: started {name} (pid {})", child.id());
-                        match child.wait() {
-                            Ok(status) => {
-                                eprintln!(
-                                    "vminitd: {name} exited with status {status} — restarting"
-                                );
-                            }
-                            Err(e) => {
-                                eprintln!("vminitd: {name} wait error: {e} — restarting");
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("vminitd: failed to spawn {name} ({program}): {e} — retrying");
                     }
                 }
                 std::thread::sleep(std::time::Duration::from_secs(1));
@@ -1437,14 +1286,10 @@ mod tests {
         let dockerd_spawn = SOURCE
             .find("spawn_dockerd_with_restart")
             .expect("boot path should support dockerd startup");
-        let service_spawn = SOURCE
-            .find("spawn_service_with_restart")
-            .expect("boot path should support containerd/buildkitd startup");
 
         assert!(data_mount < grow, "data filesystem must grow only after /dev/vdb mount succeeds");
         assert!(grow < runtime_dir, "data filesystem must grow before runtime directories are created");
         assert!(boot_mount < dockerd_spawn, "disk mounting/growth must happen before dockerd starts");
-        assert!(boot_mount < service_spawn, "disk mounting/growth must happen before containerd/buildkitd start");
     }
 
     #[test]

@@ -9,13 +9,11 @@ on:
         default: "0.1.0"
       backend:
         description: Runtime backend to install in rootfs
-        required: true
+        required: false
         default: "moby"
         type: choice
         options:
           - moby
-          - podman
-          - containerd
   push:
     tags: ["rootfs-v*"]
 
@@ -35,9 +33,8 @@ jobs:
           VERSION="${{ github.event.inputs.version || github.ref_name }}"
           VERSION="${VERSION#rootfs-v}"
           VERSION="${VERSION#v}"
-          BACKEND="${{ github.event.inputs.backend || 'moby' }}"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "backend=${BACKEND}" >> "$GITHUB_OUTPUT"
+          echo "backend=moby" >> "$GITHUB_OUTPUT"
           echo "release_tag=rootfs-${VERSION}" >> "$GITHUB_OUTPUT"
 
       - name: Create raw ext4 image (512 MB)
@@ -46,7 +43,6 @@ jobs:
           mkfs.ext4 -O dir_index,extent -L speck-rootfs rootfs.img
 
       - name: Mount and populate rootfs (moby)
-        if: ${{ github.event.inputs.backend == 'moby' || github.event.inputs.backend == '' }}
         run: |
           mkdir -p /tmp/rootfs
           sudo mount -o loop rootfs.img /tmp/rootfs
@@ -90,83 +86,6 @@ jobs:
             f="/tmp/rootfs/${p}"
             [ -e "$f" ] && echo "FOUND: /${p}" || echo "MISSING: /${p}"
           done
-
-          sudo umount /tmp/rootfs
-
-      - name: Mount and populate rootfs (podman)
-        if: ${{ github.event.inputs.backend == 'podman' }}
-        run: |
-          mkdir -p /tmp/rootfs
-          sudo mount -o loop rootfs.img /tmp/rootfs
-
-          curl -fsSL \
-            "https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/aarch64/alpine-minirootfs-3.20.3-aarch64.tar.gz" \
-            | sudo tar -C /tmp/rootfs -xz
-
-          echo "nameserver 1.1.1.1" | sudo tee /tmp/rootfs/etc/resolv.conf
-
-          sudo mount -t proc proc /tmp/rootfs/proc
-          sudo mount -t sysfs sysfs /tmp/rootfs/sys
-          sudo mount --bind /dev /tmp/rootfs/dev
-
-          sudo chroot /tmp/rootfs /bin/sh -c "
-            echo 'https://dl-cdn.alpinelinux.org/alpine/v3.20/community' >> /etc/apk/repositories
-            apk update
-            apk add --no-cache \
-              podman \
-              conmon \
-              crun \
-              netavark \
-              aardvark-dns \
-              fuse-overlayfs \
-              ca-certificates \
-              iproute2
-          "
-
-          sudo mkdir -p /tmp/rootfs/run/speck
-          sudo mkdir -p /tmp/rootfs/var/lib/containers
-          sudo mkdir -p /tmp/rootfs/etc/containers
-
-          sudo tee /tmp/rootfs/etc/containers/storage.conf <<'EOF'
-          [storage]
-          driver = "overlay"
-          runroot = "/run/containers/storage"
-          graphroot = "/var/lib/containers/storage"
-          EOF
-
-          sudo tee /tmp/rootfs/etc/containers/registries.conf <<'EOF'
-          [registries.search]
-          registries = ["docker.io"]
-          EOF
-
-          sudo umount /tmp/rootfs/dev
-          sudo umount /tmp/rootfs/sys
-          sudo umount /tmp/rootfs/proc
-
-          sudo umount /tmp/rootfs
-
-      - name: Mount and populate rootfs (containerd)
-        if: ${{ github.event.inputs.backend == 'containerd' }}
-        run: |
-          mkdir -p /tmp/rootfs
-          sudo mount -o loop rootfs.img /tmp/rootfs
-          sudo mkdir -p /tmp/rootfs/{usr/bin,usr/local/bin,etc/containerd,run,tmp,proc,sys,var/lib/containerd}
-
-          curl -fsSL https://github.com/containerd/containerd/releases/download/v2.3.2/containerd-static-2.3.2-linux-arm64.tar.gz \
-            | sudo tar -C /tmp/rootfs/usr/local -xz
-
-          sudo curl -fsSL https://github.com/opencontainers/runc/releases/download/v1.5.0/runc.arm64 \
-            -o /tmp/rootfs/usr/bin/runc
-          sudo chmod +x /tmp/rootfs/usr/bin/runc
-
-          curl -fsSL https://github.com/moby/buildkit/releases/download/v0.31.1/buildkit-v0.31.1.linux-arm64.tar.gz \
-            | sudo tar -C /tmp/rootfs/usr/local -xz
-
-          sudo tee /tmp/rootfs/etc/containerd/config.toml <<'EOF'
-          version = 3
-          [plugins.'io.containerd.cri.v1.images']
-            snapshotter = "overlayfs"
-          EOF
 
           sudo umount /tmp/rootfs
 

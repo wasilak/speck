@@ -13,15 +13,11 @@ if [ ! -f "${INITRD}" ]; then
     exit 1
 fi
 
-RUNTIME=""
-if command -v docker >/dev/null 2>&1; then
-    RUNTIME="docker"
-elif command -v podman >/dev/null 2>&1; then
-    RUNTIME="podman"
-else
-    echo "ERROR: no supported provisioning source available; install docker or podman to provision /sbin/resize2fs"
+if ! command -v docker >/dev/null 2>&1; then
+    echo "ERROR: docker is required to provision guest /sbin/resize2fs"
     exit 1
 fi
+RUNTIME="docker"
 
 mkdir -p "${SPECK_HOME}/tmp"
 TMPDIR="$(mktemp -d "${SPECK_HOME}/tmp/speck-resize-tools-provision.XXXXXX")"

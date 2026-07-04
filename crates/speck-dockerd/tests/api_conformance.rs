@@ -381,21 +381,14 @@ async fn test_volume_create_list_remove() {
         .expect("remove volume");
 }
 
-// ─── Backend mode tests — Podman transparent proxy ────────────────────────
+// ─── End-to-end integration tests ─────────────────────────────────────────
 //
 // These tests exercise features that must work end-to-end through the
-// transparent vsock proxy:
-//
-//   docker CLI → $SPECK_SOCK → unix_vsock_proxy → vsock port 9003
-//   → guest sock_forwarder → /run/speck/podman.sock → Podman
-//
-// They complement the general conformance tests above by covering bind mounts,
-// port publishing, in-container DNS resolution, and the Testcontainers/Ryuk
-// socket pattern.
+// transparent vsock proxy.
 //
 // Prerequisites:
 //   - Signed speck binary (`cargo xtask codesign-dev`)
-//   - `spk up` running in Podman backend mode
+//   - `spk up` running
 //   - For DNS tests: external network access from within the VM
 //
 // Run:
@@ -408,7 +401,7 @@ async fn test_volume_create_list_remove() {
 /// the same absolute path inside the guest so Podman can find it when resolving the
 /// bind spec without any JSON rewriting in the Speck proxy.
 #[tokio::test]
-#[ignore = "requires signed binary + spk up (podman backend) + /private/tmp identity mount"]
+#[ignore = "requires signed binary + spk up running + /private/tmp identity mount"]
 async fn test_bind_mount_host_path() {
     let tmp_dir = std::env::temp_dir(); // /private/tmp on macOS
     let tmp_file = tmp_dir.join("speck-bind-test.txt");
@@ -488,7 +481,7 @@ async fn test_bind_mount_host_path() {
 /// Verify that a port-published container starts without error and the binding
 /// is negotiated through the Speck proxy without reintroducing VZNATNetworkDeviceAttachment.
 #[tokio::test]
-#[ignore = "requires signed binary + spk up (podman backend) + nginx:alpine image"]
+#[ignore = "requires signed binary + spk up running + nginx:alpine image"]
 async fn test_port_publish_nginx() {
     let docker = speck_docker();
     let mut port_bindings: HashMap<String, Option<Vec<PortBinding>>> = HashMap::new();
@@ -541,7 +534,7 @@ async fn test_port_publish_nginx() {
 ///
 /// With WARP/VPN active this same test with a VPN-internal hostname is the critical gate.
 #[tokio::test]
-#[ignore = "requires signed binary + spk up (podman backend) + external network access"]
+#[ignore = "requires signed binary + spk up running + external network access"]
 async fn test_dns_resolution_inside_container() {
     let docker = speck_docker();
     let config = ContainerCreateBody {
@@ -596,7 +589,7 @@ async fn test_dns_resolution_inside_container() {
 ///   DOCKER_HOST=unix://$HOME/.local/share/speck/speck.sock
 ///   TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=$HOME/.local/share/speck/speck.sock
 #[tokio::test]
-#[ignore = "requires signed binary + spk up (podman backend) running"]
+#[ignore = "requires signed binary + spk up running"]
 async fn test_ryuk_socket_bind_mount() {
     let docker = speck_docker();
     let sock = speck_sock();

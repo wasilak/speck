@@ -102,7 +102,7 @@ Plans:
 - [x] **Phase 08: Config File & VM Resource Controls** — Persistent config file with VM right-sizing and env/flag/file precedence (completed 2026-07-03)
 - [ ] **Phase 09: Daemon Lifecycle** — Background daemon via launchd LaunchAgent with `spk down` and `spk restart`
 - [x] **Phase 10: Shell Environment Integration** — `spk env` for immediate use; idempotent `spk init` for persistent `DOCKER_HOST` (completed 2026-07-04)
-- [ ] **Phase 11: VPN-Proof DNS** — Live DNS reload via SCDynamicStore/vsock; no host `:53` binding; split-DNS + SERVFAIL translation
+- [x] **Phase 11: VPN-Proof DNS** — Live DNS reload via SCDynamicStore/vsock; no host `:53` binding; split-DNS + SERVFAIL translation (completed 2026-07-04)
 - [ ] **Phase 12: Corporate CA Injection** — Custom CA certs injected into guest trust bundle before containerd/buildkitd start
 - [ ] **Phase 13: Diagnostics** — `spk doctor` health suite covering DNS, certs, VM state, and socket reachability
 - [ ] **Phase 14: Homebrew Distribution** — Signed `.pkg` Cask artifact that preserves the virtualization entitlement through Homebrew re-signing
@@ -229,19 +229,19 @@ Plans:
 
 **Wave 1**
 
-- [ ] 11-02-PLAN.md — Package legitimacy checkpoint + Cargo.toml: system-configuration, system-configuration-sys, core-foundation, dispatch2 (has checkpoint)
+- [x] 11-02-PLAN.md — Package legitimacy checkpoint + Cargo.toml: system-configuration, system-configuration-sys, core-foundation, dispatch2 (has checkpoint)
 
 **Wave 2** *(blocked on Wave 1)*
 
-- [ ] 11-03-PLAN.md — resolver_table.rs: ResolverTable struct + SCDynamicStore GCD watcher + spawn_resolver_watcher; extend error.rs + lib.rs module re-export
+- [x] 11-03-PLAN.md — resolver_table.rs: ResolverTable struct + SCDynamicStore GCD watcher + spawn_resolver_watcher; extend error.rs + lib.rs module re-export
 
 **Wave 3** *(blocked on Wave 2)*
 
-- [ ] 11-04-PLAN.md — dns.rs extension: split-DNS routing, direct VPN UDP, NXDOMAIN→SERVFAIL, eprintln→tracing, buf 4096; lib.rs spawn signature; up.rs wiring
+- [x] 11-04-PLAN.md — dns.rs extension: split-DNS routing, direct VPN UDP, NXDOMAIN→SERVFAIL, eprintln→tracing, buf 4096; lib.rs spawn signature; up.rs wiring
 
 **Wave 4** *(blocked on Wave 3)*
 
-- [ ] 11-05-PLAN.md — Manual verification: DNS-01 lsof check + DNS-03 WARP container DNS (has checkpoint)
+- [x] 11-05-PLAN.md — Manual verification: DNS-01 lsof check + DNS-03 WARP container DNS (has checkpoint)
 
 ### Phase 12: Corporate CA Injection
 
@@ -292,7 +292,7 @@ Plans:
 | 08. Config File & VM Resources | 3/3 | Complete   | 2026-07-03 |
 | 09. Daemon Lifecycle | 3/3 | Complete   | 2026-07-03 |
 | 10. Shell Integration | 2/2 | Complete    | 2026-07-04 |
-| 11. VPN-Proof DNS | 1/5 | In Progress|  |
+| 11. VPN-Proof DNS | 5/5 | Complete   | 2026-07-04 |
 | 12. Corporate CA Injection | 0/TBD | Not started | - |
 | 13. Diagnostics | 0/TBD | Not started | - |
 | 14. Homebrew Distribution | 0/TBD | Not started | - |
