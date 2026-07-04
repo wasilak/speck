@@ -225,7 +225,7 @@ Plans:
 Plans:
 **Wave 0**
 
-- [ ] 11-01-PLAN.md — TDD stubs: ResolverTable test contracts + RCODE rewrite test contracts (RED baseline)
+- [x] 11-01-PLAN.md — TDD stubs: ResolverTable test contracts + RCODE rewrite test contracts (RED baseline)
 
 **Wave 1**
 
@@ -292,7 +292,7 @@ Plans:
 | 08. Config File & VM Resources | 3/3 | Complete   | 2026-07-03 |
 | 09. Daemon Lifecycle | 3/3 | Complete   | 2026-07-03 |
 | 10. Shell Integration | 2/2 | Complete    | 2026-07-04 |
-| 11. VPN-Proof DNS | 0/5 | Not started | - |
+| 11. VPN-Proof DNS | 1/5 | In Progress|  |
 | 12. Corporate CA Injection | 0/TBD | Not started | - |
 | 13. Diagnostics | 0/TBD | Not started | - |
 | 14. Homebrew Distribution | 0/TBD | Not started | - |
