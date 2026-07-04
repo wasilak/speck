@@ -3,6 +3,7 @@ pub mod device;
 pub(crate) mod dhcp;
 pub(crate) mod dns;
 pub mod error;
+pub mod resolver_table;
 pub mod interface;
 pub mod mtu;
 pub mod port_publish;

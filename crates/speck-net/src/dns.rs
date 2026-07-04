@@ -201,6 +201,17 @@ fn find_qname_end(data: &[u8], mut start: usize) -> Option<usize> {
     }
 }
 
+/// Rewrite RCODE NXDOMAIN (3) → SERVFAIL (2) per DNS-06.
+/// RFC 1035: RCODE is the lower 4 bits of byte 3 in the DNS header.
+pub(crate) fn translate_nxdomain_to_servfail(response: &mut [u8]) {
+    if response.len() < 4 {
+        return;
+    }
+    if response[3] & 0x0f == 3 {
+        response[3] = (response[3] & 0xf0) | 0x02;
+    }
+}
+
 /// Build a minimal SERVFAIL response (12 bytes).
 fn build_servfail_response(query_header: &[u8]) -> Vec<u8> {
     let id = query_header.get(..2).unwrap_or(&[0, 0]);
