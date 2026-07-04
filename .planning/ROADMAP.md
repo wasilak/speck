@@ -103,7 +103,7 @@ Plans:
 - [ ] **Phase 09: Daemon Lifecycle** — Background daemon via launchd LaunchAgent with `spk down` and `spk restart`
 - [x] **Phase 10: Shell Environment Integration** — `spk env` for immediate use; idempotent `spk init` for persistent `DOCKER_HOST` (completed 2026-07-04)
 - [x] **Phase 11: VPN-Proof DNS** — Live DNS reload via SCDynamicStore/vsock; no host `:53` binding; split-DNS + SERVFAIL translation (completed 2026-07-04)
-- [ ] **Phase 12: Corporate CA Injection** — Custom CA certs injected into guest trust bundle before containerd/buildkitd start
+- [ ] **Phase 12: Corporate CA Injection** — Custom CA certs injected into guest trust bundle before containerd/buildkitd start (3 plans)
 - [ ] **Phase 13: Diagnostics** — `spk doctor` health suite covering DNS, certs, VM state, and socket reachability
 - [ ] **Phase 14: Homebrew Distribution** — Signed `.pkg` Cask artifact that preserves the virtualization entitlement through Homebrew re-signing
 
@@ -255,7 +255,12 @@ Plans:
   3. Specifying a non-existent cert path in `config.yaml` causes `spk up` to exit before the VM starts with a clear file-not-found error message
   4. Specifying a file that is not valid PEM causes `spk up` to exit before the VM starts with a "not valid PEM" error — no silent partial injection
 
-**Plans**: TBD
+**Plans**: 3 plans
+
+Plans:
+- [ ] 12-01-PLAN.md (Wave 0) — TDD: failing tests for cert validation, GuestConfig propagation, and cmdline arg
+- [ ] 12-02-PLAN.md (Wave 1) — Host-side config layer: CaConfig struct, PEM validation, GuestConfig field, VirtioFS device + cmdline
+- [ ] 12-03-PLAN.md (Wave 2) — Integration wiring: up.rs validation chain, vm_thread.rs passthrough, vminitd mount+update-ca-certificates+hosts.toml
 
 ### Phase 13: Diagnostics
 
@@ -293,6 +298,6 @@ Plans:
 | 09. Daemon Lifecycle | 3/3 | Complete   | 2026-07-03 |
 | 10. Shell Integration | 2/2 | Complete    | 2026-07-04 |
 | 11. VPN-Proof DNS | 5/5 | Complete   | 2026-07-04 |
-| 12. Corporate CA Injection | 0/TBD | Not started | - |
+| 12. Corporate CA Injection | 3/3 | Planned | 12-01 (TDD), 12-02 (config), 12-03 (integration) |
 | 13. Diagnostics | 0/TBD | Not started | - |
 | 14. Homebrew Distribution | 0/TBD | Not started | - |
