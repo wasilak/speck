@@ -2,29 +2,29 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: — Production Runtime
-status: verifying
-last_updated: "2026-07-03T09:20:00.613Z"
-last_activity: 2026-07-03 -- Phase 08 Plan 02 completed
+status: planning
+last_updated: "2026-07-04T12:15:00.655Z"
+last_activity: 2026-07-04
 progress:
   total_phases: 8
-  completed_phases: 2
-  total_plans: 8
-  completed_plans: 8
-  percent: 25
+  completed_phases: 4
+  total_plans: 13
+  completed_plans: 13
+  percent: 50
 ---
 
 # State — Milestone v1.1 Production Runtime
 
-**Status:** Phase complete — ready for verification
+**Status:** Ready to plan
 
 ## Current Position
 
-Phase: 08 (config-file-vm-resource-controls) — COMPLETE
-Plan: 3 of 3
+Phase: 11
+Plan: Not started
 Status: Phase complete — ready for verification
-Last activity: 2026-07-03 -- Phase 08 Plan 02 completed
+Last activity: 2026-07-04
 
-Progress: 2/8 phases complete [█████░░░░░░░░░░░░░░░] 25%
+Progress: 3/8 phases complete [████████░░░░░░░░░░░░░] 38%
 
 ## Milestone v1.1 Phase Overview
 
@@ -32,7 +32,7 @@ Progress: 2/8 phases complete [█████░░░░░░░░░░░�
 |-------|------|--------------|--------|
 | 07 | Gap Closure | GAP-01..04 | Complete |
 | 08 | Config File & VM Resources | CFG-01..03, VMCFG-01..04 | Complete |
-| 09 | Daemon Lifecycle | DAEMON-01..05 | Not started |
+| 09 | Daemon Lifecycle | DAEMON-01..05 | Complete |
 | 10 | Shell Integration | SHELL-01..03 | Not started |
 | 11 | VPN-Proof DNS | DNS-01..06 | Not started |
 | 12 | Corporate CA Injection | CERT-01..04 | Not started |
@@ -74,7 +74,7 @@ Progress: 2/8 phases complete [█████░░░░░░░░░░░�
 
 ### Todos
 
-- [ ] Start Phase 09 planning: `/gsd-plan-phase 9`
+- [ ] Start Phase 10 planning: `/gsd-plan-phase 10`
 
 ### Blockers
 
@@ -92,9 +92,15 @@ None.
 | Phase 08 P01 | 18min | 3 tasks | 4 files |
 | Phase 08 P03 | 24min | 3 tasks | 3 files |
 | Phase 08 P02 | 11min | 3 tasks | 5 files |
+| Phase 10 P01 | 8min | 2 tasks | 6 files |
+| Phase 10 P02 | 15min | 2 tasks | 5 files |
 
 ## Decisions
 
 - Phase 08 Plan 02: Initialize `spk up` tracing from `EffectiveConfig.log_level` after config resolution and before startup warnings/run_up dispatch.
 - Phase 08 Plan 02: Use grow-only `File::set_len` data disk reconciliation and reject shrink with `disk shrink not supported:`.
 - Phase 08 Plan 02: Persist effective VM resources in `$SPECK_HOME/run/vm-config.json` and compare CPU/memory when runtime holders exist.
+- Phase 09 Plan 02: `spk up` defaults to launchd re-exec; `--foreground` bypasses daemonization and `SPECK_DAEMONIZED=1` selects file logging plus prevents re-exec loops.
+- Phase 09 Plan 02: daemon liveness is exposed only through `$SPECK_HOME/run/control.sock` responding with `PONG`, not through a PID file or command channel.
+- [Phase ?]: Phase 10 Plan 01: EnvShell is a two-variant enum (Posix/Fish) with #[derive(Clone, Copy)] so callers can pass it to render_env and render_speck_home without cloning — Idiomatic zero-cost fix for a fieldless enum
+- [Phase ?]: Phase 10 Plan 02: Sentinel replace-or-append (BEGIN/END marker) for bash/zsh dotfile writes; fish uses dedicated conf.d file overwrite; --set-docker-host is explicit opt-in consent for persistence

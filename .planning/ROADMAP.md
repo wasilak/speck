@@ -101,7 +101,7 @@ Plans:
 - [x] **Phase 07: Gap Closure** — Close remaining v1.0 gaps so `spk run` works end-to-end (completed 2026-07-02)
 - [x] **Phase 08: Config File & VM Resource Controls** — Persistent config file with VM right-sizing and env/flag/file precedence (completed 2026-07-03)
 - [ ] **Phase 09: Daemon Lifecycle** — Background daemon via launchd LaunchAgent with `spk down` and `spk restart`
-- [ ] **Phase 10: Shell Environment Integration** — `spk env` for immediate use; idempotent `spk init` for persistent `DOCKER_HOST`
+- [x] **Phase 10: Shell Environment Integration** — `spk env` for immediate use; idempotent `spk init` for persistent `DOCKER_HOST` (completed 2026-07-04)
 - [ ] **Phase 11: VPN-Proof DNS** — Live DNS reload via SCDynamicStore/vsock; no host `:53` binding; split-DNS + SERVFAIL translation
 - [ ] **Phase 12: Corporate CA Injection** — Custom CA certs injected into guest trust bundle before containerd/buildkitd start
 - [ ] **Phase 13: Diagnostics** — `spk doctor` health suite covering DNS, certs, VM state, and socket reachability
@@ -177,12 +177,12 @@ Plans:
 Plans:
 **Wave 1**
 
-- [ ] 09-01-PLAN.md — tracing-appender gate + SizeRotatingFileAppender logging module (Wave 1, has checkpoint)
-- [ ] 09-03-PLAN.md — spk down: full run_down implementation — ping socket, bootout, plist removal, shutdown poll (Wave 1)
+- [x] 09-01-PLAN.md — tracing-appender gate + SizeRotatingFileAppender logging module (Wave 1, has checkpoint)
+- [x] 09-03-PLAN.md — spk down: full run_down implementation — ping socket, bootout, plist removal, shutdown poll (Wave 1)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 09-02-PLAN.md — LaunchAgent re-exec in main.rs + daemonize() + control socket + SIGTERM + shutdown_gracefully() in up.rs (Wave 2)
+- [x] 09-02-PLAN.md — LaunchAgent re-exec in main.rs + daemonize() + control socket + SIGTERM + shutdown_gracefully() in up.rs (Wave 2)
 
 ### Phase 10: Shell Environment Integration
 
@@ -196,7 +196,16 @@ Plans:
   3. Running `spk init` a second time produces no duplicate block in `~/.zshrc`, `~/.bashrc`, or fish config — idempotent across any number of invocations
   4. Running `spk init` when `DOCKER_HOST` is already set to another runtime prints a warning before writing the block — opt-in behavior, not a silent hijack
 
-**Plans**: TBD
+**Plans**: 2 plans
+
+Plans:
+**Wave 1**
+
+- [x] 10-01-PLAN.md — Shared env renderer + `spk env` command: `shell.rs`, refactor `up.rs`, `--shell posix/fish` (Wave 1)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 10-02-PLAN.md — `spk init` idempotent persistence: guarded blocks for bash/zsh, `conf.d/speck.fish` for fish, `--set-docker-host` opt-in, conflict warning, temp-dir tests (Wave 2)
 
 ### Phase 11: VPN-Proof DNS
 
@@ -260,8 +269,8 @@ Plans:
 |-------|----------------|--------|-----------|
 | 07. Gap Closure | 5/5 | Complete   | 2026-07-02 |
 | 08. Config File & VM Resources | 3/3 | Complete   | 2026-07-03 |
-| 09. Daemon Lifecycle | 0/TBD | Not started | - |
-| 10. Shell Integration | 0/TBD | Not started | - |
+| 09. Daemon Lifecycle | 3/3 | Complete   | 2026-07-03 |
+| 10. Shell Integration | 2/2 | Complete    | 2026-07-04 |
 | 11. VPN-Proof DNS | 0/TBD | Not started | - |
 | 12. Corporate CA Injection | 0/TBD | Not started | - |
 | 13. Diagnostics | 0/TBD | Not started | - |
