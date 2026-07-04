@@ -220,7 +220,28 @@ Plans:
   4. `lsof -i :53` on the macOS host while Speck is running shows no Speck process bound to port 53 — the DNS proxy runs inside the VM network namespace only
   5. Immediately after VPN reconnect, `nslookup internal.corp` from a container returns SERVFAIL rather than a cached NXDOMAIN — clients retry after reconnect instead of caching a permanent failure
 
-**Plans**: TBD
+**Plans**: 5 plans
+
+Plans:
+**Wave 0**
+
+- [ ] 11-01-PLAN.md — TDD stubs: ResolverTable test contracts + RCODE rewrite test contracts (RED baseline)
+
+**Wave 1**
+
+- [ ] 11-02-PLAN.md — Package legitimacy checkpoint + Cargo.toml: system-configuration, system-configuration-sys, core-foundation, dispatch2 (has checkpoint)
+
+**Wave 2** *(blocked on Wave 1)*
+
+- [ ] 11-03-PLAN.md — resolver_table.rs: ResolverTable struct + SCDynamicStore GCD watcher + spawn_resolver_watcher; extend error.rs + lib.rs module re-export
+
+**Wave 3** *(blocked on Wave 2)*
+
+- [ ] 11-04-PLAN.md — dns.rs extension: split-DNS routing, direct VPN UDP, NXDOMAIN→SERVFAIL, eprintln→tracing, buf 4096; lib.rs spawn signature; up.rs wiring
+
+**Wave 4** *(blocked on Wave 3)*
+
+- [ ] 11-05-PLAN.md — Manual verification: DNS-01 lsof check + DNS-03 WARP container DNS (has checkpoint)
 
 ### Phase 12: Corporate CA Injection
 
@@ -271,7 +292,7 @@ Plans:
 | 08. Config File & VM Resources | 3/3 | Complete   | 2026-07-03 |
 | 09. Daemon Lifecycle | 3/3 | Complete   | 2026-07-03 |
 | 10. Shell Integration | 2/2 | Complete    | 2026-07-04 |
-| 11. VPN-Proof DNS | 0/TBD | Not started | - |
+| 11. VPN-Proof DNS | 0/5 | Not started | - |
 | 12. Corporate CA Injection | 0/TBD | Not started | - |
 | 13. Diagnostics | 0/TBD | Not started | - |
 | 14. Homebrew Distribution | 0/TBD | Not started | - |
