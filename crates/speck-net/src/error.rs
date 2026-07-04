@@ -7,6 +7,9 @@ pub enum Error {
 
     #[error("I/O error: {0}")]
     Io(#[source] std::io::Error),
+
+    #[error("SCDynamicStore error: {0}")]
+    DynamicStore(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
