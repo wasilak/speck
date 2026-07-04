@@ -2,19 +2,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context as _;
 
+use crate::InitArgs;
 use crate::shell::{self, EnvShell, ShellTarget, BEGIN_MARKER, END_MARKER};
-
-/// Arguments for `spk init`.
-///
-/// `--set-docker-host` is the explicit opt-in flag that persists the Speck
-/// environment block into the user's shell startup file. Without it, `spk init`
-/// prints instructions and a preview without writing dotfiles (SHELL-03).
-/// `--shell` overrides shell auto-detection (valid values: bash, zsh, fish).
-#[derive(Clone)]
-pub struct InitArgs {
-    pub set_docker_host: bool,
-    pub shell: Option<String>,
-}
 
 /// Resolve the shell target from the `--shell` override or auto-detection.
 fn resolve_shell(override_shell: &Option<String>) -> anyhow::Result<ShellTarget> {

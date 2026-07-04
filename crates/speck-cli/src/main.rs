@@ -45,6 +45,8 @@ enum Commands {
     Completion(CompletionArgs),
     /// Print shell environment exports for this session
     Env(EnvArgs),
+    /// Initialize Speck shell integration (one-time setup)
+    Init(InitArgs),
 }
 
 #[derive(Parser)]
@@ -125,6 +127,16 @@ struct EnvArgs {
     /// Target shell syntax for env exports: `posix` (bash/zsh) or `fish`.
     #[arg(long, default_value = "posix", value_parser = ["posix", "fish"])]
     shell: String,
+}
+
+#[derive(Parser, Clone)]
+pub struct InitArgs {
+    /// Persist the Speck environment block in your shell startup file (opt-in)
+    #[arg(long = "set-docker-host")]
+    pub set_docker_host: bool,
+    /// Override shell detection (bash, zsh, fish)
+    #[arg(long, value_parser = ["bash", "zsh", "fish"])]
+    pub shell: Option<String>,
 }
 
 fn resolve_speck_home() -> PathBuf {
@@ -396,6 +408,10 @@ async fn main() -> anyhow::Result<()> {
         Commands::Env(args) => {
             init_tracing(&default_tracing_filter())?;
             commands::env::run_env(args, &speck_home)
+        }
+        Commands::Init(args) => {
+            init_tracing(&default_tracing_filter())?;
+            commands::init::run_init(args, &speck_home).await?
         }
     }
 

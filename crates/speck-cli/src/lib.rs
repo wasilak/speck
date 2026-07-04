@@ -43,6 +43,8 @@ enum Commands {
     Completion(CompletionArgs),
     /// Print shell environment exports for this session
     Env(EnvArgs),
+    /// Initialize Speck shell integration (one-time setup)
+    Init(InitArgs),
 }
 
 #[derive(Parser)]
@@ -123,4 +125,14 @@ struct EnvArgs {
     /// Target shell syntax for env exports: `posix` (bash/zsh) or `fish`.
     #[arg(long, default_value = "posix", value_parser = ["posix", "fish"])]
     shell: String,
+}
+
+#[derive(Parser, Clone)]
+pub struct InitArgs {
+    /// Persist the Speck environment block in your shell startup file (opt-in)
+    #[arg(long = "set-docker-host")]
+    pub set_docker_host: bool,
+    /// Override shell detection (bash, zsh, fish)
+    #[arg(long, value_parser = ["bash", "zsh", "fish"])]
+    pub shell: Option<String>,
 }
