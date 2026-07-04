@@ -7,6 +7,39 @@ pub enum EnvShell {
     Fish,
 }
 
+/// Shell target for `spk init` persistent bootstrap writes.
+///
+/// Bash and Zsh share the same POSIX `if command -v spk` block format written
+/// to `~/.bashrc` / `~/.zshrc`; Fish uses a dedicated `conf.d/speck.fish` file
+/// with fish-native `if command -q spk` syntax.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ShellTarget {
+    Bash,
+    Zsh,
+    Fish,
+}
+
+/// Detect the user's shell from the `SHELL` environment variable.
+///
+/// Inspects `$SHELL` for `bash`, `zsh`, or `fish` substrings (case-sensitive).
+/// On macOS the default interactive shell is zsh, so an unset or unrecognized
+/// `SHELL` value falls back to [`ShellTarget::Zsh`].
+pub fn detect_shell() -> ShellTarget {
+    unimplemented!("detect_shell is a RED stub — implement in GREEN")
+}
+
+/// Render the idempotent bootstrap block for the given shell target.
+///
+/// The block is wrapped in `# BEGIN speck` / `# END speck` sentinel markers so
+/// repeated `spk init --set-docker-host` runs replace the region instead of
+/// appending duplicates. Bash/Zsh emit `if command -v spk >/dev/null 2>&1; then
+/// eval "$(spk env)"; fi`; Fish emits `if command -q spk; spk env --shell fish |
+/// source; end`.
+pub fn render_init_block(target: ShellTarget) -> String {
+    let _ = target;
+    unimplemented!("render_init_block is a RED stub — implement in GREEN")
+}
+
 /// Render shell-ready export/set statements for `DOCKER_HOST` and
 /// `TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE`, derived from `speck_home`.
 ///
@@ -43,6 +76,9 @@ pub fn render_speck_home(speck_home: &Path, shell: EnvShell) -> String {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+    use std::sync::Mutex;
+
+    static SHELL_ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn home() -> PathBuf {
         PathBuf::from("/tmp/speck-home")
@@ -99,6 +135,160 @@ mod tests {
         assert!(
             out.contains("set -gx SPECK_HOME /tmp/speck-home"),
             "fish render_speck_home must emit `set -gx SPECK_HOME <home>`; got: {out:?}"
+        );
+    }
+
+    // --- ShellTarget / detect_shell / render_init_block tests ---
+
+    #[test]
+    fn detect_shell_defaults_to_zsh_when_unset() {
+        let _guard = SHELL_ENV_LOCK.lock().unwrap();
+        unsafe {
+            std::env::remove_var("SHELL");
+        }
+        assert_eq!(
+            detect_shell(),
+            ShellTarget::Zsh,
+            "detect_shell must default to Zsh on macOS when SHELL is unset"
+        );
+    }
+
+    #[test]
+    fn detect_shell_returns_bash_for_bash_shell() {
+        let _guard = SHELL_ENV_LOCK.lock().unwrap();
+        unsafe {
+            std::env::set_var("SHELL", "/bin/bash");
+        }
+        assert_eq!(
+            detect_shell(),
+            ShellTarget::Bash,
+            "detect_shell must return Bash when SHELL contains `bash`"
+        );
+        unsafe {
+            std::env::remove_var("SHELL");
+        }
+    }
+
+    #[test]
+    fn detect_shell_returns_zsh_for_zsh_shell() {
+        let _guard = SHELL_ENV_LOCK.lock().unwrap();
+        unsafe {
+            std::env::set_var("SHELL", "/bin/zsh");
+        }
+        assert_eq!(
+            detect_shell(),
+            ShellTarget::Zsh,
+            "detect_shell must return Zsh when SHELL contains `zsh`"
+        );
+        unsafe {
+            std::env::remove_var("SHELL");
+        }
+    }
+
+    #[test]
+    fn detect_shell_returns_fish_for_fish_shell() {
+        let _guard = SHELL_ENV_LOCK.lock().unwrap();
+        unsafe {
+            std::env::set_var("SHELL", "/usr/local/bin/fish");
+        }
+        assert_eq!(
+            detect_shell(),
+            ShellTarget::Fish,
+            "detect_shell must return Fish when SHELL contains `fish`"
+        );
+        unsafe {
+            std::env::remove_var("SHELL");
+        }
+    }
+
+    #[test]
+    fn detect_shell_defaults_to_zsh_for_unrecognized_shell() {
+        let _guard = SHELL_ENV_LOCK.lock().unwrap();
+        unsafe {
+            std::env::set_var("SHELL", "/bin/sh");
+        }
+        assert_eq!(
+            detect_shell(),
+            ShellTarget::Zsh,
+            "detect_shell must default to Zsh for unrecognized SHELL values"
+        );
+        unsafe {
+            std::env::remove_var("SHELL");
+        }
+    }
+
+    #[test]
+    fn render_init_block_bash_contains_begin_and_end_markers() {
+        let block = render_init_block(ShellTarget::Bash);
+        assert!(
+            block.contains("# BEGIN speck"),
+            "bash init block must contain # BEGIN speck sentinel; got: {block:?}"
+        );
+        assert!(
+            block.contains("# END speck"),
+            "bash init block must contain # END speck sentinel; got: {block:?}"
+        );
+    }
+
+    #[test]
+    fn render_init_block_bash_contains_command_v_spk_and_eval() {
+        let block = render_init_block(ShellTarget::Bash);
+        assert!(
+            block.contains("command -v spk"),
+            "bash init block must guard with `command -v spk`; got: {block:?}"
+        );
+        assert!(
+            block.contains("eval \"$(spk env)\""),
+            "bash init block must invoke `eval \"$(spk env)\"`; got: {block:?}"
+        );
+    }
+
+    #[test]
+    fn render_init_block_zsh_contains_same_format_as_bash() {
+        let bash_block = render_init_block(ShellTarget::Bash);
+        let zsh_block = render_init_block(ShellTarget::Zsh);
+        assert_eq!(
+            bash_block, zsh_block,
+            "Zsh and Bash init blocks must be identical (both use POSIX eval syntax)"
+        );
+    }
+
+    #[test]
+    fn render_init_block_fish_contains_begin_and_end_markers() {
+        let block = render_init_block(ShellTarget::Fish);
+        assert!(
+            block.contains("# BEGIN speck"),
+            "fish init block must contain # BEGIN speck sentinel; got: {block:?}"
+        );
+        assert!(
+            block.contains("# END speck"),
+            "fish init block must contain # END speck sentinel; got: {block:?}"
+        );
+    }
+
+    #[test]
+    fn render_init_block_fish_contains_command_q_spk_and_source() {
+        let block = render_init_block(ShellTarget::Fish);
+        assert!(
+            block.contains("command -q spk"),
+            "fish init block must guard with `command -q spk`; got: {block:?}"
+        );
+        assert!(
+            block.contains("spk env --shell fish | source"),
+            "fish init block must pipe `spk env --shell fish` into source; got: {block:?}"
+        );
+    }
+
+    #[test]
+    fn render_init_block_fish_ends_with_end_not_fi() {
+        let block = render_init_block(ShellTarget::Fish);
+        assert!(
+            block.contains("end"),
+            "fish init block must use `end` to close the if block; got: {block:?}"
+        );
+        assert!(
+            !block.contains("fi"),
+            "fish init block must NOT use POSIX `fi`; got: {block:?}"
         );
     }
 }
