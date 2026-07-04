@@ -59,11 +59,12 @@ impl SpeckNet {
         vsock_fd: Option<RawFd>,
         port_maps: Vec<PortMapConfig>,
         mut port_map_rx: Option<mpsc::Receiver<PortMapConfig>>,
+        resolver_rx: tokio::sync::watch::Receiver<crate::resolver_table::ResolverTable>,
     ) -> Vec<tokio::task::JoinHandle<std::result::Result<(), Error>>> {
         let mut handles = Vec::new();
 
         if let Some(vfd) = vsock_fd {
-            handles.push(dns::spawn_dns_proxy(vfd));
+            handles.push(dns::spawn_dns_proxy(vfd, resolver_rx));
         }
 
         handles.push(tokio::task::spawn(async move {

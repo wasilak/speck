@@ -6,32 +6,37 @@ use crate::error;
 /// Spawn a thread that reads length-prefixed DNS queries from a vsock fd,
 /// resolves them via the macOS system resolver (getaddrinfo), and writes responses.
 ///
+/// Queries matching a VPN-scoped suffix in `resolver_rx` are forwarded directly
+/// to the VPN nameserver via UDP (DNS-04). All other queries fall through to
+/// `resolve_dns` (getaddrinfo — DNS-02, DNS-03).
+///
 /// Runs in a dedicated std::thread with blocking I/O to avoid tokio::fs::File
 /// compatibility issues with vsock socket fds (which may be non-blocking).
 /// The fd is set to blocking mode on entry.
 pub fn spawn_dns_proxy(
     vsock_fd: RawFd,
+    mut resolver_rx: tokio::sync::watch::Receiver<crate::resolver_table::ResolverTable>,
 ) -> tokio::task::JoinHandle<std::result::Result<(), error::Error>> {
     tokio::task::spawn_blocking(move || {
         // Ensure the fd is in blocking mode — VZ framework may return non-blocking fds.
         let fl_before = unsafe { libc::fcntl(vsock_fd, libc::F_GETFL, 0) };
         unsafe { libc::fcntl(vsock_fd, libc::F_SETFL, 0) };
         let fl_after = unsafe { libc::fcntl(vsock_fd, libc::F_GETFL, 0) };
-        eprintln!("[dns-proxy] started on fd={vsock_fd} flags before={fl_before:#o} after={fl_after:#o}");
+        tracing::debug!(fd = vsock_fd, flags_before = fl_before, flags_after = fl_after, "dns-proxy started");
 
-        let mut buf = vec![0u8; 512];
+        let mut buf = vec![0u8; 4096];
 
         loop {
             // Read u16 BE length prefix
             let mut len_buf = [0u8; 2];
-            eprintln!("[dns-proxy] waiting for query on fd={vsock_fd}");
+            tracing::debug!(fd = vsock_fd, "dns-proxy waiting for query");
             if !read_exact_fd(vsock_fd, &mut len_buf) {
-                eprintln!("[dns-proxy] fd={vsock_fd} read EOF/error, exiting");
+                tracing::debug!(fd = vsock_fd, "dns-proxy EOF, exiting");
                 return Ok(());
             }
 
             let query_len = u16::from_be_bytes(len_buf) as usize;
-            eprintln!("[dns-proxy] got query len={query_len} on fd={vsock_fd}");
+            tracing::debug!(fd = vsock_fd, len = query_len, "dns-proxy query received");
             if query_len == 0 || query_len > buf.len() {
                 continue;
             }
@@ -41,18 +46,28 @@ pub fn spawn_dns_proxy(
             }
 
             let qname = extract_qname(&buf[..query_len]);
-            eprintln!("[dns-proxy] resolving {:?}", qname);
+            tracing::debug!(domain = ?qname, "dns-proxy resolving");
+            let current_table = resolver_rx.borrow_and_update().clone();
             let response = if let Some(domain) = qname {
-                resolve_dns(&domain, &buf[..query_len])
+                if let Some(servers) = current_table.find_resolver(&domain) {
+                    // VPN-scoped path: direct UDP to first VPN nameserver (DNS-04)
+                    let mut resp = direct_dns_query(servers[0], &buf[..query_len])
+                        .unwrap_or_else(|| build_servfail_response(&buf[..query_len]));
+                    translate_nxdomain_to_servfail(&mut resp);
+                    Some(resp)
+                } else {
+                    // Default path: macOS system resolver via getaddrinfo (DNS-02, DNS-03)
+                    resolve_dns(&domain, &buf[..query_len])
+                }
             } else {
                 None
             };
 
             let to_send = if let Some(resp_bytes) = response {
-                eprintln!("[dns-proxy] resolved OK, sending {} bytes", resp_bytes.len());
+                tracing::debug!(bytes = resp_bytes.len(), "dns-proxy resolved ok");
                 resp_bytes
             } else {
-                eprintln!("[dns-proxy] resolve failed, sending SERVFAIL");
+                tracing::debug!(fd = vsock_fd, "dns-proxy resolve failed, sending SERVFAIL");
                 build_servfail_response(&buf[..query_len])
             };
 
@@ -198,6 +213,23 @@ fn find_qname_end(data: &[u8], mut start: usize) -> Option<usize> {
             return Some(start + 1);
         }
         start += 1 + byte as usize;
+    }
+}
+
+/// Forward a DNS query directly to a VPN nameserver via UDP (DNS-04).
+/// Uses a 500ms read timeout to avoid blocking the proxy loop indefinitely.
+/// Returns None on any socket error, send failure, or receive timeout.
+fn direct_dns_query(nameserver: std::net::IpAddr, query: &[u8]) -> Option<Vec<u8>> {
+    use std::net::{SocketAddr, UdpSocket};
+    use std::time::Duration;
+    let socket = UdpSocket::bind("0.0.0.0:0").ok()?;
+    socket.set_read_timeout(Some(Duration::from_millis(500))).ok()?;
+    let ns_addr = SocketAddr::new(nameserver, 53);
+    socket.send_to(query, ns_addr).ok()?;
+    let mut resp_buf = vec![0u8; 4096];
+    match socket.recv_from(&mut resp_buf) {
+        Ok((n, _)) => Some(resp_buf[..n].to_vec()),
+        Err(_) => None,
     }
 }
 
