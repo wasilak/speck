@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 pub use speck_net::PortMapConfig;
@@ -134,6 +134,13 @@ pub struct GuestConfig {
     /// VirtioFS tag (`speck-id-<basename>`).  Paths that do not exist on
     /// the host are silently skipped at VM start time.
     pub identity_mounts: Vec<PathBuf>,
+
+    /// Paths to CA certificate PEM files that should be injected into the
+    /// guest's trust store at boot time.
+    ///
+    /// Copied from the host into a VirtioFS share and loaded by vminitd
+    /// via `update-ca-certificates`.
+    pub ca_certs_paths: Vec<PathBuf>,
 }
 
 impl Default for GuestConfig {
@@ -158,6 +165,7 @@ impl Default for GuestConfig {
             volume_mounts: Vec::new(),
             speck_home: default_speck_home(),
             identity_mounts: Vec::new(),
+            ca_certs_paths: Vec::new(),
         }
     }
 }
@@ -277,6 +285,7 @@ pub struct GuestConfigBuilder {
     volume_mounts: Vec<VolumeMountConfig>,
     speck_home: PathBuf,
     identity_mounts: Vec<PathBuf>,
+    ca_certs_paths: Vec<PathBuf>,
 }
 
 impl Default for GuestConfigBuilder {
@@ -301,6 +310,7 @@ impl Default for GuestConfigBuilder {
             volume_mounts: Vec::new(),
             speck_home: default_speck_home(),
             identity_mounts: Vec::new(),
+            ca_certs_paths: Vec::new(),
         }
     }
 }
@@ -439,6 +449,17 @@ impl GuestConfigBuilder {
         self
     }
 
+    /// Set paths to CA certificate PEM files for injection into the guest
+    /// trust store.
+    ///
+    /// These paths must point to PEM-encoded CA certificates on the host.
+    /// They are copied into a dedicated VirtioFS share and loaded by vminitd
+    /// at boot time via `update-ca-certificates`.
+    pub fn ca_certs_paths(mut self, paths: &[impl AsRef<Path>]) -> Self {
+        self.ca_certs_paths = paths.iter().map(|p| p.as_ref().to_path_buf()).collect();
+        self
+    }
+
     /// Consume the builder and produce a [`GuestConfig`].
     ///
     /// # Panics
@@ -467,6 +488,7 @@ impl GuestConfigBuilder {
             volume_mounts: self.volume_mounts,
             speck_home: self.speck_home,
             identity_mounts: self.identity_mounts,
+            ca_certs_paths: self.ca_certs_paths,
         }
     }
 }
