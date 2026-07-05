@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use anyhow::Context as _;
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
 mod commands;
@@ -47,6 +47,8 @@ enum Commands {
     Env(EnvArgs),
     /// Initialize Speck shell integration (one-time setup)
     Init(InitArgs),
+    /// Run health checks and diagnose Speck configuration
+    Doctor(DoctorArgs),
 }
 
 #[derive(Parser)]
@@ -127,6 +129,18 @@ struct EnvArgs {
     /// Target shell syntax for env exports: `posix` (bash/zsh) or `fish`.
     #[arg(long, default_value = "posix", value_parser = ["posix", "fish"])]
     shell: String,
+}
+
+#[derive(Parser, Clone)]
+pub struct DoctorArgs {
+    #[command(subcommand)]
+    pub command: Option<DoctorSubcommand>,
+}
+
+#[derive(Subcommand, Clone)]
+pub enum DoctorSubcommand {
+    /// Trace DNS resolution for a hostname through the full guest DNS path
+    Dns { hostname: String },
 }
 
 #[derive(Parser, Clone)]
@@ -412,6 +426,13 @@ async fn main() -> anyhow::Result<()> {
         Commands::Init(args) => {
             init_tracing(&default_tracing_filter())?;
             commands::init::run_init(args, &speck_home).await?
+        }
+        Commands::Doctor(args) => {
+            init_tracing(&default_tracing_filter())?;
+            let code = commands::doctor::run_doctor(&speck_home, args).await?;
+            if code != 0 {
+                std::process::exit(code);
+            }
         }
     }
 
