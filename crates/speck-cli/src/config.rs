@@ -485,4 +485,133 @@ mod tests {
             std::env::remove_var("SPECK_LOG_LEVEL");
         }
     }
+
+    // ── CA cert validation tests (Phase 12 — RED; function does not exist yet) ──
+
+    fn ca_test_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("speck-ca-test-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn write_pem(path: &std::path::Path, content: &[u8]) {
+        std::fs::write(path, content).unwrap();
+    }
+
+    const VALID_PEM: &[u8] = b"-----BEGIN CERTIFICATE-----\nMIIDXTCCAkWgAwIBAgIJAKlSvOqYQm0lMA0GCSqGSIb3DQEBCwUAMEUxCzAJBgNV\nBAYTAlVTMRMwEQYDVQQIDApDYWxpZm9ybmlhMQswCQYDVQQHDAJTRjEUMBIGA1UE\nCgwLRXhhbXBsZSBDQTAeFw0yNTAxMDEwMDAwMDBaFw0zNTAxMDEwMDAwMDBaMEUx\nCzAJBgNVBAYTAlVTMRMwEQYDVQQIDApDYWxpZm9ybmlhMQswCQYDVQQHDAJTRjEU\nMBIGA1UECgwLRXhhbXBsZSBDQTCCASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoC\nggEBAK0A/2J/LPU2n9Y/z8XzqM/GnJqFk5yYtY6NUKQjMHgqJp1sL7tgGKz6bPqA\n1h0u5Yb4dLlQwAIBRAc4hYkGnQL+A2J2gVBX/sa6O7BYKeQ8wO1tBmUj2o3lQmYB\nvJ0X7CAwIDAQABo4GJMIGGMAkGA1UdEwQCMAAwHQYDVR0OBBYEFKCFp8L0S0pU\n7UjKq6L5n0x3WvTAMAkGA1UdEwQCMAAwCwYDVR0PBAQDAgEGMA8GA1UdEwEB/wQF\nMAMBAf8wHQYDVR0OBBYEFKCFp8L0S0pU7UjKq6L5n0x3WvTAMBgNVHRIEATAHMAUG\nA1UdIwEB/zAFBgNVHSQBAf8wDQYJKoZIhvcNAQELBQADggEBAGVPQ3VpRL0K3VGR\nLm0YH1Zz7n8cL0Jp6L5n0x3WvTAMBgNVHRIEATAHMAUGA1UdIwEB/zAFBgNVHSQ=\n-----END CERTIFICATE-----\n";
+
+    const OTHER_VALID_PEM: &[u8] = b"-----BEGIN CERTIFICATE-----\nMIIDXjCCAkWgAwIBAgIJAKlSvOqYQm0mMA0GCSqGSIb3DQEBCwUAMEUxCzAJBgNV\nBAYTAlVTMRMwEQYDVQQIDApDYWxpZm9ybmlhMQswCQYDVQQHDAJTRjEUMBIGA1UE\nCgwLRXhhbXBsZSBDQTAeFw0yNTAxMDEwMDAwMDBaFw0zNTAxMDEwMDAwMDBaMEUx\nCzAJBgNVBAYTAlVTMRMwEQYDVQQIDApDYWxpZm9ybmlhMQswCQYDVQQHDAJTRjEU\nMBIGA1UECgwLRXhhbXBsZSBDQTCCASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoC\nggEBAK0A/2J/LPU2n9Y/z8XzqM/GnJqFk5yYtY6NUKQjMHgqJp1sL7tgGKz6bPqA\n1h0u5Yb4dLlQwAIBRAc4hYkGnQL+A2J2gVBX/sa6O7BYKeQ8wO1tBmUj2o3lQmYB\nvJ0X7CAwIDAQABo4GJMIGGMAkGA1UdEwQCMAAwHQYDVR0OBBYEFKCFp8L0S0pU\n7UjKq6L5n0x3WvTAMAkGA1UdEwQCMAAwCwYDVR0PBAQDAgEGMA8GA1UdEwEB/wQF\nMAMBAf8wHQYDVR0OBBYEFKCFp8L0S0pU7UjKq6L5n0x3WvTAMBgNVHRIEATAHMAUG\nA1UdIwEB/zAFBgNVHSQBAf8wDQYJKoZIhvcNAQELBQADggEBAGVPQ3VpRL0K3VGR\nLm0YH1Zz7n8cL0Jp6L5n0x3WvTAMBgNVHRIEATAHMAUGA1UdIwEB/zAFBgNVHSQ=\n-----END CERTIFICATE-----\n";
+
+    const NOT_PEM: &[u8] = b"not a certificate";
+
+    #[test]
+    fn empty_cert_list_returns_ok_empty_vec() {
+        let dir = ca_test_dir("empty-list");
+        let result = validate_and_prepare_ca_certs(&dir, &[]);
+        assert!(result.is_ok(), "empty list should succeed, got: {result:?}");
+        let paths = result.unwrap();
+        assert!(paths.is_empty(), "empty list should yield no output paths");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn missing_file_returns_err_file_not_found() {
+        let dir = ca_test_dir("missing-file");
+        let paths = vec![String::from("/nonexistent/ca.pem")];
+        let result = validate_and_prepare_ca_certs(&dir, &paths);
+        assert!(result.is_err(), "missing file should fail");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("not found"),
+            "error should mention 'not found', got: {err}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn non_pem_content_returns_err_not_valid_pem() {
+        let dir = ca_test_dir("bad-pem");
+        let bad_file = dir.join("bad.pem");
+        write_pem(&bad_file, NOT_PEM);
+        let paths = vec![bad_file.to_string_lossy().to_string()];
+        let result = validate_and_prepare_ca_certs(&dir, &paths);
+        assert!(result.is_err(), "non-PEM should fail");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("not valid PEM") || err.contains("PEM"),
+            "error should mention PEM validation, got: {err}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn valid_pem_returns_ok_with_dedup_filename() {
+        let dir = ca_test_dir("valid-pem");
+        let cert_file = dir.join("my-cert.pem");
+        write_pem(&cert_file, VALID_PEM);
+        let paths = vec![cert_file.to_string_lossy().to_string()];
+        let result = validate_and_prepare_ca_certs(&dir, &paths);
+        assert!(result.is_ok(), "valid PEM should succeed, got: {result:?}");
+        let output_paths = result.unwrap();
+        assert!(!output_paths.is_empty(), "should return at least one path");
+        // Each output path should be under the ca-certs/ subdirectory
+        for p in &output_paths {
+            let rel = p.strip_prefix(&dir).unwrap();
+            assert!(
+                rel.starts_with("ca-certs/") || rel.starts_with("ca-certs"),
+                "output path {p:?} should be under ca-certs/ dir, relative: {rel:?}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn two_identical_certs_deduplicate() {
+        let dir = ca_test_dir("dedup");
+        let cert_a = dir.join("a.pem");
+        let cert_b = dir.join("b.pem");
+        write_pem(&cert_a, VALID_PEM);
+        write_pem(&cert_b, VALID_PEM); // same content
+        let paths = vec![
+            cert_a.to_string_lossy().to_string(),
+            cert_b.to_string_lossy().to_string(),
+        ];
+        let result = validate_and_prepare_ca_certs(&dir, &paths);
+        assert!(result.is_ok(), "dedup test should succeed");
+        let output_paths = result.unwrap();
+        // Two identical certs should produce one output file (same SHA256)
+        assert_eq!(
+            output_paths.len(),
+            1,
+            "two identical certs should deduplicate to one output, got {}",
+            output_paths.len()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn output_paths_under_ca_certs_dir() {
+        let dir = ca_test_dir("output-path");
+        let cert_a = dir.join("root.pem");
+        write_pem(&cert_a, VALID_PEM);
+        let cert_b = dir.join("intermediate.pem");
+        write_pem(&cert_b, OTHER_VALID_PEM);
+        let paths = vec![
+            cert_a.to_string_lossy().to_string(),
+            cert_b.to_string_lossy().to_string(),
+        ];
+        let result = validate_and_prepare_ca_certs(&dir, &paths);
+        assert!(result.is_ok(), "output path test should succeed");
+        let output_paths = result.unwrap();
+        assert!(!output_paths.is_empty(), "should have output paths");
+        let ca_certs_dir = dir.join("ca-certs");
+        for p in &output_paths {
+            assert!(
+                p.starts_with(&ca_certs_dir),
+                "path {p:?} should be under {ca_certs_dir:?}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
