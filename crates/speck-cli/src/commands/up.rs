@@ -453,6 +453,13 @@ pub async fn run_up(
 
     kill_stale_vm_holders(&[&rootfs_disk_path, &data_disk_path]);
 
+    // Validate and prepare CA certificates if any are configured (CERT-01).
+    let ca_cert_paths = crate::config::validate_and_prepare_ca_certs(
+        speck_home,
+        &effective.extra_certs,
+    )
+    .context("CA certificate validation failed")?;
+
     let mut builder = GuestConfig::builder()
         .kernel_path(kernel_path)
         .initrd_path(initrd_path)
@@ -469,6 +476,10 @@ pub async fn run_up(
         .network(NetworkConfig::default())
         .dns_vsock_port(53)
         .add_identity_mount("/Users");
+
+    if !ca_cert_paths.is_empty() {
+        builder = builder.ca_certs_paths(&ca_cert_paths);
+    }
 
     for optional_root in ["/Volumes", "/private/tmp"] {
         if std::path::Path::new(optional_root).exists() {
