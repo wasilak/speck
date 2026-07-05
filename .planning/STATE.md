@@ -3,28 +3,28 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: — Production Runtime
 status: executing
-last_updated: "2026-07-05T10:25:38.906Z"
-last_activity: 2026-07-04 -- Phase 12 execution started
+last_updated: "2026-07-05T13:52:48.924Z"
+last_activity: 2026-07-05 -- Phase 13 execution started
 progress:
   total_phases: 8
-  completed_phases: 5
-  total_plans: 21
-  completed_plans: 20
-  percent: 63
+  completed_phases: 6
+  total_plans: 23
+  completed_plans: 21
+  percent: 75
 ---
 
 # State — Milestone v1.1 Production Runtime
 
-**Status:** Ready to execute
+**Status:** Executing Phase 13
 
 ## Current Position
 
-Phase: 12 (corporate-ca) — EXECUTING
-Plan: 3 of 3
-Status: Ready to execute
-Last activity: 2026-07-04 -- Phase 12 execution started
+Phase: 13 (diagnostics) — EXECUTING
+Plan: 1 of 2
+Status: Executing Phase 13
+Last activity: 2026-07-05 -- Phase 13 execution started
 
-Progress: 3/8 phases complete [████████░░░░░░░░░░░░░] 38%
+Progress: 7/8 phases complete [███████████████████░░░] 88%
 
 ## Milestone v1.1 Phase Overview
 
@@ -33,9 +33,9 @@ Progress: 3/8 phases complete [████████░░░░░░░░�
 | 07 | Gap Closure | GAP-01..04 | Complete |
 | 08 | Config File & VM Resources | CFG-01..03, VMCFG-01..04 | Complete |
 | 09 | Daemon Lifecycle | DAEMON-01..05 | Complete |
-| 10 | Shell Integration | SHELL-01..03 | Not started |
-| 11 | VPN-Proof DNS | DNS-01..06 | Not started |
-| 12 | Corporate CA Injection | CERT-01..04 | Not started |
+| 10 | Shell Integration | SHELL-01..03 | Complete |
+| 11 | VPN-Proof DNS | DNS-01..06 | Complete |
+| 12 | Corporate CA Injection | CERT-01..04 | Complete |
 | 13 | Diagnostics | DOCTOR-01..03 | Not started |
 | 14 | Homebrew Distribution | BREW-01..03 | Not started |
 
@@ -96,6 +96,7 @@ None.
 | Phase 10 P02 | 15min | 2 tasks | 5 files |
 | Phase 12 P01 | 3min | 3 tasks | 3 files |
 | Phase 12 P02 | 14min | - tasks | - files |
+| Phase 12 P03 | 25min | 3 tasks | 4 files |
 
 ## Decisions
 
@@ -109,3 +110,7 @@ None.
 - [Phase ?]: Structural PEM validation instead of pem crate
 - [Phase ?]: SHA256 content hash dedup for CA cert files
 - [Phase ?]: CA_CERTS_TAG = speck-ca-certs
+- [Phase 12 Plan 03]: Option<&Path> is cleaner than &[PathBuf] for CA share — passes directory directly instead of deriving from first file path
+- [Phase 12 Plan 03]: install_ca_certs appends PEMs to system CA bundle (/etc/ssl/certs/ca-certificates.crt) with traceability headers, then runs update-ca-certificates
+- [Phase 12 Plan 03]: containerd hosts.toml catch-all points at registry-1.docker.io with pull/resolve capabilities
+- [Phase 12 Plan 03]: CA injection order matters — mount_ca_certs after identity roots, install_ca_certs before dockerd spawn

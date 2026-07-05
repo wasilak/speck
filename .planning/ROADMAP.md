@@ -280,7 +280,7 @@ Plans:
 Plans:
 **Wave 1**
 
-- [ ] 13-01-PLAN.md — Doctor foundation: CheckResult, 6 sync checks (codesign/DOCKER_HOST/cert/resources/DNS/VPN), clap wiring, read_resolver_table_once (Wave 1)
+- [x] 13-01-PLAN.md — Doctor foundation: CheckResult, 6 sync checks (codesign/DOCKER_HOST/cert/resources/DNS/VPN), clap wiring, read_resolver_table_once (Wave 1)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
@@ -309,5 +309,5 @@ Plans:
 | 10. Shell Integration | 2/2 | Complete    | 2026-07-04 |
 | 11. VPN-Proof DNS | 5/5 | Complete   | 2026-07-04 |
 | 12. Corporate CA Injection | 3/3 | Complete   | 2026-07-05 |
-| 13. Diagnostics | 0/2 | Not started | - |
+| 13. Diagnostics | 1/2 | In Progress|  |
 | 14. Homebrew Distribution | 0/TBD | Not started | - |
