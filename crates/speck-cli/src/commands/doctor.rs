@@ -13,6 +13,7 @@ use crate::{DoctorArgs, DoctorSubcommand};
 #[derive(Debug, PartialEq, Eq)]
 pub enum CheckResult {
     Pass,
+    PassWithDetail { detail: String },
     Fail { hint: String },
     Warn { detail: String },
     Skip { reason: String },
@@ -22,6 +23,9 @@ pub enum CheckResult {
 pub fn print_check(label: &str, result: &CheckResult) {
     match result {
         CheckResult::Pass => println!("  {GREEN}PASS{RESET}  {label}"),
+        CheckResult::PassWithDetail { detail } => {
+            println!("  {GREEN}PASS{RESET}  {label}\n         {detail}")
+        }
         CheckResult::Fail { hint } => {
             println!("  {RED}FAIL{RESET}  {label}\n         hint: {hint}")
         }
@@ -135,13 +139,12 @@ pub fn check_cert_injection(speck_home: &Path) -> CheckResult {
 /// Returns Skip when the daemon has never been started (no vm-config.json).
 pub fn check_vm_resources(speck_home: &Path) -> CheckResult {
     match crate::commands::up::read_vm_resource_snapshot(speck_home) {
-        Ok(Some(cfg)) => {
-            println!(
-                "         cpus: {}, memory: {} MiB, disk: {} GiB",
+        Ok(Some(cfg)) => CheckResult::PassWithDetail {
+            detail: format!(
+                "cpus: {}, memory: {} MiB, disk: {} GiB",
                 cfg.cpus, cfg.memory_mb, cfg.disk_gb
-            );
-            CheckResult::Pass
-        }
+            ),
+        },
         Ok(None) => CheckResult::Skip {
             reason: "vm-config.json not found (daemon not started yet)".into(),
         },
