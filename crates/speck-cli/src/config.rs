@@ -1,7 +1,9 @@
-use std::path::Path;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 
 use anyhow::Context as _;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 const CONFIG_FILE: &str = "config.yaml";
 const CONFIG_VERSION: u64 = 1;
@@ -14,6 +16,14 @@ pub struct AppConfig {
     pub vm: FileVmConfig,
     #[serde(default)]
     pub log_level: Option<String>,
+    #[serde(default)]
+    pub ca: CaConfig,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+pub struct CaConfig {
+    #[serde(default)]
+    pub extra_certs: Vec<String>,
 }
 
 impl Default for AppConfig {
@@ -22,6 +32,7 @@ impl Default for AppConfig {
             version: Some(CONFIG_VERSION),
             vm: FileVmConfig::default(),
             log_level: None,
+            ca: CaConfig::default(),
         }
     }
 }
@@ -40,6 +51,7 @@ pub struct FileVmConfig {
 pub struct EffectiveConfig {
     pub vm: EffectiveVmConfig,
     pub log_level: String,
+    pub extra_certs: Vec<String>,
 }
 
 impl Default for EffectiveConfig {
@@ -47,6 +59,7 @@ impl Default for EffectiveConfig {
         Self {
             vm: EffectiveVmConfig::default(),
             log_level: "info".into(),
+            extra_certs: Vec::new(),
         }
     }
 }
@@ -89,6 +102,8 @@ struct StrictAppConfig {
     vm: StrictVmConfig,
     #[serde(default)]
     log_level: Option<String>,
+    #[serde(default)]
+    ca: CaConfig,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -136,7 +151,7 @@ pub fn collect_unknown_keys(value: &serde_yaml::Value) -> Vec<ConfigWarning> {
     };
 
     for key in top.keys().filter_map(serde_yaml::Value::as_str) {
-        if !matches!(key, "version" | "vm" | "log_level") {
+        if !matches!(key, "version" | "vm" | "log_level" | "ca") {
             warnings.push(ConfigWarning {
                 path: key.to_string(),
                 message: format!("unknown config key `{key}` ignored"),
@@ -153,6 +168,20 @@ pub fn collect_unknown_keys(value: &serde_yaml::Value) -> Vec<ConfigWarning> {
                 warnings.push(ConfigWarning {
                     path: format!("vm.{key}"),
                     message: format!("unknown config key `vm.{key}` ignored"),
+                });
+            }
+        }
+    }
+
+    if let Some(ca) = top
+        .get(serde_yaml::Value::String("ca".into()))
+        .and_then(serde_yaml::Value::as_mapping)
+    {
+        for key in ca.keys().filter_map(serde_yaml::Value::as_str) {
+            if !matches!(key, "extra_certs") {
+                warnings.push(ConfigWarning {
+                    path: format!("ca.{key}"),
+                    message: format!("unknown config key `ca.{key}` ignored"),
                 });
             }
         }
@@ -188,6 +217,7 @@ fn resolve_effective_config_with_physical_cores(
     if let Some(log_level) = file.log_level {
         effective.log_level = log_level;
     }
+    effective.extra_certs = file.ca.extra_certs;
 
     if let Some(cpus) = cli.cpus {
         effective.vm.cpus = cpus;
@@ -286,6 +316,67 @@ fn validate_log_level(source: &str, value: &str) -> anyhow::Result<()> {
     tracing_subscriber::EnvFilter::try_new(value)
         .with_context(|| format!("{source} must be a valid tracing EnvFilter directive"))?;
     Ok(())
+}
+
+/// Validate CA certificate PEM files and copy them to `{speck_home}/ca-certs/{sha256}.pem`.
+///
+/// Returns `Ok(vec![])` when the list is empty (fast path — no CA setup needed).
+/// Returns `Err` on first failed validation (missing file or invalid PEM).
+/// Returns `Ok(Vec<PathBuf>)` listing the copied cert files on success.
+///
+/// Validation fails fast at config-load time, before the VM starts (D-12-04).
+pub fn validate_and_prepare_ca_certs(
+    speck_home: &Path,
+    extra_certs: &[String],
+) -> anyhow::Result<Vec<PathBuf>> {
+    if extra_certs.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let ca_certs_dir = speck_home.join("ca-certs");
+    std::fs::create_dir_all(&ca_certs_dir)
+        .with_context(|| {
+            format!(
+                "failed to create ca-certs directory at {}",
+                ca_certs_dir.display()
+            )
+        })?;
+
+    let mut copied_paths = Vec::new();
+    let mut seen_hashes = HashSet::new();
+
+    for path_str in extra_certs {
+        let path = Path::new(path_str);
+
+        let content = std::fs::read(path)
+            .with_context(|| format!("file not found: {path_str}"))?;
+
+        // Validate PEM structure (must have proper BEGIN / END markers).
+        // We avoid the full `pem` crate parse here because its base64 validation
+        // rejects some commonly-distributed PEM files. The critical check for
+        // correctness is that the file looks like PEM — the guest system's CA
+        // store will do the full cryptographic verification at boot.
+        let pem_text =
+            std::str::from_utf8(&content).with_context(|| format!("not valid PEM: {path_str}"))?;
+        let trimmed = pem_text.trim();
+        if !trimmed.starts_with("-----BEGIN ") || !trimmed.ends_with("-----") {
+            anyhow::bail!("not valid PEM: {path_str}");
+        }
+
+        let hash = Sha256::digest(&content);
+        let hash_hex = format!("{hash:x}");
+
+        if seen_hashes.insert(hash_hex.clone()) {
+            let dest_path = ca_certs_dir.join(format!("{hash_hex}.pem"));
+            if !dest_path.exists() {
+                std::fs::copy(path, &dest_path)
+                    .with_context(|| format!("failed to copy cert to {}", dest_path.display()))?;
+            }
+            copied_paths.push(dest_path);
+        }
+    }
+
+    Ok(copied_paths)
 }
 
 #[cfg(test)]

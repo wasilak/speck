@@ -1720,6 +1720,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "pem"
+version = "3.0.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1d30c53c26bc5b31a98cd02d20f25a7c8567146caf63ed593a9d87b2775291be"
+dependencies = [
+ "base64",
+ "serde_core",
+]
+
+[[package]]
 name = "percent-encoding"
 version = "2.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2409,10 +2419,12 @@ dependencies = [
  "hyper",
  "hyper-util",
  "indicatif",
+ "pem",
  "ratatui",
  "serde",
  "serde_json",
  "serde_yaml",
+ "sha2",
  "speck-core",
  "speck-dockerd",
  "speck-net",
