@@ -553,6 +553,73 @@ mod tests {
         assert!(err.contains("privileged"), "unexpected error: {err}");
     }
 
+    // ── CA cert paths propagation tests (Phase 12 — RED; method does not exist yet) ──
+
+    #[test]
+    fn ca_certs_paths_default_is_empty() {
+        let dir = std::env::temp_dir().join("speck-test-ca-paths-default");
+        std::fs::create_dir_all(&dir).unwrap();
+        let kernel = dir.join("Image");
+        std::fs::write(&kernel, b"dummy kernel").unwrap();
+
+        let config = GuestConfig::builder()
+            .kernel_path(&kernel)
+            .build();
+
+        assert!(
+            config.ca_certs_paths.is_empty(),
+            "default should have empty ca_certs_paths"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ca_certs_paths_propagates_single_path() {
+        let dir = std::env::temp_dir().join("speck-test-ca-paths-single");
+        std::fs::create_dir_all(&dir).unwrap();
+        let kernel = dir.join("Image");
+        std::fs::write(&kernel, b"dummy kernel").unwrap();
+
+        let config = GuestConfig::builder()
+            .kernel_path(&kernel)
+            .ca_certs_paths(&["/path/to/ca.pem"])
+            .build();
+
+        assert_eq!(
+            config.ca_certs_paths,
+            vec![std::path::PathBuf::from("/path/to/ca.pem")],
+            "single ca_certs_path should propagate"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ca_certs_paths_propagates_multiple_paths() {
+        let dir = std::env::temp_dir().join("speck-test-ca-paths-multi");
+        std::fs::create_dir_all(&dir).unwrap();
+        let kernel = dir.join("Image");
+        std::fs::write(&kernel, b"dummy kernel").unwrap();
+
+        let paths = vec!["/etc/certs/root.pem", "/etc/certs/intermediate.pem"];
+        let config = GuestConfig::builder()
+            .kernel_path(&kernel)
+            .ca_certs_paths(&paths)
+            .build();
+
+        assert_eq!(
+            config.ca_certs_paths,
+            vec![
+                std::path::PathBuf::from("/etc/certs/root.pem"),
+                std::path::PathBuf::from("/etc/certs/intermediate.pem"),
+            ],
+            "multiple ca_certs_paths should propagate in order"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn test_identity_mounts_propagate() {
         let dir = std::env::temp_dir().join("speck-test-identity-mounts");
