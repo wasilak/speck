@@ -12,7 +12,7 @@ pub(crate) mod tcp_listener;
 
 pub use dns::spawn_dns_proxy;
 pub use error::{Error, Result};
-pub use resolver_table::{ResolverTable, spawn_resolver_watcher};
+pub use resolver_table::{ResolverTable, read_resolver_table_once, spawn_resolver_watcher};
 pub use mtu::{detect_host_mtu, mss_for_mtu};
 pub use port_publish::{PortMapConfig, PortPublishBridge};
 

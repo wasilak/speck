@@ -1,6 +1,7 @@
 pub mod build;
 pub mod completion;
 pub mod dashboard;
+pub mod doctor;
 pub mod down;
 pub mod env;
 pub mod exec;

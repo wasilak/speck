@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 
 mod commands;
 mod config;
@@ -45,6 +45,8 @@ enum Commands {
     Env(EnvArgs),
     /// Initialize Speck shell integration (one-time setup)
     Init(InitArgs),
+    /// Run health checks and diagnose Speck configuration
+    Doctor(DoctorArgs),
 }
 
 #[derive(Parser)]
@@ -125,6 +127,18 @@ struct EnvArgs {
     /// Target shell syntax for env exports: `posix` (bash/zsh) or `fish`.
     #[arg(long, default_value = "posix", value_parser = ["posix", "fish"])]
     shell: String,
+}
+
+#[derive(Parser, Clone)]
+pub struct DoctorArgs {
+    #[command(subcommand)]
+    pub command: Option<DoctorSubcommand>,
+}
+
+#[derive(Subcommand, Clone)]
+pub enum DoctorSubcommand {
+    /// Trace DNS resolution for a hostname through the full guest DNS path
+    Dns { hostname: String },
 }
 
 #[derive(Parser, Clone)]

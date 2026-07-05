@@ -38,6 +38,11 @@ impl ResolverTable {
         }
     }
 
+    /// Return true when the table has no entries (no VPN-scoped resolvers present).
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
     /// Longest-suffix match: for "host.corp.example" tries "host.corp.example",
     /// "corp.example", "example" in order. Returns the first match.
     /// Returns `None` when no VPN-scoped entry matches — the caller falls back
@@ -51,6 +56,23 @@ impl ResolverTable {
             }
         }
         None
+    }
+}
+
+/// Perform a one-shot read of VPN-scoped DNS resolvers from SCDynamicStore.
+///
+/// Opens a short-lived SCDynamicStore session (no GCD queue, no Box::leak),
+/// reads the current resolver table, and returns it. Used by `spk doctor` to
+/// check for VPN-injected split-DNS entries without starting the live watcher.
+///
+/// Returns an empty `ResolverTable` if the store cannot be opened (logs a warning).
+pub fn read_resolver_table_once() -> ResolverTable {
+    match SCDynamicStoreBuilder::new("speck-doctor-dns-check").build() {
+        None => {
+            warn!("could not open SCDynamicStore for one-shot resolver read");
+            ResolverTable::default()
+        }
+        Some(store) => read_resolver_table(&store),
     }
 }
 
