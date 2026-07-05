@@ -104,7 +104,7 @@ Plans:
 - [x] **Phase 10: Shell Environment Integration** — `spk env` for immediate use; idempotent `spk init` for persistent `DOCKER_HOST` (completed 2026-07-04)
 - [x] **Phase 11: VPN-Proof DNS** — Live DNS reload via SCDynamicStore/vsock; no host `:53` binding; split-DNS + SERVFAIL translation (completed 2026-07-04)
 - [x] **Phase 12: Corporate CA Injection** — Custom CA certs injected into guest trust bundle before containerd/buildkitd start (3 plans) (completed 2026-07-05)
-- [ ] **Phase 13: Diagnostics** — `spk doctor` health suite covering DNS, certs, VM state, and socket reachability
+- [x] **Phase 13: Diagnostics** — `spk doctor` health suite covering DNS, certs, VM state, and socket reachability (completed 2026-07-05)
 - [ ] **Phase 14: Homebrew Distribution** — Signed `.pkg` Cask artifact that preserves the virtualization entitlement through Homebrew re-signing
 
 ### Phase Details
@@ -284,7 +284,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 13-02-PLAN.md — Async checks (VM running state, Docker socket) + DNS trace sub-command spk doctor dns (Wave 2)
+- [x] 13-02-PLAN.md — Async checks (VM running state, Docker socket) + DNS trace sub-command spk doctor dns (Wave 2)
 
 ### Phase 14: Homebrew Distribution
 
@@ -309,5 +309,5 @@ Plans:
 | 10. Shell Integration | 2/2 | Complete    | 2026-07-04 |
 | 11. VPN-Proof DNS | 5/5 | Complete   | 2026-07-04 |
 | 12. Corporate CA Injection | 3/3 | Complete   | 2026-07-05 |
-| 13. Diagnostics | 1/2 | In Progress|  |
+| 13. Diagnostics | 2/2 | Complete   | 2026-07-05 |
 | 14. Homebrew Distribution | 0/TBD | Not started | - |
