@@ -258,8 +258,9 @@ Plans:
 **Plans**: 3 plans
 
 Plans:
-- [ ] 12-01-PLAN.md (Wave 0) — TDD: failing tests for cert validation, GuestConfig propagation, and cmdline arg
-- [ ] 12-02-PLAN.md (Wave 1) — Host-side config layer: CaConfig struct, PEM validation, GuestConfig field, VirtioFS device + cmdline
+
+- [x] 12-01-PLAN.md (Wave 0) — TDD: failing tests for cert validation, GuestConfig propagation, and cmdline arg
+- [x] 12-02-PLAN.md (Wave 1) — Host-side config layer: CaConfig struct, PEM validation, GuestConfig field, VirtioFS device + cmdline
 - [ ] 12-03-PLAN.md (Wave 2) — Integration wiring: up.rs validation chain, vm_thread.rs passthrough, vminitd mount+update-ca-certificates+hosts.toml
 
 ### Phase 13: Diagnostics
@@ -298,6 +299,6 @@ Plans:
 | 09. Daemon Lifecycle | 3/3 | Complete   | 2026-07-03 |
 | 10. Shell Integration | 2/2 | Complete    | 2026-07-04 |
 | 11. VPN-Proof DNS | 5/5 | Complete   | 2026-07-04 |
-| 12. Corporate CA Injection | 3/3 | Planned | 12-01 (TDD), 12-02 (config), 12-03 (integration) |
+| 12. Corporate CA Injection | 2/3 | In Progress|  |
 | 13. Diagnostics | 0/TBD | Not started | - |
 | 14. Homebrew Distribution | 0/TBD | Not started | - |

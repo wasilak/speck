@@ -150,10 +150,12 @@ pub fn configure_virtiofs_devices(
     mounts: &[VolumeMountConfig],
     speck_home: &Path,
     identity_roots: &[PathBuf],
-    ca_certs: &[PathBuf],
+    ca_certs_share: Option<&Path>,
 ) -> Result<(), crate::error::Error> {
     let mut fs_devices: Vec<Retained<VZVirtioFileSystemDeviceConfiguration>> =
-        Vec::with_capacity(mounts.len() + 1 + identity_roots.len() + ca_certs.len());
+        Vec::with_capacity(
+            mounts.len() + 1 + identity_roots.len() + ca_certs_share.is_some() as usize,
+        );
 
     for (i, mount) in mounts.iter().enumerate() {
         let tag = format!("speck-vol-{i}");
@@ -288,10 +290,7 @@ pub fn configure_virtiofs_devices(
     // Add CA certificate device (one share for the ca-certs directory).
     // vminitd reads the PEM files from this share and installs them into
     // the guest's trust store via update-ca-certificates.
-    if !ca_certs.is_empty() {
-        // Use a single tag — the directory itself is shared, not individual files.
-        // ca_certs_paths are all under {speck_home}/ca-certs/ at this point.
-        let parent = ca_certs[0].parent().unwrap_or(speck_home);
+    if let Some(parent) = ca_certs_share {
         let parent_str = NSString::from_str(
             parent
                 .to_str()

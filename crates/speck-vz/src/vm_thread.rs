@@ -410,11 +410,16 @@ impl VmThread {
                 .to_str()
                 .ok_or_else(|| Error::VmFramework("non-UTF-8 kernel path".into()))?,
         );
+        let ca_certs_tag = if config.ca_certs_paths.is_empty() {
+            None
+        } else {
+            Some(crate::virtiofs::CA_CERTS_TAG)
+        };
         let virtiofs_cmdline = crate::virtiofs::cmdline_virtiofs_arg(
             &config.volume_mounts,
             &config.speck_home,
             &config.identity_mounts,
-            None, // CA tag — will be wired in Plan 12-03
+            ca_certs_tag,
         );
 
         let bootloader = unsafe {
@@ -591,12 +596,18 @@ impl VmThread {
             // Always configure VirtioFS unconditionally: the speck-home device
             // must be present on every VM start for Ryuk and testcontainers.
             // configure_virtiofs_devices handles empty volume_mounts gracefully.
+            let ca_certs_share: Option<std::path::PathBuf> =
+                if config.ca_certs_paths.is_empty() {
+                    None
+                } else {
+                    Some(config.speck_home.join("ca-certs"))
+                };
             crate::virtiofs::configure_virtiofs_devices(
                 &vm_config,
                 &config.volume_mounts,
                 &config.speck_home,
                 &config.identity_mounts,
-                &config.ca_certs_paths,
+                ca_certs_share.as_deref(),
             )?;
 
             Result::<_, Error>::Ok((vm_config, platform, entropy, vsock))

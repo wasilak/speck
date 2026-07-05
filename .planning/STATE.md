@@ -3,26 +3,26 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: — Production Runtime
 status: executing
-last_updated: "2026-07-04T14:05:55.443Z"
-last_activity: 2026-07-04 -- Phase 11 execution started
+last_updated: "2026-07-05T10:25:38.906Z"
+last_activity: 2026-07-04 -- Phase 12 execution started
 progress:
   total_phases: 8
-  completed_phases: 4
-  total_plans: 18
-  completed_plans: 13
-  percent: 50
+  completed_phases: 5
+  total_plans: 21
+  completed_plans: 20
+  percent: 63
 ---
 
 # State — Milestone v1.1 Production Runtime
 
-**Status:** Executing Phase 11
+**Status:** Ready to execute
 
 ## Current Position
 
-Phase: 11 (vpn-proof-dns) — EXECUTING
-Plan: 1 of 5
-Status: Executing Phase 11
-Last activity: 2026-07-04 -- Phase 11 execution started
+Phase: 12 (corporate-ca) — EXECUTING
+Plan: 3 of 3
+Status: Ready to execute
+Last activity: 2026-07-04 -- Phase 12 execution started
 
 Progress: 3/8 phases complete [████████░░░░░░░░░░░░░] 38%
 
@@ -94,6 +94,8 @@ None.
 | Phase 08 P02 | 11min | 3 tasks | 5 files |
 | Phase 10 P01 | 8min | 2 tasks | 6 files |
 | Phase 10 P02 | 15min | 2 tasks | 5 files |
+| Phase 12 P01 | 3min | 3 tasks | 3 files |
+| Phase 12 P02 | 14min | - tasks | - files |
 
 ## Decisions
 
@@ -104,3 +106,6 @@ None.
 - Phase 09 Plan 02: daemon liveness is exposed only through `$SPECK_HOME/run/control.sock` responding with `PONG`, not through a PID file or command channel.
 - [Phase ?]: Phase 10 Plan 01: EnvShell is a two-variant enum (Posix/Fish) with #[derive(Clone, Copy)] so callers can pass it to render_env and render_speck_home without cloning — Idiomatic zero-cost fix for a fieldless enum
 - [Phase ?]: Phase 10 Plan 02: Sentinel replace-or-append (BEGIN/END marker) for bash/zsh dotfile writes; fish uses dedicated conf.d file overwrite; --set-docker-host is explicit opt-in consent for persistence
+- [Phase ?]: Structural PEM validation instead of pem crate
+- [Phase ?]: SHA256 content hash dedup for CA cert files
+- [Phase ?]: CA_CERTS_TAG = speck-ca-certs
