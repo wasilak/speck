@@ -20,6 +20,12 @@ use crate::config::VolumeMountConfig;
 const SPECK_HOME_TAG: &str = "speck-home";
 const IDENTITY_TAG_PREFIX: &str = "speck-id-";
 
+/// VirtioFS device tag for the CA certificates share.
+///
+/// Paths to PEM-encoded CA certificate files are shared into the guest
+/// under this tag and loaded by vminitd at boot time.
+pub const CA_CERTS_TAG: &str = "speck-ca-certs";
+
 /// VirtioFS device tag for the pre-provisioned Docker bind-mount device.
 ///
 /// Speck provisions one `VZVirtioFileSystemDeviceConfiguration` with this tag at
@@ -88,6 +94,7 @@ pub fn cmdline_virtiofs_arg(
     mounts: &[VolumeMountConfig],
     speck_home: &Path,
     identity_roots: &[PathBuf],
+    ca_certs_tag: Option<&str>,
 ) -> String {
     let vol_pairs: Vec<String> = mounts
         .iter()
@@ -123,6 +130,11 @@ pub fn cmdline_virtiofs_arg(
         result.push_str(&format!(" speck_identity_tags={}", id_pairs.join(",")));
     }
 
+    // Append CA certs tag when configured.
+    if let Some(ca_tag) = ca_certs_tag {
+        result.push_str(&format!(" ca_certs_tag={ca_tag}"));
+    }
+
     result
 }
 
@@ -138,9 +150,10 @@ pub fn configure_virtiofs_devices(
     mounts: &[VolumeMountConfig],
     speck_home: &Path,
     identity_roots: &[PathBuf],
+    ca_certs: &[PathBuf],
 ) -> Result<(), crate::error::Error> {
     let mut fs_devices: Vec<Retained<VZVirtioFileSystemDeviceConfiguration>> =
-        Vec::with_capacity(mounts.len() + 1 + identity_roots.len());
+        Vec::with_capacity(mounts.len() + 1 + identity_roots.len() + ca_certs.len());
 
     for (i, mount) in mounts.iter().enumerate() {
         let tag = format!("speck-vol-{i}");
@@ -270,6 +283,44 @@ pub fn configure_virtiofs_devices(
         let share_ref: &VZDirectoryShare = &empty_share;
         unsafe { bind_dev.setShare(Some(share_ref)) };
         fs_devices.push(bind_dev);
+    }
+
+    // Add CA certificate device (one share for the ca-certs directory).
+    // vminitd reads the PEM files from this share and installs them into
+    // the guest's trust store via update-ca-certificates.
+    if !ca_certs.is_empty() {
+        // Use a single tag — the directory itself is shared, not individual files.
+        // ca_certs_paths are all under {speck_home}/ca-certs/ at this point.
+        let parent = ca_certs[0].parent().unwrap_or(speck_home);
+        let parent_str = NSString::from_str(
+            parent
+                .to_str()
+                .ok_or_else(|| crate::error::Error::VirtioFsMount("non-UTF-8 CA cert path".into()))?,
+        );
+        let parent_url = NSURL::fileURLWithPath(&parent_str);
+
+        let shared_dir = unsafe {
+            VZSharedDirectory::initWithURL_readOnly(
+                VZSharedDirectory::alloc(),
+                &parent_url,
+                true,
+            )
+        };
+        let share = unsafe {
+            VZSingleDirectoryShare::initWithDirectory(VZSingleDirectoryShare::alloc(), &shared_dir)
+        };
+
+        let tag_ns = NSString::from_str(CA_CERTS_TAG);
+        let fs_dev = unsafe {
+            VZVirtioFileSystemDeviceConfiguration::initWithTag(
+                VZVirtioFileSystemDeviceConfiguration::alloc(),
+                &tag_ns,
+            )
+        };
+        unsafe {
+            fs_dev.setShare(Some(&share));
+        }
+        fs_devices.push(fs_dev);
     }
 
     // Build reference slice for NSArray (coerces via Deref)
@@ -426,7 +477,7 @@ mod tests {
             volume_name: None,
         }];
         let home = Path::new("/tmp/speck-home");
-        let result = cmdline_virtiofs_arg(&mounts, home, &[]);
+        let result = cmdline_virtiofs_arg(&mounts, home, &[], None);
         assert!(result.contains("speck_vol_tags=speck-vol-0:/app"));
         assert!(result.contains("speck_home_tag=speck-home"));
         assert!(result.contains("speck_home_path=/tmp/speck-home"));
@@ -449,7 +500,7 @@ mod tests {
             },
         ];
         let home = Path::new("/tmp/speck-home");
-        let result = cmdline_virtiofs_arg(&mounts, home, &[]);
+        let result = cmdline_virtiofs_arg(&mounts, home, &[], None);
         assert!(result.contains("speck_vol_tags=speck-vol-0:/app,speck-vol-1:/etc/config"));
         assert!(result.contains("speck_home_tag=speck-home"));
         assert!(result.contains("speck_home_path=/tmp/speck-home"));
@@ -459,7 +510,7 @@ mod tests {
     fn test_cmdline_arg_no_mounts() {
         let mounts: Vec<VolumeMountConfig> = vec![];
         let home = Path::new("/tmp/speck-home");
-        let result = cmdline_virtiofs_arg(&mounts, home, &[]);
+        let result = cmdline_virtiofs_arg(&mounts, home, &[], None);
         assert!(!result.contains("speck_vol_tags"));
         assert!(result.contains("speck_home_tag=speck-home"));
     }
@@ -490,7 +541,7 @@ mod tests {
             PathBuf::from("/Users"),
             PathBuf::from("/Volumes"),
         ];
-        let result = cmdline_virtiofs_arg(&mounts, home, &identity_roots);
+        let result = cmdline_virtiofs_arg(&mounts, home, &identity_roots, None);
         assert!(
             result.contains("speck_identity_tags=speck-id-users:/Users,speck-id-volumes:/Volumes"),
             "identity tags missing from cmdline: {result}"
@@ -501,7 +552,7 @@ mod tests {
     fn test_cmdline_no_identity_tags_when_empty() {
         let mounts: Vec<VolumeMountConfig> = vec![];
         let home = Path::new("/tmp/speck-home");
-        let result = cmdline_virtiofs_arg(&mounts, home, &[]);
+        let result = cmdline_virtiofs_arg(&mounts, home, &[], None);
         assert!(
             !result.contains("speck_identity_tags"),
             "unexpected identity_tags in cmdline: {result}"

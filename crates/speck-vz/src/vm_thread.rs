@@ -414,6 +414,7 @@ impl VmThread {
             &config.volume_mounts,
             &config.speck_home,
             &config.identity_mounts,
+            None, // CA tag — will be wired in Plan 12-03
         );
 
         let bootloader = unsafe {
@@ -595,6 +596,7 @@ impl VmThread {
                 &config.volume_mounts,
                 &config.speck_home,
                 &config.identity_mounts,
+                &config.ca_certs_paths,
             )?;
 
             Result::<_, Error>::Ok((vm_config, platform, entropy, vsock))
