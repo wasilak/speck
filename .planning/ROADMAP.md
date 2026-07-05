@@ -320,4 +320,4 @@ Plans:
 | 11. VPN-Proof DNS | 5/5 | Complete   | 2026-07-04 |
 | 12. Corporate CA Injection | 3/3 | Complete   | 2026-07-05 |
 | 13. Diagnostics | 2/2 | Complete   | 2026-07-05 |
-| 14. Homebrew Distribution | 0/3 | Not started | - |
+| 14. Homebrew Distribution | 0/3 | Planned | - |
