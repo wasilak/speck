@@ -103,7 +103,7 @@ Plans:
 - [ ] **Phase 09: Daemon Lifecycle** — Background daemon via launchd LaunchAgent with `spk down` and `spk restart`
 - [x] **Phase 10: Shell Environment Integration** — `spk env` for immediate use; idempotent `spk init` for persistent `DOCKER_HOST` (completed 2026-07-04)
 - [x] **Phase 11: VPN-Proof DNS** — Live DNS reload via SCDynamicStore/vsock; no host `:53` binding; split-DNS + SERVFAIL translation (completed 2026-07-04)
-- [ ] **Phase 12: Corporate CA Injection** — Custom CA certs injected into guest trust bundle before containerd/buildkitd start (3 plans)
+- [x] **Phase 12: Corporate CA Injection** — Custom CA certs injected into guest trust bundle before containerd/buildkitd start (3 plans) (completed 2026-07-05)
 - [ ] **Phase 13: Diagnostics** — `spk doctor` health suite covering DNS, certs, VM state, and socket reachability
 - [ ] **Phase 14: Homebrew Distribution** — Signed `.pkg` Cask artifact that preserves the virtualization entitlement through Homebrew re-signing
 
@@ -261,7 +261,7 @@ Plans:
 
 - [x] 12-01-PLAN.md (Wave 0) — TDD: failing tests for cert validation, GuestConfig propagation, and cmdline arg
 - [x] 12-02-PLAN.md (Wave 1) — Host-side config layer: CaConfig struct, PEM validation, GuestConfig field, VirtioFS device + cmdline
-- [ ] 12-03-PLAN.md (Wave 2) — Integration wiring: up.rs validation chain, vm_thread.rs passthrough, vminitd mount+update-ca-certificates+hosts.toml
+- [x] 12-03-PLAN.md (Wave 2) — Integration wiring: up.rs validation chain, vm_thread.rs passthrough, vminitd mount+update-ca-certificates+hosts.toml
 
 ### Phase 13: Diagnostics
 
@@ -275,7 +275,16 @@ Plans:
   3. `spk doctor dns google.com` reports which resolver answered, the IP(s) returned, and whether the result matches the macOS system resolver — full path tracing through guest DNS
   4. `spk doctor` when `DOCKER_HOST` points to a different runtime's socket prints a WARN line identifying the conflict
 
-**Plans**: TBD
+**Plans**: 2 plans
+
+Plans:
+**Wave 1**
+
+- [ ] 13-01-PLAN.md — Doctor foundation: CheckResult, 6 sync checks (codesign/DOCKER_HOST/cert/resources/DNS/VPN), clap wiring, read_resolver_table_once (Wave 1)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 13-02-PLAN.md — Async checks (VM running state, Docker socket) + DNS trace sub-command spk doctor dns (Wave 2)
 
 ### Phase 14: Homebrew Distribution
 
@@ -299,6 +308,6 @@ Plans:
 | 09. Daemon Lifecycle | 3/3 | Complete   | 2026-07-03 |
 | 10. Shell Integration | 2/2 | Complete    | 2026-07-04 |
 | 11. VPN-Proof DNS | 5/5 | Complete   | 2026-07-04 |
-| 12. Corporate CA Injection | 2/3 | In Progress|  |
-| 13. Diagnostics | 0/TBD | Not started | - |
+| 12. Corporate CA Injection | 3/3 | Complete   | 2026-07-05 |
+| 13. Diagnostics | 0/2 | Not started | - |
 | 14. Homebrew Distribution | 0/TBD | Not started | - |
