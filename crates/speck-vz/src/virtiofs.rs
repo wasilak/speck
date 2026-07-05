@@ -543,4 +543,28 @@ mod tests {
         let b = container_path_to_share_name(std::path::Path::new("/a/b"));
         assert_ne!(a, b, "collision: /a_b and /a/b must not map to the same share name");
     }
+
+    // ── ca_certs_tag tests (Phase 12 — RED; parameter does not exist yet) ──
+
+    #[test]
+    fn test_cmdline_no_ca_certs_tag_when_none() {
+        let mounts: Vec<VolumeMountConfig> = vec![];
+        let home = std::path::Path::new("/tmp/speck-home");
+        let result = cmdline_virtiofs_arg(&mounts, home, &[], None);
+        assert!(
+            !result.contains("ca_certs_tag"),
+            "cmdline should not contain ca_certs_tag when None: {result}"
+        );
+    }
+
+    #[test]
+    fn test_cmdline_contains_ca_certs_tag() {
+        let mounts: Vec<VolumeMountConfig> = vec![];
+        let home = std::path::Path::new("/tmp/speck-home");
+        let result = cmdline_virtiofs_arg(&mounts, home, &[], Some("ca-certs"));
+        assert!(
+            result.contains("ca_certs_tag=ca-certs"),
+            "cmdline should contain ca_certs_tag=ca-certs, got: {result}"
+        );
+    }
 }
