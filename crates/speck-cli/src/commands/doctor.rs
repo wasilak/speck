@@ -292,4 +292,47 @@ mod tests {
             "vm resources check must skip with 'vm-config.json not found' when daemon has not started"
         );
     }
+
+    #[test]
+    fn check_vm_running_probes_control_socket() {
+        let src = production_code();
+        assert!(
+            src.contains("async fn check_vm_running"),
+            "check_vm_running must be an async function"
+        );
+        assert!(
+            src.contains("control.sock"),
+            "check_vm_running must connect to control.sock"
+        );
+        assert!(
+            src.contains("Duration::from_secs(2)"),
+            "check_vm_running must use a 2-second timeout"
+        );
+    }
+
+    #[test]
+    fn check_docker_socket_pings_api() {
+        let src = production_code();
+        assert!(
+            src.contains("async fn check_docker_socket"),
+            "check_docker_socket must be an async function"
+        );
+        assert!(
+            src.contains("/_ping"),
+            "check_docker_socket must call /_ping"
+        );
+    }
+
+    #[test]
+    fn run_doctor_has_eight_checks() {
+        let src = production_code();
+        assert!(
+            src.contains("\"VM running\""),
+            "run_doctor must include a 'VM running' check label"
+        );
+        assert!(
+            src.contains("\"Docker socket\""),
+            "run_doctor must include a 'Docker socket' check label"
+        );
+    }
 }
