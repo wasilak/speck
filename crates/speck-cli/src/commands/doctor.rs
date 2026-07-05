@@ -381,4 +381,25 @@ mod tests {
             "run_doctor must include a 'Docker socket' check label"
         );
     }
+
+    #[test]
+    fn dns_hostname_not_shell_injected() {
+        let src = production_code();
+        assert!(
+            src.contains("Command::new(\"/usr/bin/nslookup\")"),
+            "host-side nslookup must use Command::new with a literal path"
+        );
+        assert!(
+            src.contains(".arg(hostname)"),
+            "hostname must be passed as a direct .arg() call, not interpolated into a shell string"
+        );
+        assert!(
+            !src.contains("bash -c"),
+            "trace_dns must never spawn bash -c with user-supplied hostname"
+        );
+        assert!(
+            src.contains("shell metacharacters"),
+            "trace_dns must validate hostname before any subprocess invocation"
+        );
+    }
 }
