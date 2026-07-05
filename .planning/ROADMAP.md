@@ -297,7 +297,17 @@ Plans:
   2. Running `spk up` after a Homebrew install succeeds without a "virtualization entitlement missing" or codesigning error
   3. `brew upgrade spk` produces a new binary where `spk up` still works — the `com.apple.security.virtualization` entitlement survives Homebrew's re-signing step
 
-**Plans**: TBD
+**Plans**: 3 plans
+
+Plans:
+**Wave 1**
+
+- [ ] 14-01-PLAN.md — Fix release.yml: --timestamp codesign flag, Developer ID Installer cert import, replace zip/staple-to-binary/tar.gz with pkg build+sign+notarize+staple+gh release+tap update (Wave 1)
+- [ ] 14-02-PLAN.md — Homebrew Cask formula at Casks/spk.rb with pkg stanza + delete Formula/speck.rb (Wave 1)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 14-03-PLAN.md — Pre-flight checkpoint: provision Developer ID Installer cert, create speck-runtime/homebrew-speck tap repo, add GitHub Secrets, verify end-to-end install (Wave 2, has checkpoint)
 
 ### Progress
 
@@ -310,4 +320,4 @@ Plans:
 | 11. VPN-Proof DNS | 5/5 | Complete   | 2026-07-04 |
 | 12. Corporate CA Injection | 3/3 | Complete   | 2026-07-05 |
 | 13. Diagnostics | 2/2 | Complete   | 2026-07-05 |
-| 14. Homebrew Distribution | 0/TBD | Not started | - |
+| 14. Homebrew Distribution | 0/3 | Not started | - |
