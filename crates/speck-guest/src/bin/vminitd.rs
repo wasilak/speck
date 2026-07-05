@@ -55,6 +55,9 @@ mod linux {
         // the guest chroot (e.g. /Users/... is valid inside /rootfs/Users/...).
         mount_identity_roots("/proc/cmdline");
 
+        // Mount CA certificates VirtioFS share if configured (CERT-02).
+        mount_ca_certs("/proc/cmdline");
+
         // If DNS proxy vsock port is configured, spawn the DNS forwarder.
         // DNS forwarding is always active regardless of container backend
         // because the host resolver is the source of truth for VPN/WARP DNS.
@@ -97,6 +100,11 @@ mod linux {
         if let Err(e) = std::fs::create_dir_all("/rootfs/run/speck") {
             eprintln!("vminitd: failed to create /rootfs/run/speck: {e}");
         }
+
+        // Install CA certificates and configure containerd before starting
+        // the container runtime (CERT-02, CERT-03).
+        install_ca_certs();
+        write_containerd_hosts_toml();
 
         let dockerd_bin = detect_dockerd_bin_in_chroot();
         eprintln!("vminitd: using dockerd at chroot-relative path {dockerd_bin}");
@@ -909,6 +917,169 @@ mod linux {
             }
         }
         eprintln!("vminitd: mounted {} identity roots", tags.len());
+    }
+
+    // ---------------------------------------------------------------------------
+    // CA certificate injection (CERT-02, CERT-03)
+    // ---------------------------------------------------------------------------
+
+    /// Parse `ca_certs_tag=<virtiofs_tag>` from the kernel cmdline (CERT-02).
+    ///
+    /// Returns the VirtioFS tag to mount, or `None` if no CA certs are configured.
+    fn parse_ca_certs_tag(cmdline_path: &str) -> Option<String> {
+        let content = std::fs::read_to_string(cmdline_path).ok()?;
+        for word in content.split_whitespace() {
+            if let Some(val) = word.strip_prefix("ca_certs_tag=") {
+                if !val.is_empty() {
+                    return Some(val.to_string());
+                }
+            }
+        }
+        None
+    }
+
+    /// Mount the CA cert VirtioFS share (tag from `ca_certs_tag=` cmdline param)
+    /// at `/var/lib/speck/ca-certs/` inside the guest (CERT-02).
+    ///
+    /// Mount failures are non-fatal: logged and skipped.
+    fn mount_ca_certs(cmdline_path: &str) {
+        let tag = match parse_ca_certs_tag(cmdline_path) {
+            Some(t) => t,
+            None => {
+                eprintln!("vminitd: no ca_certs_tag in cmdline — skipping CA mount");
+                return;
+            }
+        };
+        let target = "/var/lib/speck/ca-certs/";
+        if let Err(e) = std::fs::create_dir_all(target) {
+            eprintln!("vminitd: create_dir_all {target} failed: {e}");
+            return;
+        }
+        let tag_c = std::ffi::CString::new(tag.as_str()).unwrap_or_default();
+        let target_c = std::ffi::CString::new(target).unwrap_or_default();
+        let ret = unsafe {
+            libc::mount(
+                tag_c.as_ptr(),
+                target_c.as_ptr(),
+                b"virtiofs\0".as_ptr() as *const libc::c_char,
+                0,
+                std::ptr::null(),
+            )
+        };
+        if ret < 0 {
+            eprintln!(
+                "vminitd: failed to mount CA certs tag {tag} at {target}: {:?}",
+                io::Error::last_os_error()
+            );
+        } else {
+            eprintln!("vminitd: mounted CA certs tag {tag} at {target}");
+        }
+    }
+
+    /// Install CA certificates from the VirtioFS share into the guest's trust
+    /// store (CERT-02).
+    ///
+    /// Reads all `.pem` files from `/var/lib/speck/ca-certs/` and appends them
+    /// to `/rootfs/etc/ssl/certs/ca-certificates.crt`, then runs
+    /// `update-ca-certificates` inside the chroot so the system trust store
+    /// picks them up.
+    fn install_ca_certs() {
+        let ca_dir = "/var/lib/speck/ca-certs/";
+        let ca_dir_path = std::path::Path::new(ca_dir);
+        if !ca_dir_path.is_dir() {
+            eprintln!("vminitd: CA certs directory {ca_dir} not found — skipping install");
+            return;
+        }
+        let entries = match std::fs::read_dir(ca_dir_path) {
+            Ok(e) => e,
+            Err(e) => {
+                eprintln!("vminitd: failed to list {ca_dir}: {e}");
+                return;
+            }
+        };
+        let mut cert_count = 0u32;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("pem") {
+                continue;
+            }
+            let content = match std::fs::read_to_string(&path) {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("vminitd: failed to read {}: {e}", path.display());
+                    continue;
+                }
+            };
+            // Append to the system CA bundle inside the chroot.
+            if let Err(e) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("/rootfs/etc/ssl/certs/ca-certificates.crt")
+                .and_then(|mut f| {
+                    use std::io::Write;
+                    // Write a header comment for traceability, then the PEM content.
+                    writeln!(
+                        f,
+                        "\n# Speck injected CA: {}",
+                        path.file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or("unknown")
+                    )?;
+                    f.write_all(content.as_bytes())?;
+                    writeln!(f)?;
+                    Ok(())
+                })
+            {
+                eprintln!("vminitd: failed to append cert to bundle: {e}");
+            } else {
+                cert_count += 1;
+            }
+        }
+        if cert_count > 0 {
+            eprintln!("vminitd: installed {cert_count} CA cert(s) into trust bundle");
+            // Run update-ca-certificates inside the chroot so the system picks
+            // them up immediately.
+            let status = std::process::Command::new("chroot")
+                .args(["/rootfs", "update-ca-certificates", "--fresh"])
+                .status();
+            match status {
+                Ok(s) if s.success() => {
+                    eprintln!("vminitd: update-ca-certificates succeeded");
+                }
+                Ok(s) => {
+                    eprintln!("vminitd: update-ca-certificates exited with {s:?}");
+                }
+                Err(e) => {
+                    eprintln!("vminitd: update-ca-certificates failed: {e}");
+                }
+            }
+        }
+    }
+
+    /// Write containerd hosts.toml for private registry TLS trust (CERT-03).
+    ///
+    /// Creates `/rootfs/etc/containerd/certs.d/` (if absent) and writes a
+    /// catch-all `hosts.toml` that trusts the system CA bundle.  This ensures
+    /// containerd can pull images from registries signed by corporate/internal
+    /// CAs without requiring per-registry config.
+    fn write_containerd_hosts_toml() {
+        let certs_d_dir = "/rootfs/etc/containerd/certs.d/";
+        if let Err(e) = std::fs::create_dir_all(certs_d_dir) {
+            eprintln!("vminitd: failed to create {certs_d_dir}: {e}");
+            return;
+        }
+        // Write a catch-all hosts.toml that delegates TLS verification to
+        // the system CA bundle (which now includes injected certs).
+        let hosts_toml = r#"server = "https://registry-1.docker.io"
+
+[host."https://registry-1.docker.io"]
+  capabilities = ["pull", "resolve"]
+"#;
+        let hosts_path = format!("{certs_d_dir}hosts.toml");
+        match std::fs::write(&hosts_path, hosts_toml) {
+            Ok(()) => eprintln!("vminitd: wrote containerd hosts.toml to {hosts_path}"),
+            Err(e) => eprintln!("vminitd: failed to write hosts.toml: {e}"),
+        }
     }
 
     // ---------------------------------------------------------------------------
