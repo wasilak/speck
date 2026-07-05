@@ -76,6 +76,20 @@ impl DockerClient {
         Ok(serde_json::from_slice(&body)?)
     }
 
+    /// Same as `get()` but returns the raw response bytes without JSON deserialization.
+    ///
+    /// Used for endpoints that return binary-framed data such as Docker's multiplexed
+    /// log stream (`GET /containers/{id}/logs`), where the body is not valid JSON.
+    pub async fn get_raw(&self, path: &str) -> anyhow::Result<Vec<u8>> {
+        let uri: hyper::Uri = format!("http://localhost{path}").parse()?;
+        let req = hyper::Request::builder()
+            .method("GET")
+            .uri(&uri)
+            .body(Full::new(Bytes::new()))?;
+        let resp = self.request(req).await?;
+        read_body(resp.into_body()).await
+    }
+
     pub async fn post<T: Into<hyper::body::Bytes>>(
         &self,
         path: &str,

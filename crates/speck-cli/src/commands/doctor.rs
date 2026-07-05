@@ -1,8 +1,11 @@
 use std::path::Path;
+use std::time::Duration;
 
 use sha2::{Digest, Sha256};
+use tokio::io::AsyncReadExt;
 
 use crate::config;
+use crate::docker_client::DockerClient;
 use crate::theme::{GREEN, RED, RESET, YELLOW};
 use crate::{DoctorArgs, DoctorSubcommand};
 
@@ -183,10 +186,51 @@ pub fn check_vpn_dns() -> CheckResult {
     }
 }
 
+/// Check whether the Speck VM daemon is running by probing the control socket.
+///
+/// Connects with a 2-second timeout and drains at least one byte (the PONG the daemon
+/// writes on connection) to prevent a broken-pipe warning in the daemon log — same
+/// pattern used in `commands/down.rs`.
+async fn check_vm_running(speck_home: &Path) -> CheckResult {
+    let sock_path = speck_home.join("run/control.sock");
+    match tokio::time::timeout(
+        Duration::from_secs(2),
+        tokio::net::UnixStream::connect(&sock_path),
+    )
+    .await
+    {
+        Ok(Ok(mut stream)) => {
+            // Drain PONG to prevent broken-pipe warning in daemon (Pitfall 5).
+            let mut buf = [0u8; 8];
+            let _ = stream.read(&mut buf).await;
+            CheckResult::Pass
+        }
+        _ => CheckResult::Fail {
+            hint: "VM is not running — start with `spk up`".into(),
+        },
+    }
+}
+
+/// Verify the Docker-compatible API socket is reachable via GET /_ping.
+///
+/// Uses a 2-second timeout so a non-responsive daemon does not hang `spk doctor`.
+async fn check_docker_socket(speck_home: &Path) -> CheckResult {
+    let client = DockerClient::new(speck_home.join("speck.sock"));
+    match tokio::time::timeout(Duration::from_secs(2), client.get("/_ping")).await {
+        Ok(Ok(_)) => CheckResult::Pass,
+        _ => CheckResult::Fail {
+            hint: "Docker socket unreachable — run `spk up` first".into(),
+        },
+    }
+}
+
 /// Entry point for `spk doctor`.
 ///
-/// Runs six synchronous health checks and prints PASS/FAIL/WARN/SKIP for each.
-/// Returns exit code 0 when all checks are Pass/Warn/Skip, 1 when any check is Fail.
+/// Runs eight health checks (six synchronous + two async) and prints PASS/FAIL/WARN/SKIP
+/// for each. Returns exit code 0 when all checks are Pass/Warn/Skip, 1 when any is Fail.
+///
+/// Check order: codesign entitlement, DOCKER_HOST, cert injection, VM resources,
+/// public DNS, VPN DNS, VM running, Docker socket.
 pub async fn run_doctor(speck_home: &Path, args: DoctorArgs) -> anyhow::Result<i32> {
     if let Some(DoctorSubcommand::Dns { .. }) = args.command {
         anyhow::bail!("spk doctor dns requires async checks — implemented in plan 13-02");
@@ -201,6 +245,8 @@ pub async fn run_doctor(speck_home: &Path, args: DoctorArgs) -> anyhow::Result<i
         ("VM resources", check_vm_resources(speck_home)),
         ("public DNS", check_public_dns()),
         ("VPN DNS", check_vpn_dns()),
+        ("VM running", check_vm_running(speck_home).await),
+        ("Docker socket", check_docker_socket(speck_home).await),
     ];
 
     let mut any_fail = false;
