@@ -216,7 +216,7 @@ async fn check_vm_running(speck_home: &Path) -> CheckResult {
 /// Uses a 2-second timeout so a non-responsive daemon does not hang `spk doctor`.
 async fn check_docker_socket(speck_home: &Path) -> CheckResult {
     let client = DockerClient::new(speck_home.join("speck.sock"));
-    match tokio::time::timeout(Duration::from_secs(2), client.get("/_ping")).await {
+    match tokio::time::timeout(Duration::from_secs(2), client.get_raw("/_ping")).await {
         Ok(Ok(_)) => CheckResult::Pass,
         _ => CheckResult::Fail {
             hint: "Docker socket unreachable — run `spk up` first".into(),
