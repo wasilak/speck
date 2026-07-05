@@ -228,183 +228,102 @@ async fn check_docker_socket(speck_home: &Path) -> CheckResult {
 // DNS full-path trace (DOCTOR-03)
 // ──────────────────────────────────────────────────────────────
 
-/// Result of a full-path DNS trace comparing guest resolver with host resolver.
+/// Result of a DNS trace using the host resolver proxy path.
 #[derive(Debug, Default)]
 pub struct DnsTraceResult {
-    /// IP address of the resolver reported by nslookup inside the container.
-    pub guest_resolver: Option<String>,
-    /// Answer IPs returned by the guest resolver for the queried hostname.
-    pub guest_addrs: Vec<String>,
-    /// IP address of the resolver reported by host-side nslookup.
-    pub host_resolver: Option<String>,
-    /// Answer IPs returned by the host resolver for the queried hostname.
-    pub host_addrs: Vec<String>,
-    /// True when the Alpine image is absent; the caller should WARN and return early.
-    pub no_image: bool,
+    /// Nameserver(s) that will handle the query — VPN-scoped servers when split-DNS
+    /// is active, otherwise "(macOS system resolver)" as a display placeholder.
+    pub nameserver: Option<String>,
+    /// True when the domain matched a VPN-scoped split-DNS entry.
+    pub vpn_scoped: bool,
+    /// IPv4 answer addresses returned by the resolver.
+    pub addrs: Vec<String>,
+    /// Error string when resolution failed (NXDOMAIN, timeout, etc.).
+    pub error: Option<String>,
 }
 
-/// Strip Docker's 8-byte multiplexed stream headers and return the payload as a String.
+/// Resolve `hostname` using the same path as the guest vsock DNS proxy.
 ///
-/// Docker log endpoints return frames with the format:
-///   [1 byte stream type][3 bytes zero padding][4 bytes BE payload length][payload bytes]
-///
-/// This function strips every header and concatenates the payloads.
-pub fn strip_docker_stream_headers(raw: &[u8]) -> String {
-    let mut out: Vec<u8> = Vec::new();
-    let mut pos = 0;
-    while pos + 8 <= raw.len() {
-        let size =
-            u32::from_be_bytes([raw[pos + 4], raw[pos + 5], raw[pos + 6], raw[pos + 7]]) as usize;
-        let payload_end = pos + 8 + size;
-        if payload_end > raw.len() {
-            break;
-        }
-        out.extend_from_slice(&raw[pos + 8..payload_end]);
-        pos = payload_end;
-    }
-    String::from_utf8_lossy(&out).into_owned()
-}
-
-/// Parse busybox nslookup text output into a `DnsTraceResult`.
-///
-/// Expected format (busybox nslookup in Alpine):
-/// ```text
-/// Server:    8.8.8.8
-/// Address 1: 8.8.8.8 dns.google
-///
-/// Name:      google.com
-/// Address 1: 142.250.185.46 ...
-/// ```
-///
-/// The `Server:` line yields `guest_resolver`; `Address` lines that appear after
-/// a `Name:` line yield `guest_addrs`. `no_image` is always false for parsed output.
-pub fn parse_nslookup_output(text: &str) -> DnsTraceResult {
-    let mut result = DnsTraceResult::default();
-    let mut after_name = false;
-    for line in text.lines() {
-        let line = line.trim();
-        if let Some(rest) = line.strip_prefix("Server:") {
-            result.guest_resolver = Some(rest.trim().to_owned());
-        } else if line.starts_with("Name:") {
-            after_name = true;
-        } else if after_name && line.starts_with("Address") {
-            // "Address 1: 1.2.3.4 optional-hostname"
-            if let Some(after_colon) = line.splitn(2, ':').nth(1) {
-                let ip = after_colon.trim().split_whitespace().next().unwrap_or("").to_owned();
-                if !ip.is_empty() {
-                    result.guest_addrs.push(ip);
-                }
-            }
-        }
-    }
-    result
-}
-
-/// Run the full DNS trace pipeline through a temporary Alpine container.
-///
-/// Returns a `DnsTraceResult` with guest resolver and answer IPs filled.
-/// Sets `no_image: true` and returns early (without error) when Alpine is absent.
+/// Path B (DOCTOR-03): the guest's DNS forwarder proxies all UDP:53 queries over
+/// vsock to the host, where `spawn_dns_proxy` calls `getaddrinfo`. This function
+/// exercises that exact in-process path — no Alpine container or Docker socket needed,
+/// and no network connectivity to the guest is required.
 ///
 /// # Security (T-13-01)
 /// Validates `hostname` against shell metacharacters and whitespace before any
-/// subprocess invocation, satisfying ASVS V5 input validation requirements.
-async fn trace_dns(client: &DockerClient, hostname: &str) -> anyhow::Result<DnsTraceResult> {
-    // Step 1 — Validate hostname (T-13-01 ASVS V5 input validation).
+/// further processing, satisfying ASVS V5 input validation requirements.
+fn trace_dns(hostname: &str) -> anyhow::Result<DnsTraceResult> {
+    use std::net::ToSocketAddrs;
+
+    // Validate hostname (T-13-01 ASVS V5 input validation).
     if hostname.chars().any(|c| " ;|&$`'\"\\n".contains(c)) {
         anyhow::bail!("invalid hostname: contains shell metacharacters or whitespace");
     }
 
-    // Step 2 — Check Alpine image is present.
-    let image_check = client.get("/images/alpine/json").await;
-    let image_ok = image_check.as_ref().ok().and_then(|v| v.get("Id")).is_some();
-    if !image_ok {
-        return Ok(DnsTraceResult { no_image: true, ..Default::default() });
+    let table = speck_net::read_resolver_table_once();
+    let (nameserver, vpn_scoped) = match table.find_resolver(hostname) {
+        Some(servers) => {
+            let ns = servers.iter().map(|ip| ip.to_string()).collect::<Vec<_>>().join(", ");
+            (Some(ns), true)
+        }
+        None => (Some("macOS system resolver".to_owned()), false),
+    };
+
+    // Resolve via getaddrinfo — same code path as spawn_dns_proxy in speck-net.
+    let mut result = DnsTraceResult { nameserver, vpn_scoped, ..Default::default() };
+    match format!("{hostname}:0").to_socket_addrs() {
+        Ok(addrs) => {
+            result.addrs = addrs
+                .filter_map(|sa| match sa {
+                    std::net::SocketAddr::V4(v4) => Some(v4.ip().to_string()),
+                    _ => None,
+                })
+                .collect();
+        }
+        Err(e) => {
+            result.error = Some(e.to_string());
+        }
     }
-
-    // Step 3 — Create container: Cmd array prevents shell injection.
-    let body = serde_json::json!({
-        "Image": "alpine",
-        "Cmd": ["nslookup", hostname],
-        "NetworkDisabled": false
-    });
-    let create_resp = client.post_json("/containers/create", &body).await?;
-    let id = create_resp["Id"]
-        .as_str()
-        .ok_or_else(|| anyhow::anyhow!("container create: no Id in response"))?
-        .to_owned();
-
-    // Step 4 — Start (204 No Content — ignore JSON parse error) then wait for exit.
-    let _ = client.post_empty(&format!("/containers/{id}/start")).await;
-    let _ = client.post_empty(&format!("/containers/{id}/wait")).await;
-
-    // Step 5 — Fetch raw logs and strip Docker multiplexed stream headers.
-    let raw_logs = client
-        .get_raw(&format!("/containers/{id}/logs?stdout=1&stderr=1"))
-        .await?;
-    let log_text = strip_docker_stream_headers(&raw_logs);
-
-    // Step 6 — Delete container (best-effort; don't fail trace on cleanup error).
-    let _ = client.delete(&format!("/containers/{id}")).await;
-
-    // Step 7 — Parse and return guest-side result.
-    Ok(parse_nslookup_output(&log_text))
+    Ok(result)
 }
 
 /// Entry point for `spk doctor dns <hostname>`.
 ///
-/// Traces DNS resolution for `hostname` through the full guest path (via a temporary
-/// Alpine container) and compares against the host-side resolver. Prints resolver IPs,
-/// answer addresses, and whether guest and host agree.
-pub async fn run_doctor_dns(speck_home: &Path, hostname: &str) -> anyhow::Result<i32> {
-    let client = DockerClient::new(speck_home.join("speck.sock"));
-    let mut result = trace_dns(&client, hostname).await?;
-
-    if result.no_image {
-        println!(
-            "  {YELLOW}WARN{RESET}  DNS trace: Alpine image not present — run `docker pull alpine` to enable full DNS path testing"
-        );
-        return Ok(0);
-    }
-
-    // Host-side comparison: uses .arg(hostname) — never shell string (T-13-01).
-    if let Ok(host_out) = std::process::Command::new("/usr/bin/nslookup").arg(hostname).output() {
-        let host_text = String::from_utf8_lossy(&host_out.stdout).into_owned();
-        let host_parse = parse_nslookup_output(&host_text);
-        result.host_resolver = host_parse.guest_resolver;
-        result.host_addrs = host_parse.guest_addrs;
-    }
+/// Resolves `hostname` using the same `getaddrinfo` path as the guest vsock DNS
+/// proxy. Prints the nameserver path, answer IPs, and a PASS/FAIL verdict.
+pub async fn run_doctor_dns(_speck_home: &Path, hostname: &str) -> anyhow::Result<i32> {
+    let result = trace_dns(hostname)?;
 
     println!("DNS trace for: {hostname}\n");
 
-    println!("Guest DNS:");
-    match &result.guest_resolver {
-        Some(r) => println!("  Resolver: {r}"),
-        None => println!("  Resolver: (unknown)"),
-    }
-    for addr in &result.guest_addrs {
-        println!("  Address:  {addr}");
+    match &result.nameserver {
+        Some(ns) if result.vpn_scoped => println!("  Nameserver: {ns}  (VPN split-DNS)"),
+        Some(ns) => println!("  Nameserver: {ns}"),
+        None => println!("  Nameserver: (unknown)"),
     }
 
-    println!("\nHost DNS:");
-    match &result.host_resolver {
-        Some(r) => println!("  Resolver: {r}"),
-        None => println!("  Resolver: (unknown)"),
-    }
-    for addr in &result.host_addrs {
-        println!("  Address:  {addr}");
+    if let Some(err) = &result.error {
+        println!();
+        println!(
+            "  {RED}FAIL{RESET}  resolution failed: {err}\n         hint: check network connectivity or VPN DNS configuration"
+        );
+        return Ok(1);
     }
 
-    // Compare answer sets.
-    let guest_set: std::collections::BTreeSet<_> = result.guest_addrs.iter().collect();
-    let host_set: std::collections::BTreeSet<_> = result.host_addrs.iter().collect();
+    for addr in &result.addrs {
+        println!("  Address:    {addr}");
+    }
+
     println!();
-    if !guest_set.is_empty() && guest_set == host_set {
-        println!("  {GREEN}MATCH{RESET}  guest and host DNS answers agree");
+    if result.addrs.is_empty() {
+        println!(
+            "  {YELLOW}WARN{RESET}  resolver returned no addresses for {hostname}"
+        );
+        Ok(0)
     } else {
-        println!("  {YELLOW}MISMATCH{RESET}  guest and host DNS answers differ");
+        println!("  {GREEN}PASS{RESET}  host resolver working — guest DNS inherits this path via vsock proxy");
+        Ok(0)
     }
-
-    Ok(0)
 }
 
 /// Entry point for `spk doctor`.
@@ -566,23 +485,23 @@ mod tests {
     }
 
     #[test]
-    fn dns_hostname_not_shell_injected() {
+    fn dns_trace_uses_host_resolver_path() {
         let src = production_code();
         assert!(
-            src.contains("Command::new(\"/usr/bin/nslookup\")"),
-            "host-side nslookup must use Command::new with a literal path"
+            src.contains("to_socket_addrs"),
+            "trace_dns must resolve via getaddrinfo (to_socket_addrs) — same path as vsock DNS proxy"
         );
         assert!(
-            src.contains(".arg(hostname)"),
-            "hostname must be passed as a direct .arg() call, not interpolated into a shell string"
+            src.contains("shell metacharacters"),
+            "trace_dns must validate hostname before any resolution"
         );
         assert!(
             !src.contains("bash -c"),
             "trace_dns must never spawn bash -c with user-supplied hostname"
         );
         assert!(
-            src.contains("shell metacharacters"),
-            "trace_dns must validate hostname before any subprocess invocation"
+            !src.contains("alpine"),
+            "trace_dns must not depend on an Alpine container (Path B)"
         );
     }
 }
