@@ -192,6 +192,7 @@ fn get_option(data: &[u8], opt: u8) -> Option<&[u8]> {
     None
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_dhcp_response(
     xid: u32,
     msg_type: u8,

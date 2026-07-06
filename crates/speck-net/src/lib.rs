@@ -37,6 +37,7 @@ impl std::os::unix::io::AsRawFd for NetFd {
 /// and DNS proxy.
 pub struct SpeckNet {
     config: config::NetworkConfig,
+    #[allow(dead_code)]
     dns_vsock_port: Option<u32>,
 }
 

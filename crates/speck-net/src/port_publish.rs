@@ -127,10 +127,8 @@ impl PortPublishBridge {
                             let _ = socket.send_slice(&host_buf[..n]);
                             if socket.can_recv() {
                                 let mut buf = vec![0u8; self.mtu as usize];
-                                if let Ok(len) = socket.recv_slice(&mut buf) {
-                                    if len > 0 {
-                                        let _ = stream.write_all(&buf[..len]);
-                                    }
+                                if let Ok(len) = socket.recv_slice(&mut buf) && len > 0 {
+                                    let _ = stream.write_all(&buf[..len]);
                                 }
                             }
                             self.bridges.insert(handle, stream);
@@ -139,10 +137,8 @@ impl PortPublishBridge {
                         Err(e) if e.kind() == ErrorKind::WouldBlock => {
                             if socket.can_recv() {
                                 let mut buf = vec![0u8; self.mtu as usize];
-                                if let Ok(len) = socket.recv_slice(&mut buf) {
-                                    if len > 0 {
-                                        let _ = stream.write_all(&buf[..len]);
-                                    }
+                                if let Ok(len) = socket.recv_slice(&mut buf) && len > 0 {
+                                    let _ = stream.write_all(&buf[..len]);
                                 }
                             }
                             self.bridges.insert(handle, stream);

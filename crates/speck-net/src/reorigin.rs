@@ -60,7 +60,7 @@ impl ReoriginBridge {
                         // Host → Guest: limit read to available smoltcp send capacity so we
                         // never lose bytes when send_slice can't accept the full read.
                         let send_avail = socket.send_capacity().saturating_sub(socket.send_queue());
-                        let close = if send_avail == 0 {
+                        if send_avail == 0 {
                             // TX buffer full; try again next poll cycle
                             self.bridges.insert(handle, stream);
                             false
@@ -81,8 +81,7 @@ impl ReoriginBridge {
                                 }
                                 Err(_) => true,
                             }
-                        };
-                        close
+                        }
                     }
                 }
             };
@@ -151,6 +150,7 @@ impl ReoriginBridge {
         }
     }
 
+    #[allow(dead_code)]
     pub fn bridge_count(&self) -> usize {
         self.bridges.len()
     }
