@@ -42,3 +42,8 @@ lint:
 
 test:
 	cargo test --workspace
+
+# CI-equivalent test (Linux-compatible crates only, native host target).
+# Use this to verify what CI would run, or when on a Linux machine.
+test-ci:
+	cargo test --target x86_64-unknown-linux-gnu -p speck-core -p speck-net -p speck-guest

@@ -62,5 +62,8 @@ jobs:
           fi
           echo "OK: no print macros in speck-core"
 
+      # speck-vz, speck-dockerd, speck-cli depend on objc2/Virtualization.framework
+      # and cannot link on a Linux runner. Test only the Linux-compatible crates
+      # using the native host target (overrides config.toml's aarch64-apple-darwin default).
       - name: cargo test
-        run: cargo test --workspace
+        run: cargo test --target x86_64-unknown-linux-gnu -p speck-core -p speck-net -p speck-guest
