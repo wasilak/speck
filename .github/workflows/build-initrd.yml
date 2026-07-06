@@ -1,0 +1,74 @@
+name: Build speck initrd
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Initrd version (e.g. 0.1.0)
+        required: true
+        default: "0.1.0"
+  push:
+    tags: ["initrd-v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute release metadata
+        id: meta
+        shell: bash
+        run: |
+          VERSION="${{ github.event.inputs.version || github.ref_name }}"
+          VERSION="${VERSION#initrd-v}"
+          VERSION="${VERSION#v}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "release_tag=initrd-${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-musl
+
+      - name: Install musl linker
+        run: sudo apt-get install -y musl-tools
+
+      - name: Build vminitd (static musl)
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
+          RUSTFLAGS: "-C target-feature=+crt-static -Dwarnings"
+        run: cargo build --release -p speck-guest --target aarch64-unknown-linux-musl
+
+      - name: Verify binary is static
+        run: |
+          file target/aarch64-unknown-linux-musl/release/vminitd
+          ldd target/aarch64-unknown-linux-musl/release/vminitd 2>&1 | grep -q "not a dynamic executable" \
+            || { echo "FAIL: vminitd is not statically linked"; exit 1; }
+
+      - name: Package as cpio initrd
+        run: |
+          VERSION="${{ steps.meta.outputs.version }}"
+          mkdir -p initrd_root/{proc,sys,dev,rootfs,var/lib/containerd,run/speck}
+          cp target/aarch64-unknown-linux-musl/release/vminitd initrd_root/init
+          chmod +x initrd_root/init
+          cd initrd_root
+          find . | cpio -H newc -o | gzip -9 > "../speck-initrd-${VERSION}-arm64.cpio.gz"
+          cd ..
+          shasum -a 256 "speck-initrd-${VERSION}-arm64.cpio.gz" \
+            > "speck-initrd-${VERSION}-arm64.cpio.gz.sha256"
+          echo "=== initrd contents ==="
+          zcat "speck-initrd-${VERSION}-arm64.cpio.gz" | cpio -t
+          echo "=== sha256 ==="
+          cat "speck-initrd-${VERSION}-arm64.cpio.gz.sha256"
+
+      - name: Upload as GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.release_tag }}
+          files: |
+            speck-initrd-*.cpio.gz
+            speck-initrd-*.cpio.gz.sha256

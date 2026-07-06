@@ -21,6 +21,7 @@ const ROOTFS_BACKEND: &str = "moby";
 const KATA_VERSION: &str = "3.32.0";
 const KATA_KERNEL_FILE: &str = "vmlinux-6.18.35-197";
 const KATA_INITRD_FILE: &str = "kata-alpine-3.22.initrd";
+const INITRD_VERSION: &str = "0.1.0";
 const LAUNCHD_LABEL: &str = "io.speck.vm";
 
 pub fn daemonize(speck_home: &Path, binary: &Path) -> anyhow::Result<()> {
@@ -109,6 +110,13 @@ async fn ensure_assets(speck_home: &Path, requested_disk_gb: u64) -> anyhow::Res
             .context("failed to download kernel + initrd")?;
     }
 
+    let custom_initrd = speck_home.join("initrd/initrd.cpio.gz");
+    if !custom_initrd.exists() {
+        fetch_initrd(speck_home)
+            .await
+            .context("failed to download initrd")?;
+    }
+
     if !rootfs.exists() {
         fetch_rootfs(speck_home)
             .await
@@ -172,6 +180,29 @@ async fn fetch_kata_assets(speck_home: &Path) -> anyhow::Result<()> {
 
     println!("  Kernel ready: {}", symlink.display());
     println!("  Initrd ready: {}", initrd_out.display());
+    Ok(())
+}
+
+/// Download `speck-initrd-{VERSION}-arm64.cpio.gz` from GitHub Releases and
+/// place it at `speck_home/initrd/initrd.cpio.gz`.
+async fn fetch_initrd(speck_home: &Path) -> anyhow::Result<()> {
+    let dest = speck_home.join("initrd/initrd.cpio.gz");
+    let base =
+        format!("https://github.com/wasilak/speck/releases/download/initrd-{INITRD_VERSION}");
+    let name = format!("speck-initrd-{INITRD_VERSION}-arm64.cpio.gz");
+
+    println!("  Downloading initrd {INITRD_VERSION}...");
+
+    let status = tokio::process::Command::new("curl")
+        .args(["-fsSL", "--progress-bar", &format!("{base}/{name}")])
+        .arg("-o")
+        .arg(&dest)
+        .status()
+        .await
+        .context("curl failed")?;
+    anyhow::ensure!(status.success(), "initrd download failed");
+
+    println!("  Initrd ready: {}", dest.display());
     Ok(())
 }
 
