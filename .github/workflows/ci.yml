@@ -62,9 +62,9 @@ jobs:
           fi
           echo "OK: no print macros in speck-core"
 
-      # Only speck-core and speck-guest are free of macOS-only crates
-      # (objc2, system-configuration, dispatch2, Virtualization.framework).
-      # All other crates require macOS SDK at link time and cannot be tested
-      # on a Linux runner. They are covered by cargo check + cargo clippy above.
+      # Only speck-guest compiles on Linux: all other crates either require
+      # macOS SDK (objc2, Virtualization.framework, system-configuration) or
+      # have an explicit compile_error! guard (speck-core). speck-guest is
+      # the Linux vminitd binary and has no macOS dependencies.
       - name: cargo test
-        run: cargo test --target x86_64-unknown-linux-gnu -p speck-core -p speck-guest
+        run: cargo test --target x86_64-unknown-linux-gnu -p speck-guest
