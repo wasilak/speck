@@ -62,8 +62,9 @@ jobs:
           fi
           echo "OK: no print macros in speck-core"
 
-      # speck-vz, speck-dockerd, speck-cli depend on objc2/Virtualization.framework
-      # and cannot link on a Linux runner. Test only the Linux-compatible crates
-      # using the native host target (overrides config.toml's aarch64-apple-darwin default).
+      # Only speck-core and speck-guest are free of macOS-only crates
+      # (objc2, system-configuration, dispatch2, Virtualization.framework).
+      # All other crates require macOS SDK at link time and cannot be tested
+      # on a Linux runner. They are covered by cargo check + cargo clippy above.
       - name: cargo test
-        run: cargo test --target x86_64-unknown-linux-gnu -p speck-core -p speck-net -p speck-guest
+        run: cargo test --target x86_64-unknown-linux-gnu -p speck-core -p speck-guest
