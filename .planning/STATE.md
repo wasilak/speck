@@ -1,15 +1,16 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.1
-milestone_name: milestone
-status: completed
-last_updated: "2026-07-06T08:35:20.905Z"
+milestone: v1.2
+milestone_name: Hardened Runtime
+status: planning
+last_updated: "2026-07-06T17:35:39.769Z"
+last_activity: 2026-07-06
 progress:
-  total_phases: 8
-  completed_phases: 8
-  total_plans: 26
-  completed_plans: 26
-  percent: 100
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # State — Milestone v1.1 Production Runtime
@@ -51,3 +52,10 @@ Items acknowledged and deferred at milestone close on 2026-07-06:
 ## Next Steps
 
 Run `/gsd-new-milestone` to begin v1.2 planning.
+
+## Current Position
+
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-07-06 — Milestone v1.2 started

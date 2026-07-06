@@ -4,6 +4,19 @@ Ultra-fast, minimalist container runtime for Apple Silicon macOS. Runs container
 
 **Core value:** A container runtime on Apple Silicon that never loses the network — micro-VMs inherit the host's routing/DNS live, surviving corporate VPNs and Cloudflare WARP where Docker Desktop fails.
 
+## Current Milestone: v1.2 Hardened Runtime
+
+**Goal:** Close test coverage gaps protecting the core DNS/networking value proposition, achieve testcontainers compatibility, land Developer ID distribution, and polish the daemon lifecycle.
+
+**Target features:**
+- Unit tests for DNS proxy and vminitd (zero tests today on both)
+- Serial console capture + guest version check at startup
+- `unsafe set_var` sweep (Rust 2024 correctness)
+- dockerd state persistence to disk (containers, networks, volumes)
+- Docker API conformance suite (bollard-based, fills TODO stubs)
+- Developer ID signing + notarytool + Cask
+- `spk restart`, reliable `spk down`, port/exec e2e verification
+
 ## Constraints
 
 - **Platform:** macOS on Apple Silicon (`aarch64-apple-darwin`) only
@@ -53,12 +66,30 @@ Ultra-fast, minimalist container runtime for Apple Silicon macOS. Runs container
 - ✓ DOCTOR-01–03: `spk doctor` 8-check health suite; `spk doctor dns <hostname>` trace — v1.1
 - ✓ BREW-01–03: Homebrew Formula (ad-hoc signed tarball) installs working `spk` with entitlement preserved — v1.1
 
-### Active (v1.2 candidates)
+### Active (v1.2)
 
+**Stability & Testing**
+- [ ] **DNS-TEST-01**: Unit tests for `speck-net/src/dns.rs` DNS proxy (449 lines, zero tests — core VPN-DNS feature)
+- [ ] **VMINIT-TEST-01**: Unit tests for `vminitd.rs` (1541 lines, 10+ unsafe libc calls, zero tests)
+- [ ] **CONSOLE-01**: Wire serial console capture (`VZVirtioConsoleDeviceConfiguration` → `$SPECK_HOME/console.log`)
+- [ ] **VERSION-01**: Guest version check at startup — validate rootfs/initrd versions match host binary expectations
+- [ ] **UNSAFE-01**: Replace `unsafe set_var`/`remove_var` in `init.rs` (12 blocks) and `shell.rs` (9 blocks) with safe alternatives
+
+**testcontainers Conformance**
+- [ ] **STATE-01**: Persist dockerd container/exec state to disk (`$SPECK_HOME`) — survive daemon restarts
+- [ ] **STATE-02**: Persist network and volume metadata across daemon restarts
+- [ ] **CONFORM-01**: Fill Docker API conformance TODOs — bollard-based container lifecycle and compose workflow tests
+
+**Developer ID Distribution**
+- [ ] **BREW-DEVID-01**: Developer ID signing + notarytool + stapler (requires Apple Developer Program)
+- [ ] **BREW-DEVID-02**: `.pkg` installer
+- [ ] **BREW-DEVID-03**: Homebrew Cask (replace ad-hoc signed Formula)
+
+**Daemon Polish**
 - [ ] **DAEMON-RESTART**: First-class `spk restart` subcommand (currently: `spk down && spk up`)
-- [ ] **BREW-DEVID**: Developer ID + `.pkg` + notarytool + Cask distribution (deferred from v1.1: requires Apple Developer Program)
-- [ ] **DNS-LIVE-VERIFY**: Live lsof + WARP + VPN-toggle verification of DNS-01/03/05 (deferred: requires VPN-connected machine)
-- [ ] **TESTCONTAINERS**: Verified testcontainers-rust compatibility (bollard conformance suite gated on codesign)
+- [ ] **DAEMON-DOWN**: `spk down` reliable outside launchd (fix PID file fallback)
+- [ ] **PORT-E2E**: Port publishing verified end-to-end through smoltcp stack
+- [ ] **EXEC-E2E**: `spk exec` verified end-to-end through vsock to containerd
 
 ### Out of Scope
 
@@ -77,7 +108,7 @@ Ultra-fast, minimalist container runtime for Apple Silicon macOS. Runs container
 **Codebase:** 17,048 lines of Rust across `speck-vz`, `speck-net`, `speck-cli`, `speck-core`, `speck-guest`.  
 **State:** `spk up` starts a background daemon; containers run; Docker socket works; DNS survives VPN toggles.  
 **Known limitations:** `spk down` fails to stop processes not registered with launchd (boot via `cargo run` directly). First-class `spk restart` not yet implemented.  
-**Next:** v1.2 planning — decide priority between testcontainers conformance, Developer ID distribution, and K3s/Compose.
+**Next:** v1.2 in progress — Hardened Runtime (stability, testcontainers, Developer ID, daemon polish).
 
 ## Decisions
 
