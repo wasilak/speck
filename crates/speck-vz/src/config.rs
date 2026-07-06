@@ -198,10 +198,10 @@ impl GuestConfig {
         {
             return Err(format!("initrd not found: {}", initrd.display()));
         }
-        if let Some(ref net) = self.network {
-            if net.mtu < 1500 {
-                return Err(format!("network MTU must be >= 1500, got {}", net.mtu));
-            }
+        if let Some(ref net) = self.network
+            && net.mtu < 1500
+        {
+            return Err(format!("network MTU must be >= 1500, got {}", net.mtu));
         }
         if let Some(ref rootfs) = self.rootfs_disk_path
             && !rootfs.exists()

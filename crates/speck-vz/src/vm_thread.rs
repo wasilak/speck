@@ -108,7 +108,7 @@ impl DerefMut for VmDelegateHandle {
 
 pub(crate) enum VmCommand {
     Start {
-        config: GuestConfig,
+        config: Box<GuestConfig>,
         reply: mpsc::Sender<std::result::Result<InternalState, Error>>,
     },
     Stop {
@@ -1025,7 +1025,13 @@ impl VmThread {
 
     pub fn start(&self, config: GuestConfig) -> std::result::Result<InternalState, Error> {
         let (tx, rx) = mpsc::channel();
-        self.send_blocking(VmCommand::Start { config, reply: tx }, rx)?
+        self.send_blocking(
+            VmCommand::Start {
+                config: Box::new(config),
+                reply: tx,
+            },
+            rx,
+        )?
     }
 
     pub fn stop(&self, stop_timeout: Duration) -> std::result::Result<InternalState, Error> {

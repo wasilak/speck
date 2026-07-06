@@ -351,7 +351,7 @@ pub fn update_virtiofs_bind_mounts(
     let mut bind_device: Option<Retained<VZVirtioFileSystemDevice>> = None;
     let count = devices.count();
     for i in 0..count {
-        let device = unsafe { devices.objectAtIndex(i) };
+        let device = devices.objectAtIndex(i);
         if let Ok(fs_dev) = device.downcast::<VZVirtioFileSystemDevice>() {
             let tag = unsafe { fs_dev.tag() };
             let is_match = objc2::rc::autoreleasepool(|pool| {
@@ -415,7 +415,7 @@ pub fn update_virtiofs_bind_mounts(
     }
 
     // Cast NSMutableDictionary → &NSDictionary via Deref coercion.
-    let dict_ref: &NSDictionary<NSString, VZSharedDirectory> = &*mut_dict;
+    let dict_ref: &NSDictionary<NSString, VZSharedDirectory> = &mut_dict;
     let new_share = unsafe {
         VZMultipleDirectoryShare::initWithDirectories(VZMultipleDirectoryShare::alloc(), dict_ref)
     };

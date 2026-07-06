@@ -299,7 +299,7 @@ fn bridge_vsock_unix(vsock: VzSocket, stream: std::os::unix::net::UnixStream) {
         }
         let _ = stream_write.shutdown(std::net::Shutdown::Write);
         unsafe {
-            libc::write(cancel_w, b"\0".as_ptr() as *const libc::c_void, 1);
+            libc::write(cancel_w, c"".as_ptr() as *const libc::c_void, 1);
             libc::close(cancel_w);
         }
     });
@@ -312,7 +312,7 @@ fn bridge_vsock_unix(vsock: VzSocket, stream: std::os::unix::net::UnixStream) {
             let flags = libc::fcntl(stream_fd, libc::F_GETFL, 0);
             if flags < 0 || libc::fcntl(stream_fd, libc::F_SETFL, flags | libc::O_NONBLOCK) < 0 {
                 tracing::warn!(error = %std::io::Error::last_os_error(), "failed to set unix stream nonblocking; dropping connection");
-                libc::write(cancel_w, b"\0".as_ptr() as *const libc::c_void, 1);
+                libc::write(cancel_w, c"".as_ptr() as *const libc::c_void, 1);
                 libc::close(cancel_w);
                 libc::close(cancel_r);
                 return;
