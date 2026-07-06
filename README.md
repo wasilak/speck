@@ -19,21 +19,6 @@ Speck routes raw L2 frames through a user-space TCP/IP stack that re-originates 
 
 ## Install
 
-### Homebrew (recommended)
-
-```bash
-brew tap wasilak/speck https://github.com/wasilak/speck
-brew install wasilak/speck/speck
-```
-
-macOS may quarantine the binary on first install (ad-hoc signing). Clear it with:
-
-```bash
-xattr -dr com.apple.quarantine $(brew --prefix)/bin/spk
-```
-
-### Build from source
-
 Requires Rust stable, Xcode Command Line Tools, and `protoc`:
 
 ```bash
@@ -143,7 +128,7 @@ This is an alpha release intended for early testing and feedback. Known areas st
 | Background daemon (launchd LaunchAgent) | ✅ |
 | `spk dashboard` TUI | ✅ |
 | `spk doctor` diagnostics | ✅ |
-| Homebrew Formula distribution | ✅ |
+| Homebrew Formula distribution | 📋 planned |
 | testcontainers conformance | 🔧 in progress |
 | K3s / Kubernetes | 📋 planned |
 | Developer ID signing + notarization | 📋 planned |
