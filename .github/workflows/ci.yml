@@ -31,6 +31,9 @@ jobs:
           components: rustfmt, clippy
           targets: aarch64-apple-darwin
 
+      - name: Install protoc
+        run: sudo apt-get install -y protobuf-compiler
+
       - name: Cache dependencies
         uses: actions/cache@v4
         with:
