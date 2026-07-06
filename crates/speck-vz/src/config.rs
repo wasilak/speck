@@ -495,7 +495,7 @@ impl GuestConfigBuilder {
 
 fn default_speck_home() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
-    PathBuf::from(home).join(".local/share/speck")
+    PathBuf::from(home).join(".speck")
 }
 
 #[cfg(test)]

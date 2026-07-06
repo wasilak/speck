@@ -64,7 +64,7 @@ pub fn daemonize(speck_home: &Path, binary: &Path) -> anyhow::Result<()> {
     <key>KeepAlive</key>
     <true/>
     <key>RunAtLoad</key>
-    <false/>
+    <true/>
 </dict>
 </plist>
 "#,
@@ -87,6 +87,8 @@ pub fn daemonize(speck_home: &Path, binary: &Path) -> anyhow::Result<()> {
         status.success(),
         "launchctl bootstrap failed - check that launchd is running (macOS only)"
     );
+    println!("{NEON_CYAN}Speck VM is running{RESET}");
+    println!("  Use `spk logs` to follow boot, `spk down` to stop");
     Ok(())
 }
 
@@ -448,8 +450,14 @@ pub async fn run_up(
         )
     })?;
 
-    // Auto-download kernel, initrd, rootfs, and data disk on first run.
-    ensure_assets(speck_home, effective.vm.disk_gb).await?;
+    // Auto-download assets only when not all provided via CLI overrides.
+    let has_all_overrides = args.kernel.is_some()
+        && args.initrd.is_some()
+        && args.rootfs.is_some()
+        && args.data_disk.is_some();
+    if !has_all_overrides {
+        ensure_assets(speck_home, effective.vm.disk_gb).await?;
+    }
 
     let kernel_path = args
         .kernel
@@ -524,13 +532,14 @@ pub async fn run_up(
     spinner.set_message("Starting VM...");
     spinner.enable_steady_tick(std::time::Duration::from_millis(100));
 
+    let console_log_hint = format!("check {} for guest boot messages", speck_home.join("console.log").display());
     let spinner_for_start = spinner.clone();
     let guest = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
         guest.start().context("failed to start VM")?;
         spinner_for_start.set_message("Waiting for guest...");
-        guest
-            .wait_for_ready()
-            .context("guest did not become ready")?;
+        guest.wait_for_ready().map_err(|e| {
+            anyhow::anyhow!("{} — {}", e, console_log_hint)
+        })?;
         Ok(guest)
     })
     .await
@@ -877,11 +886,11 @@ mod tests {
     }
 
     #[test]
-    fn daemonize_keepalive_true_runataload_false() {
+    fn daemonize_keepalive_true_runataload_true() {
         let source = include_str!("up.rs");
 
         assert!(source.contains("KeepAlive") && source.contains("<true/>"));
-        assert!(source.contains("RunAtLoad") && source.contains("<false/>"));
+        assert!(source.contains("RunAtLoad") && source.contains("<true/>"), "RunAtLoad must be true so the daemon starts immediately on bootstrap");
     }
 
     #[test]

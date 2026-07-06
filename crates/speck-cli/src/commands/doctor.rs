@@ -32,7 +32,7 @@ pub fn print_check(label: &str, result: &CheckResult) {
         CheckResult::Warn { detail } => {
             println!("  {YELLOW}WARN{RESET}  {label}\n         {detail}")
         }
-        CheckResult::Skip { reason } => println!("  SKIP  {label} ({reason})"),
+        CheckResult::Skip { reason } => println!("  {YELLOW}INFO{RESET}  {label} ({reason})"),
     }
 }
 
@@ -107,8 +107,8 @@ pub fn check_cert_injection(speck_home: &Path) -> CheckResult {
     };
 
     if app_config.ca.extra_certs.is_empty() {
-        return CheckResult::Skip {
-            reason: "no CA certs configured".into(),
+        return CheckResult::PassWithDetail {
+            detail: "no CA certs configured".into(),
         };
     }
 
@@ -425,11 +425,15 @@ mod tests {
     }
 
     #[test]
-    fn cert_check_skips_when_no_certs() {
+    fn cert_check_passes_when_no_certs() {
         let src = production_code();
         assert!(
             src.contains("no CA certs configured"),
-            "cert check must skip with 'no CA certs configured' when extra_certs is empty"
+            "cert check must pass with 'no CA certs configured' detail when extra_certs is empty"
+        );
+        assert!(
+            src.contains("PassWithDetail"),
+            "cert check must use PassWithDetail (not Skip) for the no-certs case"
         );
     }
 

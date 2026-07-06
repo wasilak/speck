@@ -49,6 +49,10 @@ enum Commands {
     Init(InitArgs),
     /// Run health checks and diagnose Speck configuration
     Doctor(DoctorArgs),
+    /// Show Speck daemon and VM status
+    Status,
+    /// Show VM boot logs
+    Logs(LogsArgs),
 }
 
 #[derive(Parser)]
@@ -143,6 +147,16 @@ pub enum DoctorSubcommand {
     Dns { hostname: String },
 }
 
+#[derive(Parser)]
+pub struct LogsArgs {
+    /// Show the last 20 lines of the daemon log
+    #[arg(long)]
+    pub tail: bool,
+    /// Follow new log entries as they are written
+    #[arg(long)]
+    pub follow: bool,
+}
+
 #[derive(Parser, Clone)]
 pub struct InitArgs {
     /// Persist the Speck environment block in your shell startup file (opt-in)
@@ -158,7 +172,7 @@ fn resolve_speck_home() -> PathBuf {
         return PathBuf::from(home);
     }
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-    PathBuf::from(home).join(".local/share/speck")
+    PathBuf::from(home).join(".speck")
 }
 
 fn init_tracing(log_level: &str) -> anyhow::Result<()> {
@@ -363,6 +377,7 @@ mod tests {
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let speck_home = resolve_speck_home();
+    let _ = std::fs::create_dir_all(&speck_home);
 
     match cli.command {
         Commands::Up(args) => {
@@ -437,6 +452,20 @@ async fn main() -> anyhow::Result<()> {
             if code != 0 {
                 std::process::exit(code);
             }
+        }
+        Commands::Status => {
+            init_tracing(&default_tracing_filter())?;
+            commands::status::run_status(&speck_home).await?
+        }
+        Commands::Logs(args) => {
+            init_tracing(&default_tracing_filter())?;
+            commands::logs::run_logs(
+                &speck_home,
+                commands::logs::LogsArgs {
+                    follow: args.follow,
+                    tail: args.tail,
+                },
+            )?
         }
     }
 

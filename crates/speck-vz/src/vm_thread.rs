@@ -978,6 +978,7 @@ impl VmThread {
         queue: &DispatchQueue,
         ready_vsock_port: u32,
     ) -> Result<(), Error> {
+        let mut _last_connect_err = String::new();
         for _ in 0..Self::READY_MAX_ATTEMPTS {
             match Self::do_vsock_connect_with_timeout(
                 control,
@@ -990,7 +991,7 @@ impl VmThread {
                     let mut n = 0;
                     while n < 6 {
                         match sock.read(&mut buf[n..]) {
-                            Ok(0) => break, // EOF before full signal
+                            Ok(0) => break,
                             Ok(read) => n += read,
                             Err(e) => return Err(Error::VsockIo(e)),
                         }
@@ -1001,14 +1002,15 @@ impl VmThread {
                         return Err(Error::VsockConnect("unexpected READY signal".into()));
                     }
                 }
-                Err(Error::VsockConnect(_)) => {
+                Err(Error::VsockConnect(msg)) => {
+                    _last_connect_err = msg;
                     std::thread::sleep(Duration::from_millis(200));
                 }
                 Err(Error::VsockTimeout) => {}
                 Err(e) => return Err(e),
             }
         }
-        Err(Error::GuestReadyTimeout)
+        Err(Error::GuestReadyTimeout(ready_vsock_port))
     }
 
     fn send_blocking<T>(

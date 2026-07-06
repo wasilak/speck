@@ -49,6 +49,10 @@ enum Commands {
     Init(InitArgs),
     /// Run health checks and diagnose Speck configuration
     Doctor(DoctorArgs),
+    /// Show Speck daemon and VM status
+    Status,
+    /// Show VM boot logs
+    Logs(LogsArgs),
 }
 
 #[derive(Parser)]
@@ -141,6 +145,16 @@ pub struct DoctorArgs {
 pub enum DoctorSubcommand {
     /// Trace DNS resolution for a hostname through the full guest DNS path
     Dns { hostname: String },
+}
+
+#[derive(Parser)]
+pub struct LogsArgs {
+    /// Show the last 20 lines of the daemon log
+    #[arg(long)]
+    pub tail: bool,
+    /// Follow new log entries as they are written
+    #[arg(long)]
+    pub follow: bool,
 }
 
 #[derive(Parser, Clone)]
