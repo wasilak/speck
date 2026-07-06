@@ -18,7 +18,9 @@ pub async fn run_down(speck_home: &Path) -> anyhow::Result<()> {
     drop(stream);
     tracing::info!("daemon is alive, proceeding with shutdown");
 
-    // Step 2 — Issue bootout: triggers SIGTERM → daemon performs graceful VM shutdown
+    // Step 2 — Stop the daemon. Try launchctl bootout first (launchd-managed case);
+    // if it fails (daemon was started directly, e.g. spk up --foreground), fall back
+    // to SIGTERM via the PID file.
     let out = std::process::Command::new("id")
         .arg("-u")
         .output()
@@ -27,13 +29,16 @@ pub async fn run_down(speck_home: &Path) -> anyhow::Result<()> {
         .context("non-UTF8 uid")?
         .trim()
         .to_owned();
-    let status = tokio::process::Command::new("launchctl")
+    let bootout_ok = tokio::process::Command::new("launchctl")
         .args(["bootout", &format!("gui/{uid_str}/{LAUNCHD_LABEL}")])
         .status()
         .await
-        .context("launchctl bootout failed")?;
-    if !status.success() {
-        tracing::warn!("launchctl bootout returned non-zero (daemon may already be stopping)");
+        .context("launchctl bootout failed")?
+        .success();
+
+    if !bootout_ok {
+        tracing::info!("launchctl bootout failed — trying pid file fallback");
+        kill_via_pid_file(speck_home)?;
     }
 
     // Step 3 — Remove io.speck.vm.plist to prevent auto-registration on next login
@@ -60,6 +65,24 @@ pub async fn run_down(speck_home: &Path) -> anyhow::Result<()> {
     // Step 5 — User-facing confirmation
     println!("Speck stopped.");
 
+    Ok(())
+}
+
+/// Read `$SPECK_HOME/run/speck.pid` and send SIGTERM to that process.
+/// Used as a fallback when the daemon was started directly (not via launchd).
+fn kill_via_pid_file(speck_home: &Path) -> anyhow::Result<()> {
+    let pid_path = speck_home.join("run/speck.pid");
+    let contents = std::fs::read_to_string(&pid_path)
+        .with_context(|| format!("pid file not found at {} — cannot stop daemon", pid_path.display()))?;
+    let pid = contents.trim().to_owned();
+    pid.parse::<u32>()
+        .with_context(|| format!("invalid pid in {}: {:?}", pid_path.display(), pid))?;
+    let status = std::process::Command::new("kill")
+        .args(["-TERM", &pid])
+        .status()
+        .context("failed to run kill")?;
+    anyhow::ensure!(status.success(), "kill -TERM {pid} failed");
+    tracing::info!(pid, "sent SIGTERM via pid file");
     Ok(())
 }
 
@@ -99,6 +122,23 @@ mod tests {
         assert!(
             src.contains("io.speck.vm"),
             "run_down must reference the launchd label io.speck.vm in the bootout invocation"
+        );
+    }
+
+    #[test]
+    fn down_has_pid_file_fallback() {
+        let src = production_code();
+        assert!(
+            src.contains("speck.pid"),
+            "run_down must fall back to kill_via_pid_file using run/speck.pid when launchctl bootout fails"
+        );
+        assert!(
+            src.contains("kill_via_pid_file"),
+            "run_down must call kill_via_pid_file as the non-launchd fallback"
+        );
+        assert!(
+            src.contains("SIGTERM") || src.contains("-TERM"),
+            "kill_via_pid_file must send SIGTERM to the daemon process"
         );
     }
 

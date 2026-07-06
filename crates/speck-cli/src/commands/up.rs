@@ -629,6 +629,11 @@ pub async fn run_up(
     println!();
 
     std::fs::create_dir_all(speck_home.join("run"))?;
+
+    let pid_path = speck_home.join("run/speck.pid");
+    std::fs::write(&pid_path, format!("{}\n", std::process::id()))
+        .context("failed to write pid file")?;
+
     let ctrl_sock_path = speck_home.join("run/control.sock");
     let _ = std::fs::remove_file(&ctrl_sock_path);
     let listener = UnixListener::bind(&ctrl_sock_path).context("failed to bind control socket")?;
@@ -692,6 +697,7 @@ async fn shutdown_gracefully(
         tracing::warn!(error = %error, "VM stop error (continuing cleanup)");
     }
     let _ = std::fs::remove_file(sock_path);
+    let _ = std::fs::remove_file(speck_home.join("run/speck.pid"));
     Ok(())
 }
 
