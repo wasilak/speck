@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::path::Path;
 
 use indicatif::ProgressBar;
@@ -22,7 +21,7 @@ pub async fn run_run(args: RunArgs, speck_home: &Path) -> anyhow::Result<()> {
     spinner.finish_and_clear();
 
     let mut env: Vec<String> = args.env.clone();
-    env.push(format!("SPECK_CONTAINER=true"));
+    env.push("SPECK_CONTAINER=true".to_string());
 
     let mut exposed_ports = serde_json::Map::new();
     let mut port_bindings = serde_json::Map::new();
@@ -76,7 +75,7 @@ pub async fn run_run(args: RunArgs, speck_home: &Path) -> anyhow::Result<()> {
 
     if args.detach {
         let short = &container_id[..container_id.len().min(12)];
-        println!("{NEON_CYAN}{short}{}", "\x1b[0m");
+        println!("{NEON_CYAN}{short}\x1b[0m");
         return Ok(());
     }
 

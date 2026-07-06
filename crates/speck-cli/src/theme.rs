@@ -11,7 +11,7 @@ pub fn format_status(status: &str) -> String {
         "running" => format!("{GREEN}{status}{RESET}"),
         "exited" | "stopped" => format!("{YELLOW}{status}{RESET}"),
         "dead" => format!("{RED}{status}{RESET}"),
-        s => format!("{s}"),
+        s => s.to_string(),
     }
 }
 

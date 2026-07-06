@@ -87,6 +87,7 @@ pub struct ConfigWarning {
     pub message: String,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ConfigSources {
     pub config_file: bool,
@@ -94,6 +95,7 @@ pub struct ConfigSources {
     pub env: bool,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct StrictAppConfig {
@@ -106,6 +108,7 @@ struct StrictAppConfig {
     ca: CaConfig,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct StrictVmConfig {
@@ -262,6 +265,7 @@ pub fn parse_env_u64(var_name: &str, unit: &str) -> anyhow::Result<Option<u64>> 
     Ok(Some(parsed))
 }
 
+#[allow(dead_code)]
 pub fn validate_effective_vm_config(config: &EffectiveVmConfig) -> anyhow::Result<()> {
     let physical_cores = physical_core_count()?;
     validate_effective_vm_config_with_physical_cores(config, physical_cores)

@@ -13,6 +13,7 @@ use ratatui::widgets::{Block, Borders, Paragraph, Row, Table, TableState};
 
 use crate::docker_client::DockerClient;
 
+#[allow(dead_code)]
 #[derive(Clone)]
 struct ContainerRow {
     id: String,
@@ -76,7 +77,7 @@ pub async fn run_dashboard(speck_home: &Path) -> anyhow::Result<()> {
             tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
             let current_id = {
                 let containers = rx_for_logs.borrow().clone();
-                containers.get(0).map(|c| c.id.clone()).unwrap_or_default()
+                containers.first().map(|c| c.id.clone()).unwrap_or_default()
             };
             if current_id.is_empty() || current_id == last_id {
                 continue;
@@ -84,19 +85,16 @@ pub async fn run_dashboard(speck_home: &Path) -> anyhow::Result<()> {
             last_id = current_id.clone();
 
             let path = format!("/containers/{current_id}/logs?tail=50&stdout=true&stderr=true");
-            match log_client.get(&path).await {
-                Ok(value) => {
-                    let text = value.as_str().unwrap_or("");
-                    let mut logs = VecDeque::new();
-                    for line in text.lines() {
-                        if logs.len() >= 200 {
-                            logs.pop_front();
-                        }
-                        logs.push_back(line.to_string());
+            if let Ok(value) = log_client.get(&path).await {
+                let text = value.as_str().unwrap_or("");
+                let mut logs = VecDeque::new();
+                for line in text.lines() {
+                    if logs.len() >= 200 {
+                        logs.pop_front();
                     }
-                    let _ = log_tx.send(logs);
+                    logs.push_back(line.to_string());
                 }
-                Err(_) => {}
+                let _ = log_tx.send(logs);
             }
         }
     });
@@ -160,7 +158,7 @@ fn parse_containers(value: &serde_json::Value) -> Vec<ContainerRow> {
     };
 
     arr.iter()
-        .filter_map(|c| {
+        .map(|c| {
             let id = c["Id"].as_str().unwrap_or("");
             let short_id = if id.len() > 12 { &id[..12] } else { id };
             let name = c["Names"]
@@ -173,13 +171,13 @@ fn parse_containers(value: &serde_json::Value) -> Vec<ContainerRow> {
             let status = c["State"].as_str().unwrap_or("").to_string();
             let created = c["Created"].as_i64().unwrap_or(0);
 
-            Some(ContainerRow {
+            ContainerRow {
                 id: short_id.to_string(),
                 name,
                 image,
                 status,
                 created,
-            })
+            }
         })
         .collect()
 }

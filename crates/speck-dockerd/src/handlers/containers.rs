@@ -746,7 +746,7 @@ mod tests {
     #[test]
     fn test_binds_label_roundtrip_for_start_handler() {
         // Build the label value exactly as create() does.
-        let raw = vec!["/tmp:/app", "/tmp:/data:ro"];
+        let raw = ["/tmp:/app", "/tmp:/data:ro"];
         let stored: String = raw
             .iter()
             .map(|s| parse_docker_bind(s).unwrap().to_label_string())

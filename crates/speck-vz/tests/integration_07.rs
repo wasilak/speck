@@ -49,7 +49,7 @@ fn speck_sock() -> PathBuf {
 }
 
 /// Build a `GuestConfig` from the standard `$SPECK_HOME` layout.
-fn build_guest_config(speck_home: &PathBuf) -> speck_vz::config::GuestConfig {
+fn build_guest_config(speck_home: &std::path::Path) -> speck_vz::config::GuestConfig {
     speck_vz::config::GuestConfig::builder()
         .kernel_path(speck_home.join("kernel/vmlinux"))
         .initrd_path(speck_home.join("initrd/initrd.cpio.gz"))

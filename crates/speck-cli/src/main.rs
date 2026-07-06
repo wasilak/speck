@@ -172,6 +172,7 @@ fn default_tracing_filter() -> String {
     std::env::var("RUST_LOG").unwrap_or_else(|_| "info".into())
 }
 
+#[allow(clippy::items_after_test_module)]
 #[cfg(test)]
 mod tests {
     const MAIN_SOURCE: &str = include_str!("main.rs");

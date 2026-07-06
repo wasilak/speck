@@ -12,10 +12,7 @@ pub async fn run_rm(args: RmArgs, speck_home: &Path) -> anyhow::Result<()> {
         .delete(&format!("/containers/{}", args.container))
         .await?;
 
-    println!(
-        "{NEON_CYAN}Container {} removed{}",
-        args.container, "\x1b[0m"
-    );
+    println!("{NEON_CYAN}Container {} removed\x1b[0m", args.container);
 
     Ok(())
 }

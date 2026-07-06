@@ -20,7 +20,7 @@ fn speck_home() -> PathBuf {
     PathBuf::from(home).join(".local/share/speck")
 }
 
-fn build_guest_config(speck_home: &PathBuf) -> speck_vz::config::GuestConfig {
+fn build_guest_config(speck_home: &std::path::Path) -> speck_vz::config::GuestConfig {
     speck_vz::config::GuestConfig::builder()
         .kernel_path(speck_home.join("kernel/vmlinux"))
         .initrd_path(speck_home.join("initrd/initrd.cpio.gz"))

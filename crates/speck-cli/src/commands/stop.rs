@@ -12,10 +12,7 @@ pub async fn run_stop(args: StopArgs, speck_home: &Path) -> anyhow::Result<()> {
         .post_empty(&format!("/containers/{}/stop", args.container))
         .await?;
 
-    println!(
-        "{NEON_CYAN}Container {} stopped{}",
-        args.container, "\x1b[0m"
-    );
+    println!("{NEON_CYAN}Container {} stopped\x1b[0m", args.container);
 
     Ok(())
 }

@@ -44,15 +44,15 @@ fn resolve_target_file(target: ShellTarget) -> anyhow::Result<PathBuf> {
 /// Replace the existing `# BEGIN speck` … `# END speck` region in `content`
 /// with `block`, or append `block` if no sentinel markers are present.
 fn replace_or_append_block(content: &str, block: &str) -> String {
-    if let Some(begin) = content.find(BEGIN_MARKER) {
-        if let Some(end_rel) = content[begin..].find(END_MARKER) {
-            let end_abs = begin + end_rel + END_MARKER.len();
-            let mut result = String::with_capacity(content.len() + block.len());
-            result.push_str(&content[..begin]);
-            result.push_str(block);
-            result.push_str(&content[end_abs..]);
-            return result;
-        }
+    if let Some(begin) = content.find(BEGIN_MARKER)
+        && let Some(end_rel) = content[begin..].find(END_MARKER)
+    {
+        let end_abs = begin + end_rel + END_MARKER.len();
+        let mut result = String::with_capacity(content.len() + block.len());
+        result.push_str(&content[..begin]);
+        result.push_str(block);
+        result.push_str(&content[end_abs..]);
+        return result;
     }
     if content.is_empty() {
         block.to_string()
@@ -76,12 +76,12 @@ pub async fn run_init(args: InitArgs, speck_home: &Path) -> anyhow::Result<()> {
     let target = resolve_shell(&args.shell)?;
 
     // Step 2 — Check DOCKER_HOST conflict
-    if let Ok(docker_host) = std::env::var("DOCKER_HOST") {
-        if !docker_host.contains("speck.sock") {
-            eprintln!(
-                "Warning: DOCKER_HOST is currently set to `{docker_host}` — spk init will override it."
-            );
-        }
+    if let Ok(docker_host) = std::env::var("DOCKER_HOST")
+        && !docker_host.contains("speck.sock")
+    {
+        eprintln!(
+            "Warning: DOCKER_HOST is currently set to `{docker_host}` — spk init will override it."
+        );
     }
 
     // Step 3 — Preview/persist based on --set-docker-host
