@@ -978,8 +978,8 @@ impl VmThread {
         queue: &DispatchQueue,
         ready_vsock_port: u32,
     ) -> Result<(), Error> {
-        let mut _last_connect_err = String::new();
-        for _ in 0..Self::READY_MAX_ATTEMPTS {
+        let mut last_connect_err: Option<String> = None;
+        for i in 0..Self::READY_MAX_ATTEMPTS {
             match Self::do_vsock_connect_with_timeout(
                 control,
                 queue,
@@ -1003,14 +1003,19 @@ impl VmThread {
                     }
                 }
                 Err(Error::VsockConnect(msg)) => {
-                    _last_connect_err = msg;
+                    tracing::warn!(attempt = i + 1, port = ready_vsock_port, error = %msg, "vsock connect rejected by guest");
+                    last_connect_err = Some(msg);
                     std::thread::sleep(Duration::from_millis(200));
                 }
-                Err(Error::VsockTimeout) => {}
+                Err(Error::VsockTimeout) => {
+                    tracing::warn!(attempt = i + 1, port = ready_vsock_port, "vsock connect timed out");
+                }
                 Err(e) => return Err(e),
             }
         }
-        Err(Error::GuestReadyTimeout(ready_vsock_port))
+        let detail = last_connect_err
+            .unwrap_or_else(|| "all attempts timed out".into());
+        Err(Error::GuestReadyTimeout(ready_vsock_port, detail))
     }
 
     fn send_blocking<T>(

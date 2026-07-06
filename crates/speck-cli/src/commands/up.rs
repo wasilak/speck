@@ -189,6 +189,9 @@ async fn fetch_kata_assets(speck_home: &Path) -> anyhow::Result<()> {
 /// place it at `speck_home/initrd/initrd.cpio.gz`.
 async fn fetch_initrd(speck_home: &Path) -> anyhow::Result<()> {
     let dest = speck_home.join("initrd/initrd.cpio.gz");
+    let tmp = speck_home.join("initrd/initrd.cpio.gz.tmp");
+    let _ = std::fs::remove_file(&tmp);
+
     let base =
         format!("https://github.com/wasilak/speck/releases/download/initrd-{INITRD_VERSION}");
     let name = format!("speck-initrd-{INITRD_VERSION}-arm64.cpio.gz");
@@ -198,12 +201,17 @@ async fn fetch_initrd(speck_home: &Path) -> anyhow::Result<()> {
     let status = tokio::process::Command::new("curl")
         .args(["-fsSL", "--progress-bar", &format!("{base}/{name}")])
         .arg("-o")
-        .arg(&dest)
+        .arg(&tmp)
         .status()
         .await
         .context("curl failed")?;
-    anyhow::ensure!(status.success(), "initrd download failed");
 
+    if !status.success() {
+        let _ = std::fs::remove_file(&tmp);
+        anyhow::bail!("initrd download failed");
+    }
+
+    std::fs::rename(&tmp, &dest)?;
     println!("  Initrd ready: {}", dest.display());
     Ok(())
 }
@@ -214,6 +222,9 @@ async fn fetch_rootfs(speck_home: &Path) -> anyhow::Result<()> {
     let dest = speck_home.join("rootfs.img");
     let tmp = speck_home.join("rootfs.img.tmp");
     let gz_tmp = speck_home.join("rootfs.img.gz.tmp");
+    let _ = std::fs::remove_file(&tmp);
+    let _ = std::fs::remove_file(&gz_tmp);
+
     let base =
         format!("https://github.com/wasilak/speck/releases/download/rootfs-{ROOTFS_VERSION}");
     let gz_name = format!("speck-rootfs-{ROOTFS_VERSION}-{ROOTFS_BACKEND}-arm64.img.gz");
@@ -228,18 +239,30 @@ async fn fetch_rootfs(speck_home: &Path) -> anyhow::Result<()> {
         .status()
         .await
         .context("curl failed")?;
-    anyhow::ensure!(curl_status.success(), "rootfs download failed");
+    if !curl_status.success() {
+        let _ = std::fs::remove_file(&gz_tmp);
+        anyhow::bail!("rootfs download failed");
+    }
 
-    let tmp_file = std::fs::File::create(&tmp)
-        .with_context(|| format!("failed to create {}", tmp.display()))?;
-    let status = tokio::process::Command::new("gunzip")
+    let tmp_file = match std::fs::File::create(&tmp) {
+        Ok(f) => f,
+        Err(e) => {
+            let _ = std::fs::remove_file(&gz_tmp);
+            return Err(e).with_context(|| format!("failed to create {}", tmp.display()));
+        }
+    };
+    let gunzip_status = tokio::process::Command::new("gunzip")
         .arg("-c")
         .arg(&gz_tmp)
         .stdout(Stdio::from(tmp_file))
         .status()
         .await
         .context("gunzip failed")?;
-    anyhow::ensure!(status.success(), "rootfs download failed");
+    if !gunzip_status.success() {
+        let _ = std::fs::remove_file(&gz_tmp);
+        let _ = std::fs::remove_file(&tmp);
+        anyhow::bail!("rootfs decompression failed");
+    }
     let _ = std::fs::remove_file(&gz_tmp);
 
     // Verify SHA-256.
@@ -273,6 +296,8 @@ async fn fetch_rootfs(speck_home: &Path) -> anyhow::Result<()> {
         "rootfs SHA-256 mismatch (expected {expected}, got {actual})"
     );
 
+    // On checksum mismatch, remove the corrupted tmp file.
+    // On success, atomically rename to final path.
     std::fs::rename(&tmp, &dest)?;
     println!("  Rootfs ready: {}", dest.display());
     Ok(())

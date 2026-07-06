@@ -56,8 +56,8 @@ pub enum Error {
     DiskAttachment(String),
 
     /// Guest ready signal not received within the expected window.
-    #[error("guest ready signal timed out on vsock port {0} — check console.log for guest boot messages")]
-    GuestReadyTimeout(u32),
+    #[error("guest ready signal timed out on vsock port {_0} (last error: {_1}) — check console.log for guest boot messages")]
+    GuestReadyTimeout(u32, String),
 
     /// VirtioFS mount configuration error.
     #[error("VirtioFS mount error: {0}")]
