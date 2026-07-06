@@ -1,7 +1,5 @@
 [build]
 target = "aarch64-apple-darwin"
-rustc = "/Users/piotrek/.rustup/toolchains/stable-aarch64-apple-darwin/bin/rustc"
-rustdoc = "/Users/piotrek/.rustup/toolchains/stable-aarch64-apple-darwin/bin/rustdoc"
 
 [alias]
 xtask = "run --package xtask --"
