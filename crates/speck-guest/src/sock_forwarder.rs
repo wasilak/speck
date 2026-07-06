@@ -165,7 +165,7 @@ fn unix_connect(path: &str) -> io::Result<libc::c_int> {
 
     // Copy path bytes into sun_path.
     for (i, &b) in path_bytes.iter().enumerate() {
-        addr.sun_path[i] = b;
+        addr.sun_path[i] = b as _;
     }
 
     let addr_ptr = &addr as *const libc::sockaddr_un as *const libc::sockaddr;
