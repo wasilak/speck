@@ -29,6 +29,7 @@ pub struct AttachQuery {
     tty: bool,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize, Default)]
 pub struct LogsQuery {
     #[serde(default)]

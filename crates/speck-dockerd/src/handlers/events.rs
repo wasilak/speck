@@ -11,6 +11,7 @@ use tokio_stream::wrappers::BroadcastStream;
 
 use crate::state::AppState;
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize, Default)]
 pub struct EventsQuery {
     #[serde(default)]

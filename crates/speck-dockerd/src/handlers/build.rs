@@ -17,6 +17,7 @@ pub const MAX_BUILD_CONTEXT_BYTES: usize = 256 * 1024 * 1024;
 
 static BUILD_CONTEXT_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub struct BuildQuery {
@@ -116,27 +117,27 @@ fn frontend_attrs_from_query(query: &BuildQuery) -> HashMap<String, String> {
     if let Some(target) = &query.target {
         frontend_attrs.insert("target".into(), target.clone());
     }
-    if let Some(buildargs) = &query.buildargs {
-        if let Ok(args) = serde_json::from_str::<HashMap<String, String>>(buildargs) {
-            for (k, v) in args {
-                frontend_attrs.insert(format!("build-arg:{k}"), v);
-            }
+    if let Some(buildargs) = &query.buildargs
+        && let Ok(args) = serde_json::from_str::<HashMap<String, String>>(buildargs)
+    {
+        for (k, v) in args {
+            frontend_attrs.insert(format!("build-arg:{k}"), v);
         }
     }
-    if let Some(labels) = &query.labels {
-        if let Ok(labs) = serde_json::from_str::<HashMap<String, String>>(labels) {
-            for (k, v) in labs {
-                frontend_attrs.insert(format!("label:{k}"), v);
-            }
+    if let Some(labels) = &query.labels
+        && let Ok(labs) = serde_json::from_str::<HashMap<String, String>>(labels)
+    {
+        for (k, v) in labs {
+            frontend_attrs.insert(format!("label:{k}"), v);
         }
     }
     if let Some(platform) = &query.platform {
         frontend_attrs.insert("platform".into(), platform.clone());
     }
-    if let Some(nocache) = query.nocache {
-        if nocache {
-            frontend_attrs.insert("no-cache".into(), "".into());
-        }
+    if let Some(nocache) = query.nocache
+        && nocache
+    {
+        frontend_attrs.insert("no-cache".into(), "".into());
     }
     if let Some(cachefrom) = &query.cachefrom {
         frontend_attrs.insert("cache-from".into(), cachefrom.clone());

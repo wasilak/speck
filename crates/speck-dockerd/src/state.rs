@@ -43,11 +43,11 @@ impl ExecStore {
     const MAX_ENTRIES: usize = 1000;
 
     pub fn insert(&mut self, id: String, spec: ExecSpec) {
-        if self.entries.len() >= Self::MAX_ENTRIES {
-            if let Some(oldest) = self.order.pop_front() {
-                self.entries.remove(&oldest);
-                tracing::warn!(exec_id = %oldest, "evicted oldest Docker exec spec from capped exec_store");
-            }
+        if self.entries.len() >= Self::MAX_ENTRIES
+            && let Some(oldest) = self.order.pop_front()
+        {
+            self.entries.remove(&oldest);
+            tracing::warn!(exec_id = %oldest, "evicted oldest Docker exec spec from capped exec_store");
         }
         self.order.push_back(id.clone());
         self.entries.insert(id, spec);

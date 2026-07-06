@@ -254,14 +254,14 @@ pub async fn start(State(state): State<AppState>, Path(id): Path<String>) -> Res
             })
             .collect();
 
-        if !mounts.is_empty() {
-            if let Err(e) = state.guest.add_bind_mounts(mounts) {
-                tracing::warn!(
-                    container_id = id.as_str(),
-                    error = %e,
-                    "failed to update virtiofs-binds VZMultipleDirectoryShare; bind mounts unavailable"
-                );
-            }
+        if !mounts.is_empty()
+            && let Err(e) = state.guest.add_bind_mounts(mounts)
+        {
+            tracing::warn!(
+                container_id = id.as_str(),
+                error = %e,
+                "failed to update virtiofs-binds VZMultipleDirectoryShare; bind mounts unavailable"
+            );
         }
     }
 
