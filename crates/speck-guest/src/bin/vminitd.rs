@@ -1194,13 +1194,8 @@ mod linux {
         }
 
         // Get current flags
-        let ret = unsafe {
-            libc::ioctl(
-                sock_fd,
-                libc::SIOCGIFFLAGS as libc::c_ulong,
-                &ifr as *const libc::ifreq,
-            )
-        };
+        let ret =
+            unsafe { libc::ioctl(sock_fd, libc::SIOCGIFFLAGS as _, &ifr as *const libc::ifreq) };
         if ret < 0 {
             eprintln!(
                 "vminitd: lo SIOCGIFFLAGS failed: {:?}",
@@ -1216,13 +1211,8 @@ mod linux {
                 | (libc::IFF_UP as i16)
                 | (libc::IFF_LOOPBACK as i16)) as i16;
         }
-        let ret = unsafe {
-            libc::ioctl(
-                sock_fd,
-                libc::SIOCSIFFLAGS as libc::c_ulong,
-                &ifr as *const libc::ifreq,
-            )
-        };
+        let ret =
+            unsafe { libc::ioctl(sock_fd, libc::SIOCSIFFLAGS as _, &ifr as *const libc::ifreq) };
         if ret < 0 {
             eprintln!(
                 "vminitd: lo SIOCSIFFLAGS failed: {:?}",
@@ -1255,13 +1245,8 @@ mod linux {
         // --- Step 1: Bring the interface up via SIOCGIFFLAGS / SIOCSIFFLAGS ---
         // On aarch64-linux-musl the ioctl constants are u64 but the syscall takes
         // c_int; cast explicitly to suppress the type mismatch error.
-        let flags_ret = unsafe {
-            libc::ioctl(
-                sock_fd,
-                libc::SIOCGIFFLAGS as libc::c_ulong,
-                &ifr as *const libc::ifreq,
-            )
-        };
+        let flags_ret =
+            unsafe { libc::ioctl(sock_fd, libc::SIOCGIFFLAGS as _, &ifr as *const libc::ifreq) };
         if flags_ret < 0 {
             eprintln!(
                 "vminitd: SIOCGIFFLAGS failed: {:?}",
@@ -1275,13 +1260,8 @@ mod linux {
         unsafe {
             ifr.ifr_ifru.ifru_flags = (ifr.ifr_ifru.ifru_flags | (libc::IFF_UP as i16)) as i16;
         }
-        let up_ret = unsafe {
-            libc::ioctl(
-                sock_fd,
-                libc::SIOCSIFFLAGS as libc::c_ulong,
-                &ifr as *const libc::ifreq,
-            )
-        };
+        let up_ret =
+            unsafe { libc::ioctl(sock_fd, libc::SIOCSIFFLAGS as _, &ifr as *const libc::ifreq) };
         if up_ret < 0 {
             eprintln!(
                 "vminitd: SIOCSIFFLAGS (IFF_UP) failed: {:?}",
@@ -1337,13 +1317,8 @@ mod linux {
                 0,
             ],
         };
-        let addr_ret = unsafe {
-            libc::ioctl(
-                sock_fd,
-                libc::SIOCSIFADDR as libc::c_ulong,
-                &ifr as *const libc::ifreq,
-            )
-        };
+        let addr_ret =
+            unsafe { libc::ioctl(sock_fd, libc::SIOCSIFADDR as _, &ifr as *const libc::ifreq) };
         if addr_ret < 0 {
             eprintln!(
                 "vminitd: SIOCSIFADDR {ip_str} failed: {:?}",
@@ -1367,7 +1342,7 @@ mod linux {
         let mask_ret = unsafe {
             libc::ioctl(
                 sock_fd,
-                libc::SIOCSIFNETMASK as libc::c_ulong,
+                libc::SIOCSIFNETMASK as _,
                 &ifr as *const libc::ifreq,
             )
         };
@@ -1402,13 +1377,8 @@ mod linux {
         };
         rt.rt_flags = (libc::RTF_UP | libc::RTF_GATEWAY) as u16;
 
-        let route_ret = unsafe {
-            libc::ioctl(
-                sock_fd,
-                libc::SIOCADDRT as libc::c_ulong,
-                &rt as *const libc::rtentry,
-            )
-        };
+        let route_ret =
+            unsafe { libc::ioctl(sock_fd, libc::SIOCADDRT as _, &rt as *const libc::rtentry) };
         if route_ret < 0 {
             let err = io::Error::last_os_error();
             // EEXIST means the route already exists (harmless)

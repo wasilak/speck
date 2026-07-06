@@ -35,6 +35,9 @@ jobs:
             target/
           key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
 
+      - name: Install protoc
+        run: brew install protobuf
+
       - name: Build release binary
         run: cargo build --release --package speck-cli --target aarch64-apple-darwin
 
