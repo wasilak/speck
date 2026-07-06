@@ -73,6 +73,12 @@ struct UpArgs {
     disk: Option<u64>,
     #[arg(long)]
     foreground: bool,
+    /// Block until the Docker socket responds to GET /_ping with HTTP 200
+    #[arg(long)]
+    wait: bool,
+    /// Timeout in seconds for --wait (default: 300)
+    #[arg(long, default_value = "300")]
+    timeout: u64,
 }
 
 #[derive(Parser)]
@@ -371,6 +377,56 @@ mod tests {
             "InitArgs must expose the --set-docker-host opt-in flag as set_docker_host"
         );
     }
+
+    #[test]
+    fn up_args_has_wait_flag() {
+        assert!(
+            MAIN_SOURCE.contains("wait: bool"),
+            "UpArgs must expose --wait as a bool flag"
+        );
+    }
+
+    #[test]
+    fn up_args_has_timeout_flag_with_default() {
+        assert!(
+            MAIN_SOURCE.contains("timeout: u64"),
+            "UpArgs must expose --timeout as a u64 field"
+        );
+        assert!(
+            MAIN_SOURCE.contains("default_value = \"300\""),
+            "UpArgs --timeout must default to 300 seconds"
+        );
+    }
+
+    #[test]
+    fn main_polls_socket_after_daemonize_when_wait_flag_set() {
+        let main_fn = &MAIN_SOURCE[MAIN_SOURCE
+            .rfind("async fn main()")
+            .expect("main.rs must define async main")..];
+        let daemonize = main_fn
+            .find("commands::up::daemonize(&speck_home, &binary)")
+            .expect("Commands::Up must call daemonize");
+        let wait_guard = main_fn
+            .find("args.wait")
+            .expect("Commands::Up must guard socket polling behind args.wait");
+        let wait_for_socket = main_fn
+            .find("commands::up::wait_for_socket")
+            .expect("Commands::Up must call wait_for_socket when --wait is set");
+
+        assert!(daemonize < wait_guard, "daemonize must happen before wait guard check");
+        assert!(wait_guard < wait_for_socket, "wait guard must wrap wait_for_socket call");
+    }
+
+    #[test]
+    fn main_exits_nonzero_on_wait_timeout() {
+        let main_fn = &MAIN_SOURCE[MAIN_SOURCE
+            .rfind("async fn main()")
+            .expect("main.rs must define async main")..];
+        assert!(
+            main_fn.contains("std::process::exit(1)"),
+            "Commands::Up must exit with code 1 when wait_for_socket times out"
+        );
+    }
 }
 
 #[tokio::main]
@@ -384,6 +440,15 @@ async fn main() -> anyhow::Result<()> {
             if !args.foreground && std::env::var("SPECK_DAEMONIZED").is_err() {
                 let binary = std::env::current_exe().context("cannot find own binary")?;
                 commands::up::daemonize(&speck_home, &binary)?;
+                if args.wait {
+                    let sock = speck_home.join("speck.sock");
+                    if let Err(e) =
+                        commands::up::wait_for_socket(&sock, args.timeout).await
+                    {
+                        eprintln!("error: {e}");
+                        std::process::exit(1);
+                    }
+                }
                 return Ok(());
             }
             let (file_config, warnings) = config::load_config_file(&speck_home)?;

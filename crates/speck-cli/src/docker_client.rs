@@ -127,6 +127,25 @@ impl DockerClient {
         Ok(serde_json::from_slice(&body)?)
     }
 
+    /// Returns `true` if `GET /_ping` on this socket responds with HTTP 200.
+    /// Does not attempt JSON parsing — the Docker `/_ping` body is plain text `"OK"`.
+    pub async fn ping(&self) -> bool {
+        let Ok(uri) = "http://localhost/_ping".parse::<hyper::Uri>() else {
+            return false;
+        };
+        let Ok(req) = hyper::Request::builder()
+            .method("GET")
+            .uri(&uri)
+            .body(Full::new(Bytes::new()))
+        else {
+            return false;
+        };
+        match self.request(req).await {
+            Ok(resp) => resp.status() == hyper::StatusCode::OK,
+            Err(_) => false,
+        }
+    }
+
     pub async fn delete(&self, path: &str) -> anyhow::Result<serde_json::Value> {
         let uri: hyper::Uri = format!("http://localhost{path}").parse()?;
         let req = hyper::Request::builder()

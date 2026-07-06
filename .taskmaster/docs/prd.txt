@@ -1,0 +1,254 @@
+# Speck Alpha — Issues & Feature Backlog PRD
+
+## Overview
+
+Speck (`spk`) is an ultra-fast, minimalist container runtime for Apple Silicon macOS.
+This PRD captures all open issues and feature requests identified during alpha testing
+(2026-07-06) that remain unimplemented or only partially addressed after the v1.1 session.
+
+Source: cross-check of Obsidian "Projects/speck/issues and features" against live codebase
+(crates/speck-cli, crates/speck-vz). Fully resolved items are excluded.
+
+---
+
+## 1. Readiness Primitive — spk up --wait / spk wait (UX-7, B2)
+
+### Problem
+`spk up` (daemon mode) exits 0 as soon as `launchctl bootstrap` returns — before assets
+are downloaded or the VM is ready. Any script doing `spk up && docker run ...` fails.
+There is no way to block until the Docker socket is responsive.
+
+### Requirements
+- Add `--wait` flag to `spk up`. When set, the process must not exit until the Docker
+  socket at `$SPECK_HOME/speck.sock` responds to `GET /_ping` with HTTP 200.
+- Timeout: default 300 seconds. If the socket does not become responsive within the
+  timeout, exit with a non-zero exit code and an actionable error message.
+- Print progress to stderr during the wait (e.g. "Waiting for Speck to be ready...
+  [elapsed Xs]") so CI logs are not silent.
+- When `--wait` is NOT passed, the current behaviour (immediate return) is preserved.
+
+### Acceptance Criteria
+- `spk up --wait && docker run --rm hello-world` succeeds in a fresh environment.
+- `spk up --wait --timeout 60` exits non-zero with a clear message if not ready in 60s.
+- The `--wait` flag is documented in `spk up --help`.
+
+---
+
+## 2. Progress Indicator for Kata Asset Download (UX-2)
+
+### Problem
+`fetch_kata_assets()` downloads the ~200 MB Kata Containers release tarball using a
+raw `curl | zstdcat | tar` shell pipeline with no progress output. The user stares at a
+blank terminal for minutes. `fetch_initrd` and `fetch_rootfs` already have
+`--progress-bar`; this function does not.
+
+### Requirements
+- `fetch_kata_assets` must show download progress while streaming the tarball.
+- Because the download is piped through `zstdcat | tar`, use curl's `--progress-bar`
+  flag (write stderr progress) so the user sees bytes downloaded and transfer speed.
+- The progress output must appear in terminal (foreground mode) and be suppressed /
+  redirected to the log file when running as a daemon (`SPECK_DAEMONIZED=1`).
+
+### Acceptance Criteria
+- Running `spk up --foreground` on a machine with no cached assets shows a visible
+  progress bar during the Kata tarball download.
+- Running `spk up` (daemon mode) does not leak curl progress to the terminal.
+
+---
+
+## 3. daemon startup feedback improvement (UX-1)
+
+### Problem
+`spk up` (daemon mode) prints "Speck VM is running — Use `spk logs` to follow boot"
+immediately after `launchctl bootstrap`. This message fires before assets are downloaded
+or the VM is ready, giving a false impression of success on first run.
+
+### Requirements
+- Change the post-daemonize message to accurately reflect the state: the service has
+  been *registered*, not necessarily *running*. Example wording:
+  "Speck daemon registered. VM is starting in the background."
+  "  → spk logs --follow   to watch startup"
+  "  → spk status          to check when ready"
+- Optionally: if `--wait` (task 1) is implemented, `spk up` without `--wait` should
+  recommend `spk up --wait` for scripted use.
+
+### Acceptance Criteria
+- The message printed by `spk up` (no `--foreground`) no longer claims the VM is
+  "running" before readiness is confirmed.
+- `spk logs --follow` is mentioned so first-time users know how to monitor progress.
+
+---
+
+## 4. ANSI color codes stripped in non-TTY output (D4)
+
+### Problem
+`theme.rs` defines all colors as hardcoded ANSI escape strings (e.g.
+`"\x1b[38;2;0;255;0m"`). These are always emitted regardless of whether stdout is a
+terminal. Piping `spk doctor` or `spk ps` to a file or `grep` produces garbage output.
+
+### Requirements
+- All color output must respect the `NO_COLOR` environment variable (if set to any
+  value, emit no ANSI codes).
+- Color must also be suppressed when stdout is not a TTY (detect via `std::io::IsTerminal`
+  or the `anstream` crate — already a dependency).
+- The `anstream` crate is already in `Cargo.toml`; use it to wrap stdout/stderr and
+  let it handle stripping automatically.
+- Applies to: `spk doctor`, `spk ps`, `spk status`, all commands that use `theme.rs`
+  constants.
+
+### Acceptance Criteria
+- `spk doctor | cat` produces plain text with no escape codes.
+- `NO_COLOR=1 spk doctor` produces plain text with no escape codes.
+- `spk doctor` in an interactive terminal still renders colors normally.
+
+---
+
+## 5. spk doctor: add SPECK_HOME path to output (F7)
+
+### Problem
+`spk doctor` runs eight health checks but never tells the user which `SPECK_HOME`
+directory `spk` is using. Users with multiple installations or a custom `SPECK_HOME`
+env var have no way to confirm which directory is active without reading source code.
+
+### Requirements
+- Add a line at the top of `spk doctor` output showing the resolved SPECK_HOME path.
+  Example: `  SPECK_HOME: /Users/alice/.speck`
+- This line must appear before any check results.
+- If `SPECK_HOME` was set via the environment variable, annotate it:
+  `  SPECK_HOME: /custom/path  (from $SPECK_HOME env)`
+
+### Acceptance Criteria
+- `spk doctor` output always begins with the SPECK_HOME path.
+- The path matches what `spk up` would actually use.
+
+---
+
+## 6. spk doctor: cert hint when no certs configured (UX-5)
+
+### Problem
+When no CA certs are configured, `spk doctor` shows:
+  `PASS  cert injection  (no CA certs configured)`
+Corporate users following a setup guide don't know *how* to configure them.
+
+### Requirements
+- Change the `PassWithDetail` message for the empty-certs case to include a
+  configuration hint:
+  `no CA certs configured — add paths to ca.extra_certs in ~/.speck/config.yaml`
+- The hint must reference the correct SPECK_HOME path (use the resolved path, not a
+  hardcoded `~/.speck`).
+
+### Acceptance Criteria
+- `spk doctor` on a fresh install includes the config hint in the cert injection line.
+
+---
+
+## 7. VPN DNS check: improve wording (UX-4)
+
+### Problem
+When no VPN is active, `spk doctor` shows:
+  `INFO  VPN DNS (no VPN-scoped resolvers detected (no VPN active))`
+The parenthetical is redundant and doesn't tell the user what to do to test it.
+
+### Requirements
+- Change the Skip reason to:
+  `no VPN active — connect a VPN to verify split-DNS inheritance`
+- This makes it clear the check is skipped because there's nothing to test, not
+  because something failed.
+
+### Acceptance Criteria
+- `spk doctor` with no VPN active shows the new wording.
+- `spk doctor` with a VPN active still shows PASS (existing behaviour unchanged).
+
+---
+
+## 8. spk init: scaffold config.yaml with commented defaults (F4)
+
+### Problem
+`config.yaml` must be hand-created from scratch. There is no template, no documentation
+inline, and no `spk init` behaviour that writes a starter file. First-time users have
+no idea what keys are available.
+
+### Requirements
+- `spk init` must write `$SPECK_HOME/config.yaml` if the file does not already exist.
+- The file must contain all supported config keys as comments with their default values
+  and a one-line explanation. Example skeleton:
+  ```yaml
+  # Speck configuration — ~/.speck/config.yaml
+  # vm:
+  #   cpus: 4          # vCPUs assigned to the VM
+  #   memory_mb: 4096  # RAM in MiB
+  #   disk_gb: 60      # Data disk size in GiB
+  # ca:
+  #   extra_certs: []  # Paths to PEM-encoded CA certs to inject into the guest
+  # log_level: info    # Rust log filter (trace/debug/info/warn/error)
+  ```
+- If the file already exists, `spk init` must not overwrite it (print a notice instead).
+
+### Acceptance Criteria
+- Fresh `spk init` creates `~/.speck/config.yaml` with commented defaults.
+- Re-running `spk init` does not overwrite an existing config.
+- `spk up` still works normally when the scaffolded (all-comments) config is present.
+
+---
+
+## 9. Guest serial console capture (B7 / UX-7-debug)
+
+### Problem
+The guest kernel is launched with `console=hvc0` in the cmdline but there is no
+mechanism to read `hvc0` output from the host. When the VM fails to boot or
+`vminitd` crashes before signalling ready, the only diagnostic is a timeout error
+with a hint to "check console.log" — but that file doesn't exist because serial
+capture is not implemented.
+
+### Requirements
+- Capture the guest `hvc0` serial console output and write it to
+  `$SPECK_HOME/console.log` during the VM lifetime.
+- Use `VZVirtioConsoleDeviceConfiguration` + `VZVirtioConsolePortConfiguration`
+  with a `VZFileHandleSerialPortAttachment` backed by a file handle that writes to
+  `console.log`.
+- The file must be created (or truncated) at VM start and closed on VM stop.
+- `spk up --foreground` should print a hint after a `GuestReadyTimeout`:
+  "Check console output: spk_home/console.log"
+- The existing `GuestReadyTimeout` error message already says "check console.log";
+  this task makes it accurate.
+
+### Acceptance Criteria
+- After a failed VM boot, `$SPECK_HOME/console.log` exists and contains kernel boot
+  messages.
+- After a successful VM boot, `console.log` contains the full boot log up to vminitd
+  ready signal.
+- `spk logs` continues to show the daemon/host log; `console.log` is a separate file
+  for the guest serial output.
+
+---
+
+## 10. Documentation: environment variables and log file location (D2, D3, F3)
+
+### Problem
+Three documentation gaps remain:
+- D2: The daemon log file location (`$SPECK_HOME/speck.log`) is not mentioned in
+  README or `spk --help`.
+- D3: The `SPECK_HOME` environment variable is not documented anywhere visible to users.
+- F3: `spk completion zsh` works but there is no documented one-liner install path.
+
+### Requirements
+- Add an "Environment Variables" section to README.md:
+  - `SPECK_HOME` — override the default `~/.speck` data directory
+  - `DOCKER_HOST` — set automatically by `eval $(spk env)`; should be
+    `unix://$SPECK_HOME/speck.sock`
+  - `RUST_LOG` — log filter for foreground mode (default: `info`)
+- Add a "Logs" section to README.md stating that daemon logs are written to
+  `$SPECK_HOME/speck.log` and can be followed with `spk logs --follow`.
+- Add a shell completion install one-liner to README.md under "Shell Completions":
+  ```
+  # zsh
+  spk completion zsh > ~/.zfunc/_spk
+  # fish
+  spk completion fish > ~/.config/fish/completions/spk.fish
+  ```
+
+### Acceptance Criteria
+- README.md contains an "Environment Variables" section with SPECK_HOME, DOCKER_HOST,
+  RUST_LOG documented.
+- README.md contains a note about `$SPECK_HOME/speck.log` and `spk logs --follow`.
+- README.md contains shell completion install instructions for zsh and fish.

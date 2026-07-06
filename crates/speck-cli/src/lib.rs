@@ -73,6 +73,12 @@ struct UpArgs {
     disk: Option<u64>,
     #[arg(long)]
     foreground: bool,
+    /// Block until the Docker socket responds to GET /_ping with HTTP 200
+    #[arg(long)]
+    wait: bool,
+    /// Timeout in seconds for --wait (default: 300)
+    #[arg(long, default_value = "300")]
+    timeout: u64,
 }
 
 #[derive(Parser)]

@@ -433,6 +433,8 @@ mod tests {
             memory: None,
             disk: None,
             foreground: false,
+            wait: false,
+            timeout: 300,
         };
         let file = AppConfig {
             vm: FileVmConfig {
@@ -469,6 +471,8 @@ mod tests {
             memory: Some(2048),
             disk: Some(20),
             foreground: false,
+            wait: false,
+            timeout: 300,
         };
         let file = AppConfig {
             vm: FileVmConfig {
@@ -564,6 +568,8 @@ mod tests {
             memory: None,
             disk: None,
             foreground: false,
+            wait: false,
+            timeout: 300,
         }
     }
 

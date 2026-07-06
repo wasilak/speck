@@ -495,7 +495,7 @@ impl VmThread {
             let attachment = VZFileSerialPortAttachment::initWithURL_append_error(
                 VZFileSerialPortAttachment::alloc(),
                 &console_log_url,
-                true,
+                false, // truncate on each VM start for a fresh boot log
             )
             .map_err(|e| {
                 let desc = e.localizedDescription();
@@ -1205,6 +1205,62 @@ mod tests {
             port_map_tx: None,
             docker_bind_mounts: Vec::new(),
         }))
+    }
+
+    #[test]
+    fn do_start_configures_console_device_for_speck_home() {
+        let source = include_str!("vm_thread.rs");
+        let start_fn = &source[source.find("fn do_start(").expect("do_start must exist")..];
+        let end = start_fn.find("\n    fn ").unwrap_or(start_fn.len());
+        let body = &start_fn[..end];
+
+        assert!(
+            body.contains("console.log"),
+            "do_start must write the serial console to speck_home/console.log"
+        );
+        assert!(
+            body.contains("VZVirtioConsoleDeviceConfiguration"),
+            "do_start must configure a VZVirtioConsoleDeviceConfiguration"
+        );
+        assert!(
+            body.contains("VZVirtioConsolePortConfiguration"),
+            "do_start must configure VZVirtioConsolePortConfiguration for port 0"
+        );
+        assert!(
+            body.contains("VZFileSerialPortAttachment"),
+            "do_start must attach the console port to a VZFileSerialPortAttachment"
+        );
+        assert!(
+            body.contains("setConsoleDevices"),
+            "do_start must register the console device on the VM config"
+        );
+    }
+
+    #[test]
+    fn console_attachment_truncates_on_vm_start() {
+        let source = include_str!("vm_thread.rs");
+        let start_fn = &source[source.find("fn do_start(").expect("do_start must exist")..];
+        let end = start_fn.find("\n    fn ").unwrap_or(start_fn.len());
+        let body = &start_fn[..end];
+
+        // append: false means truncate on each VM start — fresh log per boot.
+        assert!(
+            body.contains("false, // truncate on each VM start for a fresh boot log"),
+            "console attachment must use append=false to truncate on each VM start"
+        );
+    }
+
+    #[test]
+    fn console_port_is_marked_as_console() {
+        let source = include_str!("vm_thread.rs");
+        let start_fn = &source[source.find("fn do_start(").expect("do_start must exist")..];
+        let end = start_fn.find("\n    fn ").unwrap_or(start_fn.len());
+        let body = &start_fn[..end];
+
+        assert!(
+            body.contains("setIsConsole(true)"),
+            "the console port must be flagged as the primary console (setIsConsole(true))"
+        );
     }
 
     #[test]

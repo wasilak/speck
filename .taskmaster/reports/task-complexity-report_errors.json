@@ -1,0 +1,93 @@
+{
+	"meta": {
+		"generatedAt": "2026-07-06T12:43:21.056Z",
+		"tasksAnalyzed": 10,
+		"totalTasks": 10,
+		"analysisCount": 10,
+		"thresholdScore": 5,
+		"projectName": "Taskmaster",
+		"usedResearch": true
+	},
+	"complexityAnalysis": [
+		{
+			"taskId": 1,
+			"taskTitle": "Implement --wait flag for spk up command",
+			"complexityScore": 7,
+			"recommendedSubtasks": 5,
+			"expansionPrompt": "Break down the --wait flag implementation into: 1) Command line argument parsing with clap, 2) HTTP client setup using reqwest/hyper for socket ping checks, 3) Timeout handling logic with configurable default, 4) Progress reporting to stderr during wait period, 5) Exit code management and error messaging",
+			"reasoning": "This task involves multiple technical components: CLI argument parsing, HTTP networking with timeout handling, progress reporting, and proper error codes. Requires integration of external HTTP client libraries, careful timeout management, and cross-platform compatibility considerations for socket operations."
+		},
+		{
+			"taskId": 2,
+			"taskTitle": "Add progress indicator for Kata asset download",
+			"complexityScore": 5,
+			"recommendedSubtasks": 3,
+			"expansionPrompt": "Expand on the curl progress bar implementation by: 1) Identifying exact location in fetch_kata_assets function, 2) Handling terminal detection logic for suppressing output in daemon mode, 3) Ensuring compatibility with existing zstdcat | tar pipeline while injecting progress",
+			"reasoning": "This is a moderate complexity task involving shell pipeline modification and conditional output handling. Requires understanding of shell scripting, terminal detection, and careful consideration of how to inject progress without breaking existing functionality."
+		},
+		{
+			"taskId": 3,
+			"taskTitle": "Improve daemon startup feedback message",
+			"complexityScore": 4,
+			"recommendedSubtasks": 2,
+			"expansionPrompt": "Detail the message modification approach by: 1) Identifying where launchctl bootstrap message is generated, 2) Adding command suggestions for monitoring and scripting use cases",
+			"reasoning": "This is a straightforward text modification task that requires understanding of existing daemon startup flow and adding helpful user guidance. Minimal technical complexity but requires careful attention to user experience."
+		},
+		{
+			"taskId": 4,
+			"taskTitle": "Fix ANSI color codes in non-TTY output",
+			"complexityScore": 6,
+			"recommendedSubtasks": 4,
+			"expansionPrompt": "Expand the anstream implementation by: 1) Identifying all commands using theme.rs constants, 2) Setting up TTY detection logic with std::io::IsTerminal, 3) Implementing NO_COLOR environment variable handling, 4) Testing all affected commands for proper color behavior",
+			"reasoning": "This involves integration of a third-party crate (anstream), comprehensive TTY detection, environment variable handling, and testing across multiple commands. Requires understanding of terminal I/O and color code management."
+		},
+		{
+			"taskId": 5,
+			"taskTitle": "Add SPECK_HOME path to spk doctor output",
+			"complexityScore": 3,
+			"recommendedSubtasks": 2,
+			"expansionPrompt": "Break down path resolution and display implementation into: 1) Path resolution logic before health checks, 2) Output formatting with environment variable annotation",
+			"reasoning": "This is a simple but important data display task. Requires basic path handling and output formatting, with attention to environment variable detection and proper messaging."
+		},
+		{
+			"taskId": 6,
+			"taskTitle": "Enhance cert hint in spk doctor",
+			"complexityScore": 3,
+			"recommendedSubtasks": 2,
+			"expansionPrompt": "Detail the message enhancement by: 1) Identifying the PassWithDetail implementation for empty-certs case, 2) Adding configuration path resolution and hint formatting logic",
+			"reasoning": "This is a straightforward message improvement task that requires understanding of existing doctor output structure and adding actionable configuration guidance."
+		},
+		{
+			"taskId": 7,
+			"taskTitle": "Improve VPN DNS check wording",
+			"complexityScore": 2,
+			"recommendedSubtasks": 1,
+			"expansionPrompt": "Focus on updating the specific skip reason message text to be more actionable and clear about connecting a VPN for verification",
+			"reasoning": "This is a simple text modification task with minimal technical complexity. Requires understanding of existing check logic but only involves changing output messaging."
+		},
+		{
+			"taskId": 8,
+			"taskTitle": "Implement spk init to scaffold config.yaml",
+			"complexityScore": 5,
+			"recommendedSubtasks": 4,
+			"expansionPrompt": "Expand the scaffolding implementation by: 1) File existence checking logic, 2) YAML generation with proper comments and structure, 3) Configuration key enumeration and documentation, 4) Overwrite prevention and user feedback",
+			"reasoning": "This involves file I/O operations, YAML generation, configuration management, and user experience considerations. Requires careful handling of file permissions and existing configuration detection."
+		},
+		{
+			"taskId": 9,
+			"taskTitle": "Implement guest serial console capture",
+			"complexityScore": 8,
+			"recommendedSubtasks": 6,
+			"expansionPrompt": "Break down the VM console implementation into: 1) VZVirtioConsoleDeviceConfiguration setup, 2) File handle attachment to console.log, 3) VM lifecycle integration for file creation/truncation, 4) Error handling and logging for console capture, 5) Hint message placement in foreground mode, 6) Testing verification of kernel messages in console.log",
+			"reasoning": "This is a high-complexity task involving macOS Virtualization Framework integration, file I/O management during VM lifecycle, error handling, and comprehensive testing. Requires deep understanding of virtualization APIs and system-level programming."
+		},
+		{
+			"taskId": 10,
+			"taskTitle": "Update documentation for environment variables and log locations",
+			"complexityScore": 4,
+			"recommendedSubtasks": 3,
+			"expansionPrompt": "Expand documentation updates by: 1) Section creation and content organization, 2) Environment variable descriptions and usage examples, 3) Shell completion installation instructions and testing verification",
+			"reasoning": "This is a documentation-focused task with moderate complexity. Requires understanding of the project's structure and proper documentation formatting while ensuring accuracy with actual implementation behavior."
+		}
+	]
+}

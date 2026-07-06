@@ -1,0 +1,544 @@
+{
+  "errors": {
+    "tasks": [
+      {
+        "id": "1",
+        "title": "Implement --wait flag for spk up command",
+        "description": "Add a --wait flag to spk up that blocks until the Docker socket at $SPECK_HOME/speck.sock responds to GET /_ping with HTTP 200, with timeout handling and progress reporting.",
+        "details": "1. Add `--wait` clap argument to `spk up` command\n2. Implement socket readiness check using HTTP client (reqwest or hyper) against $SPECK_HOME/speck.sock/_ping\n3. Add 300s default timeout with configurable --timeout flag\n4. Print progress messages to stderr during wait period\n5. Return non-zero exit code on timeout with actionable error message\n6. Preserve existing behavior when --wait is not specified",
+        "testStrategy": "1. Test spk up --wait && docker run --rm hello-world in fresh environment\n2. Test spk up --wait --timeout 60 exits non-zero after 60s\n3. Verify --wait flag appears in help output\n4. Validate no regression in existing spk up behavior",
+        "priority": "high",
+        "dependencies": [],
+        "status": "done",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Add --wait flag CLI argument parsing with clap",
+            "description": "Implement command line argument parsing for the new --wait flag using clap crate",
+            "dependencies": [],
+            "details": "Configure clap to parse the --wait boolean flag and add a --timeout integer parameter for configurable timeout handling in the spk up command",
+            "status": "pending",
+            "testStrategy": null,
+            "parentId": "undefined"
+          },
+          {
+            "id": 2,
+            "title": "Implement HTTP client socket readiness check",
+            "description": "Set up HTTP client to ping Docker socket endpoint with timeout handling",
+            "dependencies": [
+              1
+            ],
+            "details": "Use reqwest or hyper HTTP client library to make GET request to $SPECK_HOME/speck.sock/_ping endpoint, handle connection errors and timeouts appropriately",
+            "status": "pending",
+            "testStrategy": null,
+            "parentId": "undefined"
+          },
+          {
+            "id": 3,
+            "title": "Add timeout handling with configurable default",
+            "description": "Implement 300s default timeout with configurable --timeout parameter",
+            "dependencies": [
+              2
+            ],
+            "details": "Set up timeout logic that defaults to 300 seconds but can be overridden by --timeout flag, ensuring proper error handling and exit codes on timeout",
+            "status": "pending",
+            "testStrategy": null,
+            "parentId": "undefined"
+          },
+          {
+            "id": 4,
+            "title": "Implement progress reporting to stderr",
+            "description": "Add progress messages during wait period to stderr for user feedback",
+            "dependencies": [
+              3
+            ],
+            "details": "Output periodic progress messages to stderr during socket readiness check, ensuring messages are informative and don't interfere with normal program output",
+            "status": "pending",
+            "testStrategy": null,
+            "parentId": "undefined"
+          },
+          {
+            "id": 5,
+            "title": "Handle exit codes and error messaging",
+            "description": "Return appropriate exit codes and provide actionable error messages on timeout",
+            "dependencies": [
+              4
+            ],
+            "details": "Ensure non-zero exit code is returned when timeout occurs, with clear error message indicating what went wrong and how to resolve it, while preserving existing behavior when --wait flag is not used",
+            "status": "pending",
+            "testStrategy": null,
+            "parentId": "undefined"
+          }
+        ],
+        "complexity": 7,
+        "recommendedSubtasks": 5,
+        "expansionPrompt": "Break down the --wait flag implementation into: 1) Command line argument parsing with clap, 2) HTTP client setup using reqwest/hyper for socket ping checks, 3) Timeout handling logic with configurable default, 4) Progress reporting to stderr during wait period, 5) Exit code management and error messaging",
+        "updatedAt": "2026-07-06T13:11:33.397Z"
+      },
+      {
+        "id": "2",
+        "title": "Add progress indicator for Kata asset download",
+        "description": "Modify fetch_kata_assets() to show download progress using curl's --progress-bar flag while streaming the tarball.",
+        "details": "1. Update fetch_kata_assets function in shell pipeline\n2. Add curl --progress-bar flag for visible progress during download\n3. Ensure progress output is suppressed in daemon mode (SPECK_DAEMONIZED=1)\n4. Use existing zstdcat | tar pipeline but inject curl progress\n5. Handle terminal detection to suppress progress in non-interactive mode",
+        "testStrategy": "1. Run spk up --foreground on machine with no cached assets\n2. Verify visible progress bar appears during download\n3. Run spk up (daemon mode) and verify no curl progress leaks to terminal\n4. Confirm download completes successfully in both modes",
+        "priority": "medium",
+        "dependencies": [],
+        "status": "done",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Modify fetch_kata_assets function to inject curl progress bar",
+            "description": "Update the fetch_kata_assets function to include curl's --progress-bar flag in the download pipeline",
+            "dependencies": [],
+            "details": "Identify the exact location within the fetch_kata_assets function where curl is invoked and modify the command to include --progress-bar flag. Ensure the progress bar appears during download while maintaining compatibility with the existing zstdcat | tar pipeline structure.",
+            "status": "pending",
+            "testStrategy": null,
+            "parentId": "undefined"
+          },
+          {
+            "id": 2,
+            "title": "Implement terminal detection and daemon mode suppression",
+            "description": "Add logic to detect terminal environment and suppress progress output in daemon mode",
+            "dependencies": [
+              1
+            ],
+            "details": "Implement terminal detection using isatty or equivalent methods to determine if output should be suppressed when SPECK_DAEMONIZED=1. Ensure progress bar only appears in interactive terminals while suppressing it in daemon mode to prevent log pollution.",
+            "status": "pending",
+            "testStrategy": null,
+            "parentId": "undefined"
+          },
+          {
+            "id": 3,
+            "title": "Validate progress indicator functionality across modes",
+            "description": "Test that progress indicator works correctly in both interactive and daemon modes",
+            "dependencies": [
+              1,
+              2
+            ],
+            "details": "Create test scenarios to verify progress bar appears during download in interactive mode, suppresses properly in daemon mode (SPECK_DAEMONIZED=1), and maintains existing zstdcat | tar pipeline functionality without breaking download completion.",
+            "status": "pending",
+            "testStrategy": null,
+            "parentId": "undefined"
+          }
+        ],
+        "complexity": 5,
+        "recommendedSubtasks": 3,
+        "expansionPrompt": "Expand on the curl progress bar implementation by: 1) Identifying exact location in fetch_kata_assets function, 2) Handling terminal detection logic for suppressing output in daemon mode, 3) Ensuring compatibility with existing zstdcat | tar pipeline while injecting progress",
+        "updatedAt": "2026-07-06T13:18:56.171Z"
+      },
+      {
+        "id": "3",
+        "title": "Improve daemon startup feedback message",
+        "description": "Change post-daemonize message to accurately reflect that the service has been registered but not necessarily running yet.",
+        "details": "1. Modify message printed after launchctl bootstrap in daemon mode\n2. Change from \"Speck VM is running\" to \"Speck daemon registered. VM is starting in the background.\"\n3. Add suggestions for monitoring startup: spk logs --follow and spk status\n4. Optionally recommend spk up --wait for scripted use when --wait not used",
+        "testStrategy": "1. Run spk up (daemon mode) and verify new message appears\n2. Verify recommended commands are present in output\n3. Confirm no regression in existing behavior with foreground mode",
+        "priority": "medium",
+        "dependencies": [],
+        "status": "done",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Identify and modify launchctl bootstrap message generation location",
+            "description": "Locate the specific code section where the launchctl bootstrap message is generated and modify it to implement the new daemon startup feedback message.",
+            "dependencies": [],
+            "details": "Analyze the existing daemon startup flow to identify where the 'Speck VM is running' message is printed after launchctl bootstrap. Update this location to display the new message 'Speck daemon registered. VM is starting in the background.' and include the monitoring suggestions for spk logs --follow and spk status commands.",
+            "status": "pending",
+            "testStrategy": null,
+            "parentId": "undefined"
+          },
+          {
+            "id": 2,
+            "title": "Add command suggestions and scripting recommendations to daemon startup message",
+            "description": "Enhance the daemon startup message with helpful monitoring and scripting commands for users.",
+            "dependencies": [
+              1
+            ],
+            "details": "Modify the updated message from subtask 1 to include specific command recommendations for users to monitor startup progress. Add 'spk logs --follow' and 'spk status' suggestions, and optionally include 'spk up --wait' recommendation for scripted use cases when --wait is not specified, ensuring all commands are properly formatted and actionable.",
+            "status": "pending",
+            "testStrategy": null,
+            "parentId": "undefined"
+          }
+        ],
+        "complexity": 4,
+        "recommendedSubtasks": 2,
+        "expansionPrompt": "Detail the message modification approach by: 1) Identifying where launchctl bootstrap message is generated, 2) Adding command suggestions for monitoring and scripting use cases",
+        "updatedAt": "2026-07-06T13:20:24.235Z"
+      },
+      {
+        "id": "4",
+        "title": "Fix ANSI color codes in non-TTY output",
+        "description": "Ensure color output respects NO_COLOR environment variable and TTY detection using anstream crate.",
+        "details": "1. Use anstream crate to wrap stdout/stderr\n2. Detect if stdout is a TTY using std::io::IsTerminal or anstream's built-in detection\n3. Respect NO_COLOR environment variable (if set, emit no ANSI codes)\n4. Apply changes to all commands using theme.rs constants: doctor, ps, status\n5. Ensure interactive terminal output still renders colors normally",
+        "testStrategy": "1. Run spk doctor | cat and verify no escape codes\n2. Run NO_COLOR=1 spk doctor and verify plain text output\n3. Run spk doctor in terminal and verify colors appear\n4. Test all affected commands (ps, status) with similar validation",
+        "priority": "medium",
+        "dependencies": [],
+        "status": "done",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Integrate anstream crate for I/O handling",
+            "description": "Set up the anstream crate to wrap stdout/stderr streams for consistent color output handling across all commands.",
+            "dependencies": [],
+            "details": "Install anstream as a dependency, import it in relevant modules, and implement wrapper functions around stdout/stderr that utilize anstream's capabilities for automatic color code handling based on terminal detection.",
+            "status": "pending",
+            "testStrategy": null,
+            "parentId": "undefined"
+          },
+          {
+            "id": 2,
+            "title": "Implement TTY detection logic",
+            "description": "Add TTY detection using std::io::IsTerminal or anstream's built-in detection to determine when colors should be output.",
+            "dependencies": [
+              1
+            ],
+            "details": "Implement TTY detection in the color output functions, ensuring that anstream automatically disables ANSI codes when output is not going to a terminal. Use both std::io::IsTerminal and anstream's built-in methods for robust detection across different environments.",
+            "status": "pending",
+            "testStrategy": null,
+            "parentId": "undefined"
+          },
+          {
+            "id": 3,
+            "title": "Handle NO_COLOR environment variable",
+            "description": "Implement logic to respect the NO_COLOR environment variable by suppressing ANSI color codes when set.",
+            "dependencies": [
+              1,
+              2
+            ],
+            "details": "Add environment variable checking code that reads NO_COLOR and configures anstream to disable color output regardless of TTY status. Ensure this is applied globally across all commands using theme.rs constants for consistent behavior.",
+            "status": "pending",
+            "testStrategy": null,
+            "parentId": "undefined"
+          },
+          {
+            "id": 4,
+            "title": "Apply changes to affected commands and test",
+            "description": "Update doctor, ps, and status commands to use the new color handling logic and verify proper behavior in all scenarios.",
+            "dependencies": [
+              1,
+              2,
+              3
+            ],
+            "details": "Modify the three affected commands (doctor, ps, status) to utilize theme.rs constants with the new anstream-based output system. Test that non-TTY output has no escape codes, NO_COLOR suppresses colors, interactive terminals show colors normally, and all commands behave consistently.",
+            "status": "pending",
+            "testStrategy": null,
+            "parentId": "undefined"
+          }
+        ],
+        "complexity": 6,
+        "recommendedSubtasks": 4,
+        "expansionPrompt": "Expand the anstream implementation by: 1) Identifying all commands using theme.rs constants, 2) Setting up TTY detection logic with std::io::IsTerminal, 3) Implementing NO_COLOR environment variable handling, 4) Testing all affected commands for proper color behavior",
+        "updatedAt": "2026-07-06T13:36:55.128Z"
+      },
+      {
+        "id": "5",
+        "title": "Add SPECK_HOME path to spk doctor output",
+        "description": "Include the resolved SPECK_HOME path at the top of spk doctor output.",
+        "details": "1. Resolve SPECK_HOME path before running health checks\n2. Add a line at beginning of doctor output showing resolved path\n3. If set via environment variable, annotate with '(from $SPECK_HOME env)'\n4. Ensure this appears before any check results\n5. Validate path matches what spk up would use",
+        "testStrategy": "1. Run spk doctor and verify path appears at top of output\n2. Verify annotated message when SPECK_HOME is set via environment\n3. Confirm path matches actual spk up behavior\n4. Test with both default and custom SPECK_HOME values",
+        "priority": "medium",
+        "dependencies": [],
+        "status": "done",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Implement SPECK_HOME path resolution logic",
+            "description": "Develop the logic to resolve the SPECK_HOME path before health checks are executed, including environment variable detection and validation against spk up behavior",
+            "dependencies": [],
+            "details": "Create a function that determines the SPECK_HOME path by checking environment variables, falling back to default locations, and ensuring the resolved path matches what spk up would use. Implement proper error handling for invalid paths and validate the resolution process thoroughly.",
+            "status": "pending",
+            "testStrategy": null,
+            "parentId": "undefined"
+          },
+          {
+            "id": 2,
+            "title": "Format and display SPECK_HOME path in doctor output",
+            "description": "Add formatted output of the resolved SPECK_HOME path at the beginning of spk doctor output with environment variable annotation",
+            "dependencies": [
+              1
+            ],
+            "details": "Modify the doctor command output to include a line showing the resolved SPECK_HOME path at the top. Add conditional annotation '(from $SPECK_HOME env)' when the path is set via environment variable. Ensure this appears before any check results and validate the formatting matches existing output style.",
+            "status": "pending",
+            "testStrategy": null,
+            "parentId": "undefined"
+          }
+        ],
+        "complexity": 3,
+        "recommendedSubtasks": 2,
+        "expansionPrompt": "Break down path resolution and display implementation into: 1) Path resolution logic before health checks, 2) Output formatting with environment variable annotation",
+        "updatedAt": "2026-07-06T13:41:53.214Z"
+      },
+      {
+        "id": "6",
+        "title": "Enhance cert hint in spk doctor",
+        "description": "Update the cert injection check message to include configuration hint when no CA certs are configured.",
+        "details": "1. Modify PassWithDetail message for empty-certs case\n2. Add configuration hint: 'no CA certs configured — add paths to ca.extra_certs in ~/.speck/config.yaml'\n3. Use resolved SPECK_HOME path instead of hardcoded '~/.speck'\n4. Ensure hint is clear and actionable for first-time users",
+        "testStrategy": "1. Run spk doctor on fresh install\n2. Verify configuration hint appears in cert injection line\n3. Confirm hint references correct config file path\n4. Validate no regression in existing functionality",
+        "priority": "medium",
+        "dependencies": [],
+        "status": "done",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Identify and modify PassWithDetail implementation for empty-certs case",
+            "description": "Locate the existing PassWithDetail message implementation that handles the empty-certs scenario and modify it to include the new configuration hint.",
+            "dependencies": [],
+            "details": "Analyze the current doctor output structure to identify where the cert injection check messages are generated. Locate the specific PassWithDetail implementation for empty-certs case, then modify the message format to include the actionable configuration hint about adding paths to ca.extra_certs in the resolved SPECK_HOME path.",
+            "status": "pending",
+            "testStrategy": null,
+            "parentId": "undefined"
+          },
+          {
+            "id": 2,
+            "title": "Implement configuration path resolution and hint formatting logic",
+            "description": "Add logic to resolve the SPECK_HOME path dynamically instead of using hardcoded '~/.speck' and format the configuration hint properly.",
+            "dependencies": [],
+            "details": "Implement dynamic resolution of the SPECK_HOME path using environment variable expansion or system path resolution functions. Format the configuration hint message to reference the resolved path instead of hardcoded '~/.speck'. Ensure the hint is clear, actionable, and specifically helpful for first-time users setting up certificate configurations.",
+            "status": "pending",
+            "testStrategy": null,
+            "parentId": "undefined"
+          }
+        ],
+        "complexity": 3,
+        "recommendedSubtasks": 2,
+        "expansionPrompt": "Detail the message enhancement by: 1) Identifying the PassWithDetail implementation for empty-certs case, 2) Adding configuration path resolution and hint formatting logic",
+        "updatedAt": "2026-07-06T13:49:06.612Z"
+      },
+      {
+        "id": "7",
+        "title": "Improve VPN DNS check wording",
+        "description": "Update the VPN DNS check skip reason to be more actionable and clear.",
+        "details": "1. Modify Skip reason for no VPN active case\n2. Change from '(no VPN-scoped resolvers detected (no VPN active))' to 'no VPN active — connect a VPN to verify split-DNS inheritance'\n3. Ensure existing PASS behavior remains unchanged when VPN is active\n4. Update message to be clear about why check is skipped",
+        "testStrategy": "1. Run spk doctor with no VPN active and verify new wording\n2. Run spk doctor with VPN active and confirm PASS behavior unchanged\n3. Validate that the skip reason is now more actionable for users",
+        "priority": "medium",
+        "dependencies": [],
+        "status": "done",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Update VPN DNS check skip reason message",
+            "description": "Modify the VPN DNS check skip reason text to be more actionable and clear about connecting a VPN for verification",
+            "dependencies": [],
+            "details": "Change the skip reason from '(no VPN-scoped resolvers detected (no VPN active))' to 'no VPN active — connect a VPN to verify split-DNS inheritance'. Ensure the existing PASS behavior remains unchanged when VPN is active and that the new message clearly explains why the check is skipped.",
+            "status": "pending",
+            "testStrategy": null,
+            "parentId": "undefined"
+          }
+        ],
+        "complexity": 2,
+        "recommendedSubtasks": 1,
+        "expansionPrompt": "Focus on updating the specific skip reason message text to be more actionable and clear about connecting a VPN for verification",
+        "updatedAt": "2026-07-06T13:54:43.128Z"
+      },
+      {
+        "id": "8",
+        "title": "Implement spk init to scaffold config.yaml",
+        "description": "Add functionality to create a commented default config.yaml file when running spk init.",
+        "details": "1. Add logic to spk init command to check for existing config.yaml\n2. If file doesn't exist, write scaffolding with all supported config keys as comments\n3. Include default values and one-line explanations for each key\n4. If file exists, print notice instead of overwriting\n5. Format config as YAML with proper comments and structure",
+        "testStrategy": "1. Run fresh spk init and verify config.yaml created with comments\n2. Run spk init again to confirm no overwrite occurs\n3. Verify all supported config keys are included\n4. Test that spk up still works normally with scaffolded config",
+        "priority": "medium",
+        "dependencies": [],
+        "status": "done",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Implement file existence checking logic for config.yaml",
+            "description": "Add logic to check if config.yaml already exists before creating scaffolding",
+            "dependencies": [],
+            "details": "Create function to check if config.yaml exists in the target directory using std::fs::metadata or similar approach, handle both file not found and permission denied cases appropriately",
+            "status": "pending",
+            "testStrategy": null,
+            "parentId": "undefined"
+          },
+          {
+            "id": 2,
+            "title": "Generate YAML scaffolding with comments and structure",
+            "description": "Create proper YAML format configuration file with all supported keys as comments",
+            "dependencies": [
+              1
+            ],
+            "details": "Implement YAML generation that includes all supported config keys as commented entries, each with default values and one-line explanations, using rust-yaml or similar library to ensure proper formatting",
+            "status": "pending",
+            "testStrategy": null,
+            "parentId": "undefined"
+          },
+          {
+            "id": 3,
+            "title": "Enumerate configuration keys and create documentation",
+            "description": "Define all supported config keys with their default values and explanations",
+            "dependencies": [
+              2
+            ],
+            "details": "Create comprehensive list of all configuration keys that should be included in scaffolding, define default values for each key, and craft one-line explanations that will be used as comments in the generated YAML file",
+            "status": "pending",
+            "testStrategy": null,
+            "parentId": "undefined"
+          },
+          {
+            "id": 4,
+            "title": "Implement overwrite prevention and user feedback",
+            "description": "Ensure existing config.yaml is not overwritten and provide appropriate user feedback",
+            "dependencies": [
+              1,
+              2,
+              3
+            ],
+            "details": "Add logic to detect existing config.yaml file and print clear notice message instead of overwriting, implement proper error handling for edge cases like permission issues, and ensure user receives actionable feedback about the current state of their configuration",
+            "status": "pending",
+            "testStrategy": null,
+            "parentId": "undefined"
+          }
+        ],
+        "complexity": 5,
+        "recommendedSubtasks": 4,
+        "expansionPrompt": "Expand the scaffolding implementation by: 1) File existence checking logic, 2) YAML generation with proper comments and structure, 3) Configuration key enumeration and documentation, 4) Overwrite prevention and user feedback",
+        "updatedAt": "2026-07-06T13:59:45.435Z"
+      },
+      {
+        "id": "9",
+        "title": "Implement guest serial console capture",
+        "description": "Capture guest hvc0 serial console output to $SPECK_HOME/console.log during VM lifetime.",
+        "details": "1. Use VZVirtioConsoleDeviceConfiguration with VZVirtioConsolePortConfiguration\n2. Set up VZFileHandleSerialPortAttachment backed by file handle writing to console.log\n3. Create or truncate console.log at VM start and close on VM stop\n4. Add hint to spk up --foreground after GuestReadyTimeout: 'Check console output: spk_home/console.log'\n5. Ensure console.log contains kernel boot messages for both successful and failed boots",
+        "testStrategy": "1. Run VM boot and verify console.log exists with kernel messages\n2. Verify console.log contains full boot log up to vminitd ready signal\n3. Test that failed VM boot still produces console.log with error messages\n4. Confirm spk logs continues to show daemon/host log separately",
+        "priority": "high",
+        "dependencies": [],
+        "status": "done",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Setup VZVirtioConsoleDeviceConfiguration",
+            "description": "Configure the virtualization framework console device using VZVirtioConsoleDeviceConfiguration with VZVirtioConsolePortConfiguration",
+            "dependencies": [],
+            "details": "Implement the core virtualization framework setup for serial console capture by creating VZVirtioConsoleDeviceConfiguration and VZVirtioConsolePortConfiguration objects, ensuring proper initialization of the virtio console device for guest hvc0 output redirection.",
+            "status": "pending",
+            "testStrategy": null,
+            "parentId": "undefined"
+          },
+          {
+            "id": 2,
+            "title": "Implement File Handle Attachment to console.log",
+            "description": "Create VZFileHandleSerialPortAttachment backed by file handle writing to console.log",
+            "dependencies": [
+              1
+            ],
+            "details": "Set up the file attachment mechanism using VZFileHandleSerialPortAttachment that writes serial console output directly to the specified console.log file, ensuring proper file handle management and error handling for I/O operations.",
+            "status": "pending",
+            "testStrategy": null,
+            "parentId": "undefined"
+          },
+          {
+            "id": 3,
+            "title": "Integrate File Management with VM Lifecycle",
+            "description": "Create or truncate console.log at VM start and close on VM stop",
+            "dependencies": [
+              2
+            ],
+            "details": "Implement file lifecycle management by creating/truncating console.log when VM starts and properly closing the file handle when VM stops, ensuring file integrity and proper resource cleanup during VM operations.",
+            "status": "pending",
+            "testStrategy": null,
+            "parentId": "undefined"
+          },
+          {
+            "id": 4,
+            "title": "Implement Error Handling and Logging for Console Capture",
+            "description": "Add comprehensive error handling and logging for console capture functionality",
+            "dependencies": [
+              3
+            ],
+            "details": "Develop robust error handling mechanisms for serial console capture including proper logging of failures, ensuring graceful degradation when console capture fails, and implementing appropriate error messages for debugging.",
+            "status": "pending",
+            "testStrategy": null,
+            "parentId": "undefined"
+          },
+          {
+            "id": 5,
+            "title": "Add Hint Message in Foreground Mode",
+            "description": "Place hint message after GuestReadyTimeout in foreground mode",
+            "dependencies": [
+              3
+            ],
+            "details": "Integrate the console log hint message 'Check console output: spk_home/console.log' into the foreground mode execution flow after GuestReadyTimeout, ensuring it appears at the appropriate time during VM startup.",
+            "status": "pending",
+            "testStrategy": null,
+            "parentId": "undefined"
+          },
+          {
+            "id": 6,
+            "title": "Verify Kernel Messages in console.log",
+            "description": "Test that console.log contains kernel boot messages for successful and failed boots",
+            "dependencies": [
+              4,
+              5
+            ],
+            "details": "Implement comprehensive testing to verify that console.log properly captures kernel boot messages including both successful boot sequences and error conditions, ensuring complete boot log coverage for diagnostics.",
+            "status": "pending",
+            "testStrategy": null,
+            "parentId": "undefined"
+          }
+        ],
+        "complexity": 8,
+        "recommendedSubtasks": 6,
+        "expansionPrompt": "Break down the VM console implementation into: 1) VZVirtioConsoleDeviceConfiguration setup, 2) File handle attachment to console.log, 3) VM lifecycle integration for file creation/truncation, 4) Error handling and logging for console capture, 5) Hint message placement in foreground mode, 6) Testing verification of kernel messages in console.log",
+        "updatedAt": "2026-07-06T13:15:41.929Z"
+      },
+      {
+        "id": "10",
+        "title": "Update documentation for environment variables and log locations",
+        "description": "Add documentation about SPECK_HOME, DOCKER_HOST, RUST_LOG environment variables and log file location to README.md.",
+        "details": "1. Add \"Environment Variables\" section to README.md\n2. Document SPECK_HOME, DOCKER_HOST, and RUST_LOG with explanations\n3. Add \"Logs\" section describing $SPECK_HOME/speck.log location and spk logs --follow usage\n4. Add shell completion install one-liners for zsh and fish\n5. Ensure all documentation is visible to users in appropriate locations",
+        "testStrategy": "1. Verify README.md contains Environment Variables section with proper docs\n2. Confirm Logs section explains daemon log file location\n3. Validate shell completion instructions are present and correct\n4. Test that documentation matches actual implementation behavior",
+        "priority": "medium",
+        "dependencies": [],
+        "status": "done",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Create and organize documentation sections in README.md",
+            "description": "Set up the structure for Environment Variables and Logs sections in README.md with proper content organization",
+            "dependencies": [],
+            "details": "Create new sections in README.md for Environment Variables and Logs, ensuring proper markdown formatting and logical flow. Organize content to make it easily discoverable by users.",
+            "status": "pending",
+            "testStrategy": null,
+            "parentId": "undefined"
+          },
+          {
+            "id": 2,
+            "title": "Document environment variables with explanations and usage examples",
+            "description": "Add detailed documentation for SPECK_HOME, DOCKER_HOST, and RUST_LOG environment variables including their purposes and usage contexts",
+            "dependencies": [
+              1
+            ],
+            "details": "Provide clear explanations for each environment variable, including their expected values, default behaviors, and practical usage scenarios. Include code examples where appropriate to demonstrate proper configuration.",
+            "status": "pending",
+            "testStrategy": null,
+            "parentId": "undefined"
+          },
+          {
+            "id": 3,
+            "title": "Add shell completion installation instructions and verification",
+            "description": "Include zsh and fish shell completion installation one-liners with testing verification procedures",
+            "dependencies": [
+              1
+            ],
+            "details": "Add comprehensive shell completion setup instructions for both zsh and fish shells, including the exact one-liner commands. Implement verification steps to ensure completions work correctly after installation.",
+            "status": "pending",
+            "testStrategy": null,
+            "parentId": "undefined"
+          }
+        ],
+        "complexity": 4,
+        "recommendedSubtasks": 3,
+        "expansionPrompt": "Expand documentation updates by: 1) Section creation and content organization, 2) Environment variable descriptions and usage examples, 3) Shell completion installation instructions and testing verification",
+        "updatedAt": "2026-07-06T14:06:07.562Z"
+      }
+    ],
+    "metadata": {
+      "version": "1.0.0",
+      "lastModified": "2026-07-06T14:06:07.562Z",
+      "taskCount": 10,
+      "completedCount": 10,
+      "tags": [
+        "errors"
+      ]
+    }
+  }
+}
