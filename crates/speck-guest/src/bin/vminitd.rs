@@ -567,7 +567,7 @@ mod linux {
             if i >= 108 {
                 break;
             }
-            addr.sun_path[i] = b;
+            addr.sun_path[i] = b as _;
         }
 
         let addr_ptr = &addr as *const libc::sockaddr_un as *const libc::sockaddr;
@@ -1188,7 +1188,7 @@ mod linux {
         let mut ifr: libc::ifreq = unsafe { std::mem::zeroed() };
         for (i, &b) in iface.iter().enumerate() {
             if i < ifr.ifr_name.len() - 1 {
-                ifr.ifr_name[i] = b;
+                ifr.ifr_name[i] = b as _;
             }
         }
 
@@ -1196,7 +1196,7 @@ mod linux {
         let ret = unsafe {
             libc::ioctl(
                 sock_fd,
-                libc::SIOCGIFFLAGS as libc::c_int,
+                libc::SIOCGIFFLAGS as libc::c_ulong,
                 &ifr as *const libc::ifreq,
             )
         };
@@ -1218,7 +1218,7 @@ mod linux {
         let ret = unsafe {
             libc::ioctl(
                 sock_fd,
-                libc::SIOCSIFFLAGS as libc::c_int,
+                libc::SIOCSIFFLAGS as libc::c_ulong,
                 &ifr as *const libc::ifreq,
             )
         };
@@ -1247,7 +1247,7 @@ mod linux {
         let mut ifr: libc::ifreq = unsafe { std::mem::zeroed() };
         for (i, &b) in iface.iter().enumerate() {
             if i < ifr.ifr_name.len() - 1 {
-                ifr.ifr_name[i] = b;
+                ifr.ifr_name[i] = b as _;
             }
         }
 
@@ -1257,7 +1257,7 @@ mod linux {
         let flags_ret = unsafe {
             libc::ioctl(
                 sock_fd,
-                libc::SIOCGIFFLAGS as libc::c_int,
+                libc::SIOCGIFFLAGS as libc::c_ulong,
                 &ifr as *const libc::ifreq,
             )
         };
@@ -1277,7 +1277,7 @@ mod linux {
         let up_ret = unsafe {
             libc::ioctl(
                 sock_fd,
-                libc::SIOCSIFFLAGS as libc::c_int,
+                libc::SIOCSIFFLAGS as libc::c_ulong,
                 &ifr as *const libc::ifreq,
             )
         };
@@ -1322,10 +1322,10 @@ mod linux {
             sa_data: [
                 0,
                 0,
-                ip_bytes[0],
-                ip_bytes[1],
-                ip_bytes[2],
-                ip_bytes[3],
+                ip_bytes[0] as _,
+                ip_bytes[1] as _,
+                ip_bytes[2] as _,
+                ip_bytes[3] as _,
                 0,
                 0,
                 0,
@@ -1339,7 +1339,7 @@ mod linux {
         let addr_ret = unsafe {
             libc::ioctl(
                 sock_fd,
-                libc::SIOCSIFADDR as libc::c_int,
+                libc::SIOCSIFADDR as libc::c_ulong,
                 &ifr as *const libc::ifreq,
             )
         };
@@ -1359,12 +1359,14 @@ mod linux {
         ifr.ifr_ifru.ifru_addr = libc::sockaddr {
             sa_family: libc::AF_INET as u16,
             // sa_data layout: [sin_port(2), sin_addr(4), sin_zero(8)]
-            sa_data: [0, 0, 255u8, 255u8, 255u8, 0u8, 0, 0, 0, 0, 0, 0, 0, 0],
+            sa_data: [
+                0, 0, 255u8 as _, 255u8 as _, 255u8 as _, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            ],
         };
         let mask_ret = unsafe {
             libc::ioctl(
                 sock_fd,
-                libc::SIOCSIFNETMASK as libc::c_int,
+                libc::SIOCSIFNETMASK as libc::c_ulong,
                 &ifr as *const libc::ifreq,
             )
         };
@@ -1402,7 +1404,7 @@ mod linux {
         let route_ret = unsafe {
             libc::ioctl(
                 sock_fd,
-                libc::SIOCADDRT as libc::c_int,
+                libc::SIOCADDRT as libc::c_ulong,
                 &rt as *const libc::rtentry,
             )
         };
