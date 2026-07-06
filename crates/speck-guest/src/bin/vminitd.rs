@@ -707,6 +707,7 @@ mod linux {
     }
 
     /// Parse `speck_home_path=PATH` from the kernel cmdline.
+    #[allow(dead_code)]
     fn parse_cmdline_speck_home(path: &str) -> Option<String> {
         let content = std::fs::read_to_string(path).ok()?;
         for word in content.split_whitespace() {
