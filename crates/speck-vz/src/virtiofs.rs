@@ -7,7 +7,7 @@ use objc2::rc::Retained;
 #[cfg(target_os = "macos")]
 use objc2::runtime::ProtocolObject;
 #[cfg(target_os = "macos")]
-use objc2_foundation::{NSCopying, NSDictionary, NSMutableDictionary, NSArray, NSString, NSURL};
+use objc2_foundation::{NSArray, NSCopying, NSDictionary, NSMutableDictionary, NSString, NSURL};
 #[cfg(target_os = "macos")]
 use objc2_virtualization::{
     VZDirectoryShare, VZDirectorySharingDeviceConfiguration, VZMultipleDirectoryShare,
@@ -65,7 +65,11 @@ pub fn container_path_to_share_name(path: &Path) -> String {
 pub fn identity_tag_for_path(path: &Path) -> Option<String> {
     let basename = path.file_name()?.to_str()?.to_ascii_lowercase();
     let tag = format!("{IDENTITY_TAG_PREFIX}{basename}");
-    if validate_virtiofs_tag(&tag) { Some(tag) } else { None }
+    if validate_virtiofs_tag(&tag) {
+        Some(tag)
+    } else {
+        None
+    }
 }
 
 /// Validate that a VirtioFS tag meets Virtualization.framework constraints:
@@ -152,10 +156,9 @@ pub fn configure_virtiofs_devices(
     identity_roots: &[PathBuf],
     ca_certs_share: Option<&Path>,
 ) -> Result<(), crate::error::Error> {
-    let mut fs_devices: Vec<Retained<VZVirtioFileSystemDeviceConfiguration>> =
-        Vec::with_capacity(
-            mounts.len() + 1 + identity_roots.len() + ca_certs_share.is_some() as usize,
-        );
+    let mut fs_devices: Vec<Retained<VZVirtioFileSystemDeviceConfiguration>> = Vec::with_capacity(
+        mounts.len() + 1 + identity_roots.len() + ca_certs_share.is_some() as usize,
+    );
 
     for (i, mount) in mounts.iter().enumerate() {
         let tag = format!("speck-vol-{i}");
@@ -273,9 +276,8 @@ pub fn configure_virtiofs_devices(
     // to a running VM, so this slot must be reserved at configuration time.
     {
         let bind_tag = NSString::from_str(BIND_MOUNTS_TAG);
-        let empty_share = unsafe {
-            VZMultipleDirectoryShare::init(VZMultipleDirectoryShare::alloc())
-        };
+        let empty_share =
+            unsafe { VZMultipleDirectoryShare::init(VZMultipleDirectoryShare::alloc()) };
         let bind_dev = unsafe {
             VZVirtioFileSystemDeviceConfiguration::initWithTag(
                 VZVirtioFileSystemDeviceConfiguration::alloc(),
@@ -291,19 +293,14 @@ pub fn configure_virtiofs_devices(
     // vminitd reads the PEM files from this share and installs them into
     // the guest's trust store via update-ca-certificates.
     if let Some(parent) = ca_certs_share {
-        let parent_str = NSString::from_str(
-            parent
-                .to_str()
-                .ok_or_else(|| crate::error::Error::VirtioFsMount("non-UTF-8 CA cert path".into()))?,
-        );
+        let parent_str =
+            NSString::from_str(parent.to_str().ok_or_else(|| {
+                crate::error::Error::VirtioFsMount("non-UTF-8 CA cert path".into())
+            })?);
         let parent_url = NSURL::fileURLWithPath(&parent_str);
 
         let shared_dir = unsafe {
-            VZSharedDirectory::initWithURL_readOnly(
-                VZSharedDirectory::alloc(),
-                &parent_url,
-                true,
-            )
+            VZSharedDirectory::initWithURL_readOnly(VZSharedDirectory::alloc(), &parent_url, true)
         };
         let share = unsafe {
             VZSingleDirectoryShare::initWithDirectory(VZSingleDirectoryShare::alloc(), &shared_dir)
@@ -400,11 +397,9 @@ pub fn update_virtiofs_bind_mounts(
             }
         };
 
-        let host_str = NSString::from_str(
-            bind.host_path.to_str().ok_or_else(|| {
-                crate::error::Error::VirtioFsMount("non-UTF-8 bind host path".into())
-            })?,
-        );
+        let host_str = NSString::from_str(bind.host_path.to_str().ok_or_else(|| {
+            crate::error::Error::VirtioFsMount("non-UTF-8 bind host path".into())
+        })?);
         let host_url = NSURL::fileURLWithPath(&host_str);
         let shared_dir = unsafe {
             VZSharedDirectory::initWithURL_readOnly(
@@ -415,8 +410,7 @@ pub fn update_virtiofs_bind_mounts(
         };
 
         // NSMutableDictionary.setObject_forKey requires the key to be NSCopying.
-        let key_copying: &ProtocolObject<dyn NSCopying> =
-            ProtocolObject::from_ref(&*canonical);
+        let key_copying: &ProtocolObject<dyn NSCopying> = ProtocolObject::from_ref(&*canonical);
         unsafe { mut_dict.setObject_forKey(&*shared_dir, key_copying) };
     }
 
@@ -536,10 +530,7 @@ mod tests {
     fn test_cmdline_identity_tags_included() {
         let mounts: Vec<VolumeMountConfig> = vec![];
         let home = Path::new("/tmp/speck-home");
-        let identity_roots = vec![
-            PathBuf::from("/Users"),
-            PathBuf::from("/Volumes"),
-        ];
+        let identity_roots = vec![PathBuf::from("/Users"), PathBuf::from("/Volumes")];
         let result = cmdline_virtiofs_arg(&mounts, home, &identity_roots, None);
         assert!(
             result.contains("speck_identity_tags=speck-id-users:/Users,speck-id-volumes:/Volumes"),
@@ -573,7 +564,10 @@ mod tests {
     #[test]
     fn test_container_path_to_share_name_simple() {
         let name = container_path_to_share_name(std::path::Path::new("/app"));
-        assert!(!name.contains('/'), "share name must not contain slashes; got: {name}");
+        assert!(
+            !name.contains('/'),
+            "share name must not contain slashes; got: {name}"
+        );
         assert!(!name.is_empty(), "share name must not be empty");
         // Leading slash → leading separator
         assert_eq!(name, "..app", "expected separator-prefixed name");
@@ -582,7 +576,10 @@ mod tests {
     #[test]
     fn test_container_path_to_share_name_nested() {
         let name = container_path_to_share_name(std::path::Path::new("/etc/config"));
-        assert!(!name.contains('/'), "nested path must have slashes replaced");
+        assert!(
+            !name.contains('/'),
+            "nested path must have slashes replaced"
+        );
         assert_eq!(name, "..etc..config", "expected double-dot separator");
     }
 
@@ -591,7 +588,10 @@ mod tests {
         // /a_b and /a/b must produce different names when using the ../ scheme.
         let a = container_path_to_share_name(std::path::Path::new("/a_b"));
         let b = container_path_to_share_name(std::path::Path::new("/a/b"));
-        assert_ne!(a, b, "collision: /a_b and /a/b must not map to the same share name");
+        assert_ne!(
+            a, b,
+            "collision: /a_b and /a/b must not map to the same share name"
+        );
     }
 
     // ── ca_certs_tag tests (Phase 12 — RED; parameter does not exist yet) ──

@@ -178,7 +178,9 @@ mod tests {
     const CLI_MANIFEST: &str = include_str!("../Cargo.toml");
 
     fn production_source() -> &'static str {
-        let end = MAIN_SOURCE.find("#[cfg(test)]").unwrap_or(MAIN_SOURCE.len());
+        let end = MAIN_SOURCE
+            .find("#[cfg(test)]")
+            .unwrap_or(MAIN_SOURCE.len());
         &MAIN_SOURCE[..end]
     }
 
@@ -289,7 +291,8 @@ mod tests {
     #[test]
     fn main_daemonizes_when_not_foreground() {
         assert!(
-            MAIN_SOURCE.contains("!args.foreground && std::env::var(\"SPECK_DAEMONIZED\").is_err()"),
+            MAIN_SOURCE
+                .contains("!args.foreground && std::env::var(\"SPECK_DAEMONIZED\").is_err()"),
             "Commands::Up must guard daemonization on --foreground and SPECK_DAEMONIZED"
         );
         assert!(

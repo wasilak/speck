@@ -84,10 +84,7 @@ mod linux {
         // Write /etc/resolv.conf inside the chroot so dockerd sends DNS queries
         // to the guest-local forwarder (listening on UDP:53) instead of hitting
         // an external resolver that is unreachable without a routed connection.
-        if let Err(e) = std::fs::write(
-            "/rootfs/etc/resolv.conf",
-            "nameserver 127.0.0.1\n",
-        ) {
+        if let Err(e) = std::fs::write("/rootfs/etc/resolv.conf", "nameserver 127.0.0.1\n") {
             eprintln!("vminitd: failed to write /rootfs/etc/resolv.conf: {e}");
         } else {
             eprintln!("vminitd: wrote /rootfs/etc/resolv.conf → nameserver 127.0.0.1");
@@ -120,10 +117,9 @@ mod linux {
 
         // Forward dockerd's Unix socket over vsock port 9003.
         std::thread::spawn(move || {
-            if let Err(e) = speck_guest::sock_forwarder::serve(
-                docker_port,
-                "/rootfs/run/speck/dockerd.sock",
-            ) {
+            if let Err(e) =
+                speck_guest::sock_forwarder::serve(docker_port, "/rootfs/run/speck/dockerd.sock")
+            {
                 eprintln!("vminitd: dockerd forwarder error: {e}");
             }
         });
@@ -353,7 +349,7 @@ mod linux {
             libc::mount(
                 src.as_ptr(),
                 tgt.as_ptr(),
-                std::ptr::null(),   // fstype ignored for MS_BIND
+                std::ptr::null(), // fstype ignored for MS_BIND
                 libc::MS_BIND,
                 std::ptr::null(),
             )
@@ -473,7 +469,9 @@ mod linux {
 
         let resize_tool = "/sbin/resize2fs";
         if !std::path::Path::new(resize_tool).exists() {
-            eprintln!("vminitd: data filesystem resize tool missing or failed for {device}: {resize_tool} not found");
+            eprintln!(
+                "vminitd: data filesystem resize tool missing or failed for {device}: {resize_tool} not found"
+            );
             std::process::exit(1);
         }
 
@@ -485,7 +483,9 @@ mod linux {
                 std::process::exit(1);
             }
             Err(e) => {
-                eprintln!("vminitd: data filesystem resize tool missing or failed for {device}: {e}");
+                eprintln!(
+                    "vminitd: data filesystem resize tool missing or failed for {device}: {e}"
+                );
                 std::process::exit(1);
             }
         }
@@ -1106,8 +1106,10 @@ mod linux {
             loop {
                 let mut cmd = std::process::Command::new(dockerd_bin_in_chroot);
                 cmd.args([
-                    "--host", "unix:///run/speck/dockerd.sock",
-                    "--data-root", "/var/lib/containerd",
+                    "--host",
+                    "unix:///run/speck/dockerd.sock",
+                    "--data-root",
+                    "/var/lib/containerd",
                     "--iptables=false",
                     "--userland-proxy=false",
                 ]);
@@ -1116,9 +1118,13 @@ mod linux {
                 unsafe {
                     cmd.pre_exec(|| {
                         let ret = libc::chroot(b"/rootfs\0".as_ptr() as *const libc::c_char);
-                        if ret < 0 { return Err(io::Error::last_os_error()); }
+                        if ret < 0 {
+                            return Err(io::Error::last_os_error());
+                        }
                         let ret = libc::chdir(b"/\0".as_ptr() as *const libc::c_char);
-                        if ret < 0 { return Err(io::Error::last_os_error()); }
+                        if ret < 0 {
+                            return Err(io::Error::last_os_error());
+                        }
                         Ok(())
                     });
                 }
@@ -1127,7 +1133,9 @@ mod linux {
                     Ok(mut child) => {
                         eprintln!("vminitd: started dockerd (pid {})", child.id());
                         match child.wait() {
-                            Ok(status) => eprintln!("vminitd: dockerd exited {status} — restarting"),
+                            Ok(status) => {
+                                eprintln!("vminitd: dockerd exited {status} — restarting")
+                            }
                             Err(e) => eprintln!("vminitd: dockerd wait error: {e} — restarting"),
                         }
                     }
@@ -1186,25 +1194,39 @@ mod linux {
 
         // Get current flags
         let ret = unsafe {
-            libc::ioctl(sock_fd, libc::SIOCGIFFLAGS as libc::c_int, &ifr as *const libc::ifreq)
+            libc::ioctl(
+                sock_fd,
+                libc::SIOCGIFFLAGS as libc::c_int,
+                &ifr as *const libc::ifreq,
+            )
         };
         if ret < 0 {
-            eprintln!("vminitd: lo SIOCGIFFLAGS failed: {:?}", std::io::Error::last_os_error());
+            eprintln!(
+                "vminitd: lo SIOCGIFFLAGS failed: {:?}",
+                std::io::Error::last_os_error()
+            );
             unsafe { libc::close(sock_fd) };
             return;
         }
 
         // Set IFF_UP | IFF_LOOPBACK
         unsafe {
-            ifr.ifr_ifru.ifru_flags =
-                (ifr.ifr_ifru.ifru_flags | (libc::IFF_UP as i16) | (libc::IFF_LOOPBACK as i16))
-                    as i16;
+            ifr.ifr_ifru.ifru_flags = (ifr.ifr_ifru.ifru_flags
+                | (libc::IFF_UP as i16)
+                | (libc::IFF_LOOPBACK as i16)) as i16;
         }
         let ret = unsafe {
-            libc::ioctl(sock_fd, libc::SIOCSIFFLAGS as libc::c_int, &ifr as *const libc::ifreq)
+            libc::ioctl(
+                sock_fd,
+                libc::SIOCSIFFLAGS as libc::c_int,
+                &ifr as *const libc::ifreq,
+            )
         };
         if ret < 0 {
-            eprintln!("vminitd: lo SIOCSIFFLAGS failed: {:?}", std::io::Error::last_os_error());
+            eprintln!(
+                "vminitd: lo SIOCSIFFLAGS failed: {:?}",
+                std::io::Error::last_os_error()
+            );
         } else {
             eprintln!("vminitd: loopback lo brought up");
         }
@@ -1244,12 +1266,13 @@ mod linux {
                 "vminitd: SIOCGIFFLAGS failed: {:?}",
                 io::Error::last_os_error()
             );
-            unsafe { libc::close(sock_fd); }
+            unsafe {
+                libc::close(sock_fd);
+            }
             return;
         }
         unsafe {
-            ifr.ifr_ifru.ifru_flags =
-                (ifr.ifr_ifru.ifru_flags | (libc::IFF_UP as i16)) as i16;
+            ifr.ifr_ifru.ifru_flags = (ifr.ifr_ifru.ifru_flags | (libc::IFF_UP as i16)) as i16;
         }
         let up_ret = unsafe {
             libc::ioctl(
@@ -1263,7 +1286,9 @@ mod linux {
                 "vminitd: SIOCSIFFLAGS (IFF_UP) failed: {:?}",
                 io::Error::last_os_error()
             );
-            unsafe { libc::close(sock_fd); }
+            unsafe {
+                libc::close(sock_fd);
+            }
             return;
         }
         eprintln!("vminitd: brought up interface eth0");
@@ -1273,7 +1298,9 @@ mod linux {
             Some(b) => b,
             None => {
                 eprintln!("vminitd: invalid guest IP: {ip_str}");
-                unsafe { libc::close(sock_fd); }
+                unsafe {
+                    libc::close(sock_fd);
+                }
                 return;
             }
         };
@@ -1281,7 +1308,9 @@ mod linux {
             Some(b) => b,
             None => {
                 eprintln!("vminitd: invalid gateway: {gw_str}");
-                unsafe { libc::close(sock_fd); }
+                unsafe {
+                    libc::close(sock_fd);
+                }
                 return;
             }
         };
@@ -1291,9 +1320,20 @@ mod linux {
             sa_family: libc::AF_INET as u16,
             // sa_data layout: [sin_port(2), sin_addr(4), sin_zero(8)]
             sa_data: [
-                0, 0,
-                ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3],
-                0, 0, 0, 0, 0, 0, 0, 0,
+                0,
+                0,
+                ip_bytes[0],
+                ip_bytes[1],
+                ip_bytes[2],
+                ip_bytes[3],
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
             ],
         };
         let addr_ret = unsafe {
@@ -1308,7 +1348,9 @@ mod linux {
                 "vminitd: SIOCSIFADDR {ip_str} failed: {:?}",
                 io::Error::last_os_error()
             );
-            unsafe { libc::close(sock_fd); }
+            unsafe {
+                libc::close(sock_fd);
+            }
             return;
         }
         eprintln!("vminitd: set IP {ip_str} on eth0");
@@ -1317,11 +1359,7 @@ mod linux {
         ifr.ifr_ifru.ifru_addr = libc::sockaddr {
             sa_family: libc::AF_INET as u16,
             // sa_data layout: [sin_port(2), sin_addr(4), sin_zero(8)]
-            sa_data: [
-                0, 0,
-                255u8, 255u8, 255u8, 0u8,
-                0, 0, 0, 0, 0, 0, 0, 0,
-            ],
+            sa_data: [0, 0, 255u8, 255u8, 255u8, 0u8, 0, 0, 0, 0, 0, 0, 0, 0],
         };
         let mask_ret = unsafe {
             libc::ioctl(
@@ -1335,7 +1373,9 @@ mod linux {
                 "vminitd: SIOCSIFNETMASK failed: {:?}",
                 io::Error::last_os_error()
             );
-            unsafe { libc::close(sock_fd); }
+            unsafe {
+                libc::close(sock_fd);
+            }
             return;
         }
 
@@ -1360,7 +1400,11 @@ mod linux {
         rt.rt_flags = (libc::RTF_UP | libc::RTF_GATEWAY) as u16;
 
         let route_ret = unsafe {
-            libc::ioctl(sock_fd, libc::SIOCADDRT as libc::c_int, &rt as *const libc::rtentry)
+            libc::ioctl(
+                sock_fd,
+                libc::SIOCADDRT as libc::c_int,
+                &rt as *const libc::rtentry,
+            )
         };
         if route_ret < 0 {
             let err = io::Error::last_os_error();
@@ -1372,7 +1416,9 @@ mod linux {
             eprintln!("vminitd: added default route via {gw_str}");
         }
 
-        unsafe { libc::close(sock_fd); }
+        unsafe {
+            libc::close(sock_fd);
+        }
         eprintln!("vminitd: networking configured — eth0={ip_str}/24 gw={gw_str}");
     }
 
@@ -1458,9 +1504,18 @@ mod tests {
             .find("spawn_dockerd_with_restart")
             .expect("boot path should support dockerd startup");
 
-        assert!(data_mount < grow, "data filesystem must grow only after /dev/vdb mount succeeds");
-        assert!(grow < runtime_dir, "data filesystem must grow before runtime directories are created");
-        assert!(boot_mount < dockerd_spawn, "disk mounting/growth must happen before dockerd starts");
+        assert!(
+            data_mount < grow,
+            "data filesystem must grow only after /dev/vdb mount succeeds"
+        );
+        assert!(
+            grow < runtime_dir,
+            "data filesystem must grow before runtime directories are created"
+        );
+        assert!(
+            boot_mount < dockerd_spawn,
+            "disk mounting/growth must happen before dockerd starts"
+        );
     }
 
     #[test]
@@ -1489,10 +1544,25 @@ mod tests {
             .map(|offset| resize_failed + offset)
             .expect("failed resize2fs status must fail closed by exiting PID 1");
 
-        assert!(helper < resize_tool, "helper should name the resize2fs tool it runs");
-        assert!(resize_tool < missing_or_failed, "tool probe should happen before missing-tool diagnostic");
-        assert!(resize_tool < resize_failed, "tool invocation should happen before failed-status diagnostic");
-        assert!(missing_or_failed < missing_fatal_exit, "missing resize tool must exit non-zero after diagnostic");
-        assert!(resize_failed < failed_fatal_exit, "failed resize2fs status must exit non-zero after diagnostic");
+        assert!(
+            helper < resize_tool,
+            "helper should name the resize2fs tool it runs"
+        );
+        assert!(
+            resize_tool < missing_or_failed,
+            "tool probe should happen before missing-tool diagnostic"
+        );
+        assert!(
+            resize_tool < resize_failed,
+            "tool invocation should happen before failed-status diagnostic"
+        );
+        assert!(
+            missing_or_failed < missing_fatal_exit,
+            "missing resize tool must exit non-zero after diagnostic"
+        );
+        assert!(
+            resize_failed < failed_fatal_exit,
+            "failed resize2fs status must exit non-zero after diagnostic"
+        );
     }
 }

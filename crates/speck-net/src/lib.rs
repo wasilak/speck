@@ -3,18 +3,18 @@ pub mod device;
 pub(crate) mod dhcp;
 pub(crate) mod dns;
 pub mod error;
-pub mod resolver_table;
 pub mod interface;
 pub mod mtu;
 pub mod port_publish;
 pub(crate) mod reorigin;
+pub mod resolver_table;
 pub(crate) mod tcp_listener;
 
 pub use dns::spawn_dns_proxy;
 pub use error::{Error, Result};
-pub use resolver_table::{ResolverTable, read_resolver_table_once, spawn_resolver_watcher};
 pub use mtu::{detect_host_mtu, mss_for_mtu};
 pub use port_publish::{PortMapConfig, PortPublishBridge};
+pub use resolver_table::{ResolverTable, read_resolver_table_once, spawn_resolver_watcher};
 
 use std::os::unix::io::RawFd;
 use std::time::Duration;

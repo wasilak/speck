@@ -25,7 +25,12 @@ pub fn spawn_dns_proxy(
             unsafe { libc::fcntl(vsock_fd, libc::F_SETFL, fl_before & !libc::O_NONBLOCK) };
         }
         let fl_after = unsafe { libc::fcntl(vsock_fd, libc::F_GETFL, 0) };
-        tracing::debug!(fd = vsock_fd, flags_before = fl_before, flags_after = fl_after, "dns-proxy started");
+        tracing::debug!(
+            fd = vsock_fd,
+            flags_before = fl_before,
+            flags_after = fl_after,
+            "dns-proxy started"
+        );
 
         let mut buf = vec![0u8; 4096];
 
@@ -50,7 +55,11 @@ pub fn spawn_dns_proxy(
                 if !read_exact_fd(vsock_fd, &mut discard) {
                     return Ok(());
                 }
-                tracing::warn!(fd = vsock_fd, query_len, "dns-proxy: oversized query discarded");
+                tracing::warn!(
+                    fd = vsock_fd,
+                    query_len,
+                    "dns-proxy: oversized query discarded"
+                );
                 continue;
             }
 
@@ -98,7 +107,11 @@ fn read_exact_fd(fd: RawFd, buf: &mut [u8]) -> bool {
     let mut pos = 0;
     while pos < buf.len() {
         let n = unsafe {
-            libc::read(fd, buf.as_mut_ptr().add(pos) as *mut libc::c_void, buf.len() - pos)
+            libc::read(
+                fd,
+                buf.as_mut_ptr().add(pos) as *mut libc::c_void,
+                buf.len() - pos,
+            )
         };
         if n <= 0 {
             return false;
@@ -112,7 +125,11 @@ fn write_exact_fd(fd: RawFd, buf: &[u8]) -> bool {
     let mut pos = 0;
     while pos < buf.len() {
         let n = unsafe {
-            libc::write(fd, buf.as_ptr().add(pos) as *const libc::c_void, buf.len() - pos)
+            libc::write(
+                fd,
+                buf.as_ptr().add(pos) as *const libc::c_void,
+                buf.len() - pos,
+            )
         };
         if n <= 0 {
             return false;
@@ -185,8 +202,8 @@ fn resolve_dns(domain: &str, query: &[u8]) -> Option<Vec<u8>> {
         Err(e) => {
             // EAI_NONAME ("not known") → NXDOMAIN so guests can negatively cache.
             // Transient failures (EAI_AGAIN/EAI_FAIL) → SERVFAIL via None.
-            let nxdomain = e.kind() == std::io::ErrorKind::NotFound
-                || e.to_string().contains("not known");
+            let nxdomain =
+                e.kind() == std::io::ErrorKind::NotFound || e.to_string().contains("not known");
             if nxdomain {
                 Some(build_dns_response(id, question, 0, &[], 3))
             } else {
@@ -202,7 +219,13 @@ fn resolve_dns(domain: &str, query: &[u8]) -> Option<Vec<u8>> {
                     })
                     .collect();
                 let answers = build_a_answers(&addrs);
-                Some(build_dns_response(id, question, addrs.len() as u16, &answers, 0))
+                Some(build_dns_response(
+                    id,
+                    question,
+                    addrs.len() as u16,
+                    &answers,
+                    0,
+                ))
             }
             28 => {
                 let addrs: Vec<std::net::Ipv6Addr> = iter
@@ -212,7 +235,13 @@ fn resolve_dns(domain: &str, query: &[u8]) -> Option<Vec<u8>> {
                     })
                     .collect();
                 let answers = build_aaaa_answers(&addrs);
-                Some(build_dns_response(id, question, addrs.len() as u16, &answers, 0))
+                Some(build_dns_response(
+                    id,
+                    question,
+                    addrs.len() as u16,
+                    &answers,
+                    0,
+                ))
             }
             _ => {
                 // Unsupported QTYPE via getaddrinfo: return NODATA (NOERROR, 0 answers).
@@ -295,7 +324,9 @@ fn direct_dns_query(nameserver: std::net::IpAddr, query: &[u8]) -> Option<Vec<u8
     use std::net::{SocketAddr, UdpSocket};
     use std::time::Duration;
     let socket = UdpSocket::bind("0.0.0.0:0").ok()?;
-    socket.set_read_timeout(Some(Duration::from_millis(500))).ok()?;
+    socket
+        .set_read_timeout(Some(Duration::from_millis(500)))
+        .ok()?;
     let ns_addr = SocketAddr::new(nameserver, 53);
     socket.send_to(query, ns_addr).ok()?;
     let mut resp_buf = vec![0u8; 4096];
@@ -367,7 +398,15 @@ mod tests {
     #[test]
     fn build_dns_response_encodes_nxdomain_rcode() {
         // ID=0x1234, one question, rcode=3 (NXDOMAIN), no answers.
-        let resp = build_dns_response([0x12, 0x34], &[0x07, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 0x00, 0x00, 0x01, 0x00, 0x01], 0, &[], 3);
+        let resp = build_dns_response(
+            [0x12, 0x34],
+            &[
+                0x07, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 0x00, 0x00, 0x01, 0x00, 0x01,
+            ],
+            0,
+            &[],
+            3,
+        );
         assert_eq!(&resp[0..2], &[0x12, 0x34]); // ID echoed
         assert_eq!(resp[2], 0x81); // QR=1, RD=1
         assert_eq!(resp[3], 0x83); // RA=1, RCODE=3

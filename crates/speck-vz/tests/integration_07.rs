@@ -122,7 +122,9 @@ fn test_spk_up_no_runtime_panic() {
     // If spawn_blocking is missing or the delegate drain thread is absent, this call
     // previously panicked with "Cannot start a runtime from within a runtime" or left the
     // VM in an inconsistent state after the delegate stop event was dropped.
-    guest.start().expect("VM should start without runtime panic (GAP-01)");
+    guest
+        .start()
+        .expect("VM should start without runtime panic (GAP-01)");
     guest
         .wait_for_ready()
         .expect("vminitd should send READY signal over vsock (GAP-01)");
@@ -191,7 +193,10 @@ async fn test_spk_run_ping_egress() {
         .await
         .expect("wait for ping container");
     let exit_code = wait_results.first().map(|r| r.status_code).unwrap_or(1);
-    assert_eq!(exit_code, 0, "ping should exit 0 (network egress works, GAP-02)");
+    assert_eq!(
+        exit_code, 0,
+        "ping should exit 0 (network egress works, GAP-02)"
+    );
 
     // Collect logs and assert round-trip output.
     let log_bytes: Vec<_> = docker
@@ -216,7 +221,10 @@ async fn test_spk_run_ping_egress() {
     docker
         .remove_container(
             container_name,
-            Some(RemoveContainerOptions { force: true, ..Default::default() }),
+            Some(RemoveContainerOptions {
+                force: true,
+                ..Default::default()
+            }),
         )
         .await
         .expect("remove ping container");
@@ -349,11 +357,12 @@ async fn test_port_publish_localhost_nginx() {
         use std::net::TcpStream;
         let mut stream = TcpStream::connect("127.0.0.1:8080")
             .map_err(|e| format!("TCP connect to 127.0.0.1:8080 failed: {e}"))?;
-        stream
-            .set_read_timeout(Some(Duration::from_secs(10)))
-            .ok();
-        write!(stream, "GET / HTTP/1.1\r\nHost: localhost:8080\r\nConnection: close\r\n\r\n")
-            .map_err(|e| format!("write HTTP request: {e}"))?;
+        stream.set_read_timeout(Some(Duration::from_secs(10))).ok();
+        write!(
+            stream,
+            "GET / HTTP/1.1\r\nHost: localhost:8080\r\nConnection: close\r\n\r\n"
+        )
+        .map_err(|e| format!("write HTTP request: {e}"))?;
         let mut buf = Vec::new();
         stream
             .read_to_end(&mut buf)
@@ -363,7 +372,8 @@ async fn test_port_publish_localhost_nginx() {
     .await
     .expect("spawn_blocking join");
 
-    let response_bytes = http_check.expect("HTTP GET http://127.0.0.1:8080 should succeed (GAP-04)");
+    let response_bytes =
+        http_check.expect("HTTP GET http://127.0.0.1:8080 should succeed (GAP-04)");
     let response_str = String::from_utf8_lossy(&response_bytes);
     assert!(
         response_str.starts_with("HTTP/1.1 200") || response_str.contains("Welcome to nginx"),
@@ -375,7 +385,10 @@ async fn test_port_publish_localhost_nginx() {
     docker
         .remove_container(
             container_name,
-            Some(RemoveContainerOptions { force: true, ..Default::default() }),
+            Some(RemoveContainerOptions {
+                force: true,
+                ..Default::default()
+            }),
         )
         .await
         .expect("remove nginx container");
@@ -484,7 +497,10 @@ async fn test_bind_mount_visible_in_container() {
     docker
         .remove_container(
             container_name,
-            Some(RemoveContainerOptions { force: true, ..Default::default() }),
+            Some(RemoveContainerOptions {
+                force: true,
+                ..Default::default()
+            }),
         )
         .await
         .expect("remove bind-mount container");

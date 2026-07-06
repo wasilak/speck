@@ -1,17 +1,17 @@
+use bollard::Docker;
 use bollard::exec::StartExecResults;
-use bollard::query_parameters::CreateImageOptionsBuilder;
 use bollard::models::{
     ContainerCreateBody, ExecConfig, HostConfig, NetworkCreateRequest, PortBinding,
     VolumeCreateRequest,
 };
-use std::collections::HashMap;
+use bollard::query_parameters::CreateImageOptionsBuilder;
 use bollard::query_parameters::{
     CreateContainerOptionsBuilder, ListContainersOptions, LogsOptions, RemoveContainerOptions,
     StartContainerOptions, WaitContainerOptions,
 };
-use bollard::Docker;
 use futures_util::StreamExt;
 use futures_util::TryStreamExt;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -81,7 +81,10 @@ async fn test_image_pull_alpine() {
         .build();
     let stream = docker.create_image(Some(options), None, None);
     let results: Vec<_> = stream.try_collect().await.expect("pull alpine");
-    assert!(!results.is_empty(), "should get at least one progress event");
+    assert!(
+        !results.is_empty(),
+        "should get at least one progress event"
+    );
 }
 
 #[tokio::test]
@@ -122,8 +125,7 @@ async fn test_container_create_list_remove() {
         .expect("list containers");
     assert!(
         containers.iter().any(|c| {
-            c.id
-                .as_deref()
+            c.id.as_deref()
                 .is_some_and(|id| id.starts_with(&container_id))
         }),
         "created container should appear in list"
@@ -147,7 +149,11 @@ async fn test_container_start_wait_remove() {
     let docker = speck_docker();
     let config = ContainerCreateBody {
         image: Some("alpine".to_string()),
-        cmd: Some(vec!["sh".to_string(), "-c".to_string(), "exit 0".to_string()]),
+        cmd: Some(vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            "exit 0".to_string(),
+        ]),
         ..Default::default()
     };
     let options = CreateContainerOptionsBuilder::default()
@@ -228,7 +234,11 @@ async fn test_container_logs() {
         .try_collect::<Vec<_>>()
         .await
         .expect("get logs");
-    let output: String = logs.iter().flat_map(|l| l.as_ref()).map(|&b| b as char).collect();
+    let output: String = logs
+        .iter()
+        .flat_map(|l| l.as_ref())
+        .map(|&b| b as char)
+        .collect();
     assert!(
         output.contains("hello-from-speck"),
         "log output should contain 'hello-from-speck', got: {output:?}"
@@ -282,10 +292,7 @@ async fn test_exec_create_start() {
         .await
         .expect("create exec");
 
-    let output = docker
-        .start_exec(&exec.id, None)
-        .await
-        .expect("start exec");
+    let output = docker.start_exec(&exec.id, None).await.expect("start exec");
     let output_text = match output {
         StartExecResults::Attached { output, .. } => {
             let lines: Vec<_> = output.try_collect().await.expect("exec output stream");
@@ -338,7 +345,9 @@ async fn test_network_create_list_remove() {
         .await
         .expect("list networks");
     assert!(
-        networks.iter().any(|n| n.name.as_deref() == Some("test-net-conformance")),
+        networks
+            .iter()
+            .any(|n| n.name.as_deref() == Some("test-net-conformance")),
         "test-net-conformance should appear in network list"
     );
 
@@ -376,7 +385,10 @@ async fn test_volume_create_list_remove() {
     );
 
     docker
-        .remove_volume("test-vol-conformance", None::<bollard::query_parameters::RemoveVolumeOptions>)
+        .remove_volume(
+            "test-vol-conformance",
+            None::<bollard::query_parameters::RemoveVolumeOptions>,
+        )
         .await
         .expect("remove volume");
 }
@@ -465,7 +477,10 @@ async fn test_bind_mount_host_path() {
     docker
         .remove_container(
             &container_id,
-            Some(RemoveContainerOptions { force: true, ..Default::default() }),
+            Some(RemoveContainerOptions {
+                force: true,
+                ..Default::default()
+            }),
         )
         .await
         .expect("remove container");
@@ -521,7 +536,10 @@ async fn test_port_publish_nginx() {
     docker
         .remove_container(
             &container_id,
-            Some(RemoveContainerOptions { force: true, ..Default::default() }),
+            Some(RemoveContainerOptions {
+                force: true,
+                ..Default::default()
+            }),
         )
         .await
         .expect("remove nginx container");
@@ -566,7 +584,10 @@ async fn test_dns_resolution_inside_container() {
     docker
         .remove_container(
             &container_id,
-            Some(RemoveContainerOptions { force: true, ..Default::default() }),
+            Some(RemoveContainerOptions {
+                force: true,
+                ..Default::default()
+            }),
         )
         .await
         .expect("remove container");
@@ -648,7 +669,10 @@ async fn test_ryuk_socket_bind_mount() {
     docker
         .remove_container(
             &container_id,
-            Some(RemoveContainerOptions { force: true, ..Default::default() }),
+            Some(RemoveContainerOptions {
+                force: true,
+                ..Default::default()
+            }),
         )
         .await
         .expect("remove container");

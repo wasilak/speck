@@ -70,7 +70,9 @@ mod tests {
     /// Slice production code only — everything before `#[cfg(test)]` — so tests do not
     /// trivially pass because assertion strings themselves contain the searched tokens.
     fn production_code() -> &'static str {
-        let end = DOWN_SOURCE.find("#[cfg(test)]").unwrap_or(DOWN_SOURCE.len());
+        let end = DOWN_SOURCE
+            .find("#[cfg(test)]")
+            .unwrap_or(DOWN_SOURCE.len());
         &DOWN_SOURCE[..end]
     }
 

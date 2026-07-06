@@ -12,8 +12,7 @@ pub fn ensure_listeners(sockets: &mut SocketSet, port: u16, desired: usize) {
         .iter()
         .filter(|(_, socket)| match socket {
             smoltcp::socket::Socket::Tcp(tcp) => {
-                tcp.state() == tcp::State::Listen
-                    && tcp.listen_endpoint().port == port
+                tcp.state() == tcp::State::Listen && tcp.listen_endpoint().port == port
             }
             _ => false,
         })

@@ -584,9 +584,7 @@ mod tests {
         let kernel = dir.join("Image");
         std::fs::write(&kernel, b"dummy kernel").unwrap();
 
-        let config = GuestConfig::builder()
-            .kernel_path(&kernel)
-            .build();
+        let config = GuestConfig::builder().kernel_path(&kernel).build();
 
         assert!(
             config.ca_certs_paths.is_empty(),

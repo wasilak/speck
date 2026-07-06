@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Context as _;
 
 use crate::InitArgs;
-use crate::shell::{self, EnvShell, ShellTarget, BEGIN_MARKER, END_MARKER};
+use crate::shell::{self, BEGIN_MARKER, END_MARKER, EnvShell, ShellTarget};
 
 /// Resolve the shell target from the `--shell` override or auto-detection.
 fn resolve_shell(override_shell: &Option<String>) -> anyhow::Result<ShellTarget> {
@@ -23,15 +23,18 @@ fn resolve_shell(override_shell: &Option<String>) -> anyhow::Result<ShellTarget>
 /// `~/.config/fish/conf.d/speck.fish`).
 fn resolve_target_file(target: ShellTarget) -> anyhow::Result<PathBuf> {
     match target {
-        ShellTarget::Bash => Ok(PathBuf::from(std::env::var("HOME").context("HOME not set")?)
-            .join(".bashrc")),
-        ShellTarget::Zsh => Ok(PathBuf::from(std::env::var("HOME").context("HOME not set")?)
-            .join(".zshrc")),
+        ShellTarget::Bash => {
+            Ok(PathBuf::from(std::env::var("HOME").context("HOME not set")?).join(".bashrc"))
+        }
+        ShellTarget::Zsh => {
+            Ok(PathBuf::from(std::env::var("HOME").context("HOME not set")?).join(".zshrc"))
+        }
         ShellTarget::Fish => {
             let config_home = match std::env::var("XDG_CONFIG_HOME") {
                 Ok(x) => PathBuf::from(x),
-                Err(_) => PathBuf::from(std::env::var("HOME").context("HOME not set")?)
-                    .join(".config"),
+                Err(_) => {
+                    PathBuf::from(std::env::var("HOME").context("HOME not set")?).join(".config")
+                }
             };
             Ok(config_home.join("fish/conf.d/speck.fish"))
         }
@@ -105,9 +108,8 @@ pub async fn run_init(args: InitArgs, speck_home: &Path) -> anyhow::Result<()> {
         }
         ShellTarget::Fish => {
             if let Some(parent) = target_file.parent() {
-                std::fs::create_dir_all(parent).with_context(|| {
-                    format!("failed to create {}", parent.display())
-                })?;
+                std::fs::create_dir_all(parent)
+                    .with_context(|| format!("failed to create {}", parent.display()))?;
             }
             std::fs::write(&target_file, &block)
                 .with_context(|| format!("failed to write {}", target_file.display()))?;
@@ -138,10 +140,7 @@ mod tests {
     }
 
     fn temp_home(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "speck-init-{name}-{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("speck-init-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir

@@ -8,12 +8,12 @@ use speck_net::config::NetworkConfig;
 use speck_vz::config::GuestConfig;
 use tokio::io::AsyncWriteExt;
 use tokio::net::UnixListener;
-use tokio::signal::unix::{signal, SignalKind};
+use tokio::signal::unix::{SignalKind, signal};
 
+use crate::UpArgs;
 use crate::config::{EffectiveConfig, EffectiveVmConfig};
 use crate::docker_client::DockerClient;
 use crate::shell::{self, EnvShell};
-use crate::UpArgs;
 use crate::theme::{NEON_CYAN, RESET};
 
 const ROOTFS_VERSION: &str = "0.2.0";
@@ -311,7 +311,8 @@ pub fn write_vm_resource_snapshot(speck_home: &Path, vm: &EffectiveVmConfig) -> 
         .with_context(|| format!("failed to create {}", run_dir.display()))?;
     let path = run_dir.join("vm-config.json");
     let tmp = run_dir.join("vm-config.json.tmp");
-    let contents = serde_json::to_vec_pretty(vm).context("failed to encode VM resource snapshot")?;
+    let contents =
+        serde_json::to_vec_pretty(vm).context("failed to encode VM resource snapshot")?;
     std::fs::write(&tmp, contents).with_context(|| format!("failed to write {}", tmp.display()))?;
     std::fs::rename(&tmp, &path)
         .with_context(|| format!("failed to install {}", path.display()))?;
@@ -454,11 +455,9 @@ pub async fn run_up(
     kill_stale_vm_holders(&[&rootfs_disk_path, &data_disk_path]);
 
     // Validate and prepare CA certificates if any are configured (CERT-01).
-    let ca_cert_paths = crate::config::validate_and_prepare_ca_certs(
-        speck_home,
-        &effective.extra_certs,
-    )
-    .context("CA certificate validation failed")?;
+    let ca_cert_paths =
+        crate::config::validate_and_prepare_ca_certs(speck_home, &effective.extra_certs)
+            .context("CA certificate validation failed")?;
 
     let mut builder = GuestConfig::builder()
         .kernel_path(kernel_path)
@@ -679,28 +678,43 @@ mod tests {
 
         reconcile_data_disk(&path, 20).unwrap();
 
-        assert_eq!(std::fs::metadata(&path).unwrap().len(), 20 * 1024 * 1024 * 1024);
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().len(),
+            20 * 1024 * 1024 * 1024
+        );
     }
 
     #[test]
     fn data_disk_reconcile_grows_existing_image() {
         let path = temp_disk_path("grow");
-        std::fs::File::create(&path).unwrap().set_len(10 * 1024 * 1024 * 1024).unwrap();
+        std::fs::File::create(&path)
+            .unwrap()
+            .set_len(10 * 1024 * 1024 * 1024)
+            .unwrap();
 
         reconcile_data_disk(&path, 20).unwrap();
 
-        assert_eq!(std::fs::metadata(&path).unwrap().len(), 20 * 1024 * 1024 * 1024);
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().len(),
+            20 * 1024 * 1024 * 1024
+        );
     }
 
     #[test]
     fn data_disk_reconcile_rejects_shrink() {
         let path = temp_disk_path("shrink");
-        std::fs::File::create(&path).unwrap().set_len(20 * 1024 * 1024 * 1024).unwrap();
+        std::fs::File::create(&path)
+            .unwrap()
+            .set_len(20 * 1024 * 1024 * 1024)
+            .unwrap();
 
         let err = reconcile_data_disk(&path, 10).unwrap_err().to_string();
 
         assert!(err.starts_with("disk shrink not supported:"));
-        assert_eq!(std::fs::metadata(&path).unwrap().len(), 20 * 1024 * 1024 * 1024);
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().len(),
+            20 * 1024 * 1024 * 1024
+        );
     }
 
     #[test]
@@ -727,7 +741,9 @@ mod tests {
         let memory = run_up
             .find(".memory_size_bytes(effective.vm.memory_mb * 1024 * 1024)")
             .expect("run_up must pass effective vm.memory_mb into GuestConfig::builder()");
-        let build = run_up.find(".build()").expect("run_up must build GuestConfig");
+        let build = run_up
+            .find(".build()")
+            .expect("run_up must build GuestConfig");
 
         assert!(cpu < build);
         assert!(memory < build);
@@ -735,7 +751,8 @@ mod tests {
 
     #[test]
     fn resource_change_requires_restart_when_runtime_active() {
-        let dir = std::env::temp_dir().join(format!("speck-up-resource-mismatch-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("speck-up-resource-mismatch-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let rootfs = dir.join("rootfs.img");
@@ -804,7 +821,8 @@ mod tests {
             "daemonize must define the launchd label constant"
         );
         assert!(
-            source.contains("<key>Label</key>") && source.contains("<string>{LAUNCHD_LABEL}</string>"),
+            source.contains("<key>Label</key>")
+                && source.contains("<string>{LAUNCHD_LABEL}</string>"),
             "daemonize plist must embed LAUNCHD_LABEL"
         );
     }

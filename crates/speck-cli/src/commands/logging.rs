@@ -21,12 +21,7 @@ pub struct SizeRotatingFileAppender {
 }
 
 impl SizeRotatingFileAppender {
-    pub fn new(
-        dir: PathBuf,
-        filename: &str,
-        max_bytes: u64,
-        max_files: usize,
-    ) -> io::Result<Self> {
+    pub fn new(dir: PathBuf, filename: &str, max_bytes: u64, max_files: usize) -> io::Result<Self> {
         let mut appender = SizeRotatingFileAppender {
             dir,
             filename: filename.to_string(),
@@ -86,10 +81,7 @@ impl Write for SizeRotatingFileAppender {
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        self.current
-            .as_mut()
-            .map(|f| f.flush())
-            .unwrap_or(Ok(()))
+        self.current.as_mut().map(|f| f.flush()).unwrap_or(Ok(()))
     }
 }
 
@@ -132,8 +124,7 @@ mod tests {
 
     /// Create a unique temporary directory for the test and return its path.
     fn temp_log_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir()
-            .join(format!("speck-logging-{name}-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("speck-logging-{name}-{}", std::process::id()));
         if dir.exists() {
             std::fs::remove_dir_all(&dir).unwrap();
         }
@@ -144,11 +135,13 @@ mod tests {
     #[test]
     fn test_size_rotating_appender_rotates() {
         let dir = temp_log_dir("rotates");
-        let mut appender =
-            SizeRotatingFileAppender::new(dir.clone(), "speck.log", 10, 5).unwrap();
+        let mut appender = SizeRotatingFileAppender::new(dir.clone(), "speck.log", 10, 5).unwrap();
         // 15 bytes triggers rotation (0 + 15 >= 10)
         appender.write_all(b"hello, rotation").unwrap();
-        assert!(dir.join("speck.log").exists(), "speck.log should exist after rotation");
+        assert!(
+            dir.join("speck.log").exists(),
+            "speck.log should exist after rotation"
+        );
         assert!(
             dir.join("speck.log.1").exists(),
             "speck.log.1 should exist — old log was renamed"
@@ -160,8 +153,7 @@ mod tests {
         let dir = temp_log_dir("maxfiles");
         // max_bytes=1: any write of 2 bytes triggers rotation
         // max_files=3: keep at most .log.1 + .log.2 + .log.3
-        let mut appender =
-            SizeRotatingFileAppender::new(dir.clone(), "speck.log", 1, 3).unwrap();
+        let mut appender = SizeRotatingFileAppender::new(dir.clone(), "speck.log", 1, 3).unwrap();
         for _ in 0..6 {
             appender.write_all(b"AB").unwrap();
         }

@@ -5,13 +5,13 @@ use std::sync::Arc;
 
 // Use core_foundation types from system_configuration's re-export (0.9.4) to avoid
 // version mismatch with the SCDynamicStore API which also uses 0.9.4 internally.
+use dispatch2::{DispatchQueue, DispatchQueueAttr};
 use system_configuration::core_foundation::{
     array::CFArray,
     base::{CFType, TCFType, ToVoid},
     dictionary::CFDictionary,
     string::CFString,
 };
-use dispatch2::{DispatchQueue, DispatchQueueAttr};
 use system_configuration::{
     dynamic_store::{SCDynamicStore, SCDynamicStoreBuilder, SCDynamicStoreCallBackContext},
     sys::{
@@ -139,9 +139,7 @@ pub fn spawn_resolver_watcher() -> (
     // SAFETY: DispatchQueue is #[repr(C)]; the pointer to it is the dispatch_queue_t.
     let raw_queue: *mut c_void = (&*queue as *const DispatchQueue) as *mut c_void;
 
-    let ok = unsafe {
-        SCDynamicStoreSetDispatchQueue(store.as_concrete_TypeRef(), raw_queue)
-    };
+    let ok = unsafe { SCDynamicStoreSetDispatchQueue(store.as_concrete_TypeRef(), raw_queue) };
     if ok == 0 {
         warn!("SCDynamicStoreSetDispatchQueue failed; DNS live-update disabled");
         return (tx, rx);
@@ -149,7 +147,10 @@ pub fn spawn_resolver_watcher() -> (
 
     // Read initial resolver state synchronously before any callbacks can fire.
     let initial = read_resolver_table(&store);
-    debug!(entries = initial.entries.len(), "initial resolver table loaded");
+    debug!(
+        entries = initial.entries.len(),
+        "initial resolver table loaded"
+    );
     let _ = tx.send(initial);
 
     // Leak the store and queue: they must stay alive for the process lifetime so
@@ -214,7 +215,10 @@ fn read_resolver_table(store: &SCDynamicStore) -> ResolverTable {
         }
     }
 
-    debug!(count = table.entries.len(), "read resolver table from SCDynamicStore");
+    debug!(
+        count = table.entries.len(),
+        "read resolver table from SCDynamicStore"
+    );
     table
 }
 

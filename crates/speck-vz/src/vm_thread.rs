@@ -596,12 +596,11 @@ impl VmThread {
             // Always configure VirtioFS unconditionally: the speck-home device
             // must be present on every VM start for Ryuk and testcontainers.
             // configure_virtiofs_devices handles empty volume_mounts gracefully.
-            let ca_certs_share: Option<std::path::PathBuf> =
-                if config.ca_certs_paths.is_empty() {
-                    None
-                } else {
-                    Some(config.speck_home.join("ca-certs"))
-                };
+            let ca_certs_share: Option<std::path::PathBuf> = if config.ca_certs_paths.is_empty() {
+                None
+            } else {
+                Some(config.speck_home.join("ca-certs"))
+            };
             crate::virtiofs::configure_virtiofs_devices(
                 &vm_config,
                 &config.volume_mounts,

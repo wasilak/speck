@@ -256,9 +256,9 @@ pub fn parse_env_u64(var_name: &str, unit: &str) -> anyhow::Result<Option<u64>> 
         Err(err) => anyhow::bail!("{var_name} must be valid UTF-8 {unit}: {err}"),
     };
 
-    let parsed = value.parse::<u64>().with_context(|| {
-        format!("{var_name} must be an unsigned integer {unit}; got `{value}`")
-    })?;
+    let parsed = value
+        .parse::<u64>()
+        .with_context(|| format!("{var_name} must be an unsigned integer {unit}; got `{value}`"))?;
     Ok(Some(parsed))
 }
 
@@ -334,13 +334,12 @@ pub fn validate_and_prepare_ca_certs(
     }
 
     let ca_certs_dir = speck_home.join("ca-certs");
-    std::fs::create_dir_all(&ca_certs_dir)
-        .with_context(|| {
-            format!(
-                "failed to create ca-certs directory at {}",
-                ca_certs_dir.display()
-            )
-        })?;
+    std::fs::create_dir_all(&ca_certs_dir).with_context(|| {
+        format!(
+            "failed to create ca-certs directory at {}",
+            ca_certs_dir.display()
+        )
+    })?;
 
     let mut copied_paths = Vec::new();
     let mut seen_hashes = HashSet::new();
@@ -348,8 +347,7 @@ pub fn validate_and_prepare_ca_certs(
     for path_str in extra_certs {
         let path = Path::new(path_str);
 
-        let content = std::fs::read(path)
-            .with_context(|| format!("file not found: {path_str}"))?;
+        let content = std::fs::read(path).with_context(|| format!("file not found: {path_str}"))?;
 
         // Validate PEM structure (must have proper BEGIN / END markers).
         // We avoid the full `pem` crate parse here because its base64 validation
@@ -387,10 +385,7 @@ mod tests {
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn temp_speck_home(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "speck-config-{name}-{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("speck-config-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir

@@ -3,13 +3,13 @@ use std::path::Path;
 
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use crossterm::terminal;
+use ratatui::Frame;
+use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Paragraph, Row, Table, TableState};
-use ratatui::Frame;
-use ratatui::Terminal;
 
 use crate::docker_client::DockerClient;
 
@@ -76,10 +76,7 @@ pub async fn run_dashboard(speck_home: &Path) -> anyhow::Result<()> {
             tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
             let current_id = {
                 let containers = rx_for_logs.borrow().clone();
-                containers
-                    .get(0)
-                    .map(|c| c.id.clone())
-                    .unwrap_or_default()
+                containers.get(0).map(|c| c.id.clone()).unwrap_or_default()
             };
             if current_id.is_empty() || current_id == last_id {
                 continue;

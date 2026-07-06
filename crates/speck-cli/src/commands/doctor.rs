@@ -46,7 +46,7 @@ pub fn check_codesign() -> CheckResult {
         Err(_) => {
             return CheckResult::Warn {
                 detail: "could not determine binary path".into(),
-            }
+            };
         }
     };
 
@@ -64,8 +64,9 @@ pub fn check_codesign() -> CheckResult {
                 CheckResult::Pass
             } else {
                 CheckResult::Fail {
-                    hint: "Binary missing virtualization entitlement — run `cargo xtask codesign-dev`"
-                        .into(),
+                    hint:
+                        "Binary missing virtualization entitlement — run `cargo xtask codesign-dev`"
+                            .into(),
                 }
             }
         }
@@ -101,7 +102,7 @@ pub fn check_cert_injection(speck_home: &Path) -> CheckResult {
         Err(e) => {
             return CheckResult::Warn {
                 detail: format!("cannot read config: {e}"),
-            }
+            };
         }
     };
 
@@ -117,13 +118,11 @@ pub fn check_cert_injection(speck_home: &Path) -> CheckResult {
             Err(_) => {
                 return CheckResult::Fail {
                     hint: format!("configured cert source not found: {path_str}"),
-                }
+                };
             }
         };
         let hash_hex = format!("{:x}", Sha256::digest(&content));
-        let staged = speck_home
-            .join("ca-certs")
-            .join(format!("{hash_hex}.pem"));
+        let staged = speck_home.join("ca-certs").join(format!("{hash_hex}.pem"));
         if !staged.exists() {
             return CheckResult::Fail {
                 hint: format!("cert {path_str} not staged — run `spk up` to reinject"),
@@ -266,14 +265,22 @@ fn trace_dns(hostname: &str) -> anyhow::Result<DnsTraceResult> {
     let table = speck_net::read_resolver_table_once();
     let (nameserver, vpn_scoped) = match table.find_resolver(hostname) {
         Some(servers) => {
-            let ns = servers.iter().map(|ip| ip.to_string()).collect::<Vec<_>>().join(", ");
+            let ns = servers
+                .iter()
+                .map(|ip| ip.to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
             (Some(ns), true)
         }
         None => (Some("macOS system resolver".to_owned()), false),
     };
 
     // Resolve via getaddrinfo — same code path as spawn_dns_proxy in speck-net.
-    let mut result = DnsTraceResult { nameserver, vpn_scoped, ..Default::default() };
+    let mut result = DnsTraceResult {
+        nameserver,
+        vpn_scoped,
+        ..Default::default()
+    };
     match format!("{hostname}:0").to_socket_addrs() {
         Ok(addrs) => {
             result.addrs = addrs
@@ -319,12 +326,12 @@ pub async fn run_doctor_dns(_speck_home: &Path, hostname: &str) -> anyhow::Resul
 
     println!();
     if result.addrs.is_empty() {
-        println!(
-            "  {YELLOW}WARN{RESET}  resolver returned no addresses for {hostname}"
-        );
+        println!("  {YELLOW}WARN{RESET}  resolver returned no addresses for {hostname}");
         Ok(0)
     } else {
-        println!("  {GREEN}PASS{RESET}  host resolver working — guest DNS inherits this path via vsock proxy");
+        println!(
+            "  {GREEN}PASS{RESET}  host resolver working — guest DNS inherits this path via vsock proxy"
+        );
         Ok(0)
     }
 }

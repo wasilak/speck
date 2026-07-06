@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use crate::EnvArgs;
-use crate::shell::{render_env, render_speck_home, EnvShell};
+use crate::shell::{EnvShell, render_env, render_speck_home};
 
 /// Print shell-ready env exports for the current Speck session.
 ///
@@ -14,9 +14,7 @@ pub fn run_env(args: EnvArgs, speck_home: &Path) {
         "posix" => EnvShell::Posix,
         "fish" => EnvShell::Fish,
         other => {
-            eprintln!(
-                "error: unsupported shell `{other}` (expected `posix` or `fish`)"
-            );
+            eprintln!("error: unsupported shell `{other}` (expected `posix` or `fish`)");
             std::process::exit(1);
         }
     };

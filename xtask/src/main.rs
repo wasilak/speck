@@ -56,7 +56,18 @@ fn task_ci() -> ExitCode {
         let needs_build = !std::path::Path::new(debug_binary).exists();
         if needs_build {
             print!("Building debug binary for codesigning... ");
-            if run("cargo", &["build", "-p", "speck-cli", "--target", "aarch64-apple-darwin"]).is_err() {
+            if run(
+                "cargo",
+                &[
+                    "build",
+                    "-p",
+                    "speck-cli",
+                    "--target",
+                    "aarch64-apple-darwin",
+                ],
+            )
+            .is_err()
+            {
                 eprintln!("FAILED");
                 return ExitCode::from(1);
             }
