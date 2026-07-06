@@ -4,13 +4,12 @@
 
 Speck boots a micro-VM using Apple's native `Virtualization.framework` — no QEMU, no emulation — and exposes a Docker-compatible socket so your existing tooling (`docker`, `docker compose`, `testcontainers`, BuildKit) works unchanged. Its defining trait: containers inherit the host's routing table and DNS in real time, so they keep working under corporate VPNs and Cloudflare WARP — exactly where Docker Desktop breaks.
 
-> **Status: pre-stable, active battle-testing.** Core features are implemented and under validation — Docker API compatibility, VPN/WARP DNS, BuildKit, and corporate CA injection. Not yet recommended for production use.
+> **Status: alpha.** Core VM boot, Docker API socket, and VPN-proof networking are implemented. Expect rough edges; bug reports welcome.
 
 ## Requirements
 
 - Apple Silicon Mac (M1–M4+)
 - macOS 13 Ventura or later
-- Xcode Command Line Tools (`xcode-select --install`)
 
 ## Why Speck?
 
@@ -20,71 +19,76 @@ Speck routes raw L2 frames through a user-space TCP/IP stack that re-originates 
 
 ## Install
 
-### Build from source
+### Homebrew (recommended)
 
 ```bash
-git clone https://github.com/speck-vm/speck
-cd speck
-cargo build --release --target aarch64-apple-darwin
+brew tap wasilak/speck https://github.com/wasilak/speck
+brew install wasilak/speck/speck
 ```
 
-### Sign the binary (required)
-
-`VZVirtualMachine` requires the `com.apple.security.virtualization` entitlement to be embedded in the binary. Without it the runtime fails at VM creation. For local development, ad-hoc signing works:
+macOS may quarantine the binary on first install (ad-hoc signing). Clear it with:
 
 ```bash
+xattr -dr com.apple.quarantine $(brew --prefix)/bin/spk
+```
+
+### Build from source
+
+Requires Rust stable, Xcode Command Line Tools, and `protoc`:
+
+```bash
+git clone https://github.com/wasilak/speck
+cd speck
+brew install protobuf          # provides protoc
+cargo build --release --package speck-cli --target aarch64-apple-darwin
 codesign --sign - \
   --entitlements speck.entitlements \
   --force \
   target/aarch64-apple-darwin/release/spk
-```
-
-> Production releases will be signed with Apple Developer ID and distributed via Homebrew. Ad-hoc signing is the current approach while the project is in battle-testing.
-
-### Put it on your PATH
-
-```bash
 cp target/aarch64-apple-darwin/release/spk /usr/local/bin/spk
 ```
 
-### Homebrew (coming)
+## First boot (step by step)
 
-Once releases stabilize, you will be able to install via:
+**1. Start the VM**
 
 ```bash
-brew install speck-vm/speck/speck
+spk up
 ```
 
-The Formula uses Homebrew's `--preserve-metadata=entitlements` re-signing path, which preserves the `com.apple.security.virtualization` entitlement.
+On first run, `spk up` downloads the guest assets (~200 MB: Linux kernel, initrd with `vminitd`, Alpine-based rootfs with dockerd). Subsequent boots use the cached assets and start in milliseconds.
 
-## Quick start
+**2. Point your Docker tooling at Speck — one-time setup**
 
 ```bash
-# Boot the VM (millisecond cold start)
-spk up
+spk init --set-docker-host
+# then open a new shell (or source your rc file)
+```
 
-# Point Docker tooling at Speck — one-time persistent setup
-spk init        # writes a shell block to ~/.zshrc / ~/.bashrc / fish config
-# or per-session:
+This writes `DOCKER_HOST=unix://$HOME/.speck/run/docker.sock` into your shell config. All `docker` and `docker compose` commands now route through Speck.
+
+For a per-session override instead:
+
+```bash
 eval $(spk env)
+```
 
-# Now use docker as normal
+**3. Verify**
+
+```bash
+docker info          # should show the Speck runtime
 docker run --rm alpine echo "hello from Speck"
-docker compose up
+```
 
-# BuildKit
-spk build -t myapp:latest .
+**4. Stop the VM**
 
-# Live dashboard
-spk dashboard
-
-# Stop the VM
+```bash
 spk down
 ```
 
 ## Configuration
 
-`~/.speck/config.yaml` (override with `SPECK_HOME`):
+`~/.speck/config.yaml` (override the directory with `SPECK_HOME`):
 
 ```yaml
 vm:
@@ -97,11 +101,10 @@ ca:
     - /etc/ssl/certs/corporate-ca.pem
 ```
 
-Per-invocation flags override the config file, which overrides env vars, which override built-in defaults:
+Per-invocation flags override the config file:
 
 ```bash
 spk up --cpus 8 --memory 8192
-SPECK_VM_CPUS=6 spk up
 ```
 
 ## Diagnostics
@@ -114,14 +117,25 @@ spk doctor dns internal.corp.example   # verify VPN split-DNS reaches a scoped n
 
 `spk doctor` exits 0 when everything is healthy, 1 on any failure, with an actionable hint per failing check.
 
-## Feature status
+## Other commands
+
+```bash
+spk ps                  # list running containers
+spk build -t myapp .    # build an image with BuildKit
+spk dashboard           # live TUI (VM stats, containers, logs)
+spk completion zsh      # shell completion (zsh/bash/fish)
+```
+
+## Alpha status
+
+This is an alpha release intended for early testing and feedback. Known areas still under validation:
 
 | Feature | Status |
 |---------|--------|
 | VM boot via Virtualization.framework | ✅ |
 | Docker-compatible API socket | ✅ |
 | VPN-proof networking (live host routing table) | ✅ |
-| VPN-proof DNS (SCDynamicStore live reload, no `:53` binding) | ✅ |
+| VPN-proof DNS (SCDynamicStore live reload) | ✅ |
 | Corporate CA injection into guest trust bundle | ✅ |
 | BuildKit (`spk build`) | ✅ |
 | Shell integration (`spk env`, `spk init`) | ✅ |
@@ -129,9 +143,10 @@ spk doctor dns internal.corp.example   # verify VPN split-DNS reaches a scoped n
 | Background daemon (launchd LaunchAgent) | ✅ |
 | `spk dashboard` TUI | ✅ |
 | `spk doctor` diagnostics | ✅ |
-| Homebrew Formula distribution | 🔧 in progress |
+| Homebrew Formula distribution | ✅ |
 | testcontainers conformance | 🔧 in progress |
 | K3s / Kubernetes | 📋 planned |
+| Developer ID signing + notarization | 📋 planned |
 
 ## Contributing
 
@@ -139,4 +154,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). A CLA is required for all contributions.
 
 ## License
 
-[AGPLv3](LICENSE) with CLA. No permissive license that allows closing the source.
+[AGPLv3](LICENSE) with CLA.
