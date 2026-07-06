@@ -1,9 +1,11 @@
+use std::io::Read as _;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 use anyhow::Context as _;
 use indicatif::ProgressBar;
+use sha2::{Digest as _, Sha256};
 use speck_net::config::NetworkConfig;
 use speck_vz::config::GuestConfig;
 use tokio::io::AsyncWriteExt;
@@ -279,17 +281,18 @@ async fn fetch_rootfs(speck_home: &Path) -> anyhow::Result<()> {
         .context("invalid checksum file")?
         .to_string();
 
-    let actual_out = tokio::process::Command::new("shasum")
-        .args(["-a", "256"])
-        .arg(&tmp)
-        .output()
-        .await
-        .context("shasum failed")?;
-    let actual = std::str::from_utf8(&actual_out.stdout)
-        .ok()
-        .and_then(|s| s.split_whitespace().next())
-        .context("shasum produced no output")?
-        .to_string();
+    let actual = {
+        let mut f = std::fs::File::open(&tmp)
+            .with_context(|| format!("failed to open {} for checksum", tmp.display()))?;
+        let mut hasher = Sha256::new();
+        let mut buf = vec![0u8; 64 * 1024];
+        loop {
+            let n = f.read(&mut buf).context("read error during checksum")?;
+            if n == 0 { break; }
+            hasher.update(&buf[..n]);
+        }
+        format!("{:x}", hasher.finalize())
+    };
 
     anyhow::ensure!(
         expected == actual,
