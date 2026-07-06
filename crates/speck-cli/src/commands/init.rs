@@ -5,6 +5,33 @@ use anyhow::Context as _;
 use crate::InitArgs;
 use crate::shell::{self, BEGIN_MARKER, END_MARKER, EnvShell, ShellTarget};
 
+const DEFAULT_CONFIG_YAML: &str = "\
+# Speck configuration — config.yaml
+# All keys are optional. Uncomment and edit to override defaults.
+
+version: 1
+
+vm:
+  # vCPUs to allocate (default: 2, max: host physical cores)
+  # cpus: 2
+
+  # Memory in MiB (default: 2048, minimum: 512)
+  # memory_mb: 2048
+
+  # Data disk size in GiB (default: 20, minimum: 1)
+  # disk_gb: 20
+
+# Log level — tracing EnvFilter directive (default: info)
+# Levels: error, warn, info, debug, trace
+# log_level: info
+
+ca:
+  # Paths to additional CA certificate PEM files to inject into the VM
+  # (useful for corporate CAs and private registries)
+  # extra_certs:
+  #   - /path/to/corporate-ca.pem
+";
+
 /// Resolve the shell target from the `--shell` override or auto-detection.
 fn resolve_shell(override_shell: &Option<String>) -> anyhow::Result<ShellTarget> {
     match override_shell.as_deref() {
@@ -84,7 +111,22 @@ pub async fn run_init(args: InitArgs, speck_home: &Path) -> anyhow::Result<()> {
         );
     }
 
-    // Step 3 — Preview/persist based on --set-docker-host
+    // Step 3 — Scaffold config.yaml if absent
+    let config_path = speck_home.join("config.yaml");
+    if !config_path.exists() {
+        std::fs::create_dir_all(speck_home)
+            .with_context(|| format!("failed to create {}", speck_home.display()))?;
+        std::fs::write(&config_path, DEFAULT_CONFIG_YAML)
+            .with_context(|| format!("failed to write {}", config_path.display()))?;
+        println!("Created {}", config_path.display());
+    } else {
+        println!(
+            "{} already exists — skipping (not overwriting)",
+            config_path.display()
+        );
+    }
+
+    // Step 4 — Preview/persist based on --set-docker-host
     if !args.set_docker_host {
         println!("Run `spk init --set-docker-host` to persist Speck environment in your shell.");
         println!();
@@ -95,7 +137,7 @@ pub async fn run_init(args: InitArgs, speck_home: &Path) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    // Step 4 — Persist: write idempotent block
+    // Step 5 — Persist: write idempotent block
     let target_file = resolve_target_file(target)?;
     let block = shell::render_init_block(target);
 
@@ -360,5 +402,78 @@ mod tests {
             std::env::remove_var("HOME");
             std::env::remove_var("DOCKER_HOST");
         }
+    }
+
+    #[test]
+    fn init_creates_config_yaml_when_absent() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let home = temp_home("config-scaffold");
+        unsafe {
+            std::env::set_var("HOME", &home);
+            std::env::remove_var("DOCKER_HOST");
+            std::env::remove_var("XDG_CONFIG_HOME");
+        }
+
+        let speck_home = home.join(".speck");
+        std::fs::create_dir_all(&speck_home).unwrap();
+
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(run_init(
+            InitArgs { set_docker_host: false, shell: Some("zsh".into()) },
+            &speck_home,
+        ))
+        .unwrap();
+
+        let config = speck_home.join("config.yaml");
+        assert!(config.exists(), "config.yaml must be created by spk init");
+        let content = std::fs::read_to_string(&config).unwrap();
+        assert!(content.contains("version: 1"), "scaffold must include version: 1");
+        assert!(content.contains("vm:"), "scaffold must include vm: section");
+        assert!(content.contains("ca:"), "scaffold must include ca: section");
+        assert!(content.contains("extra_certs"), "scaffold must mention extra_certs");
+
+        // Verify it's a valid config (parseable by load_config_file)
+        let (app_config, warnings) = crate::config::load_config_file(&speck_home).unwrap();
+        assert_eq!(app_config.version, Some(1));
+        assert!(warnings.is_empty(), "scaffold must produce no unknown-key warnings");
+
+        unsafe { std::env::remove_var("HOME"); }
+    }
+
+    #[test]
+    fn init_does_not_overwrite_existing_config_yaml() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let home = temp_home("config-no-overwrite");
+        unsafe {
+            std::env::set_var("HOME", &home);
+            std::env::remove_var("DOCKER_HOST");
+            std::env::remove_var("XDG_CONFIG_HOME");
+        }
+
+        let speck_home = home.join(".speck");
+        std::fs::create_dir_all(&speck_home).unwrap();
+        let config = speck_home.join("config.yaml");
+        std::fs::write(&config, "version: 1\n# custom user content\n").unwrap();
+
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(run_init(
+            InitArgs { set_docker_host: false, shell: Some("zsh".into()) },
+            &speck_home,
+        ))
+        .unwrap();
+
+        let after = std::fs::read_to_string(&config).unwrap();
+        assert!(
+            after.contains("custom user content"),
+            "spk init must not overwrite existing config.yaml"
+        );
+
+        unsafe { std::env::remove_var("HOME"); }
     }
 }

@@ -3,6 +3,8 @@ use std::path::Path;
 use indicatif::ProgressBar;
 use serde_json::json;
 
+use anstream::println;
+
 use crate::RunArgs;
 use crate::docker_client::DockerClient;
 use crate::theme::NEON_CYAN;

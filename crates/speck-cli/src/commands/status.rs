@@ -5,6 +5,8 @@ use tokio::io::AsyncReadExt;
 use tokio::net::UnixStream;
 use tokio::time::timeout;
 
+use anstream::println;
+
 use crate::theme;
 
 pub async fn run_status(speck_home: &Path) -> anyhow::Result<()> {

@@ -92,6 +92,41 @@ Per-invocation flags override the config file:
 spk up --cpus 8 --memory 8192
 ```
 
+## Environment variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SPECK_HOME` | `~/.speck` | Directory for VM assets, config, socket, and logs. Override to run multiple isolated instances. |
+| `DOCKER_HOST` | *(not set)* | Set by `spk init --set-docker-host` or `eval $(spk env)` to `unix://$SPECK_HOME/speck.sock`. Directs Docker-compatible clients to Speck. |
+| `SPECK_VM_CPUS` | config / 2 | vCPU count for the VM. Takes precedence over `config.yaml` and `--cpus`. |
+| `SPECK_VM_MEMORY_MB` | config / 2048 | VM memory in MiB. Takes precedence over `config.yaml` and `--memory`. |
+| `SPECK_VM_DISK_GB` | config / 20 | VM data disk size in GiB. Takes precedence over `config.yaml` and `--disk`. |
+| `SPECK_LOG_LEVEL` | config / `info` | [tracing `EnvFilter`](https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html) directive. Takes precedence over `config.yaml` `log_level`. |
+| `SPECK_DAEMONIZED` | *(not set)* | Set to `1` internally by the launchd LaunchAgent. Switches the process to file-appender logging and suppresses progress output. Do not set manually. |
+
+## Logs
+
+The daemon writes structured logs to `$SPECK_HOME/speck.log` (rotates at 10 MiB, keeps 5 generations). The guest serial console is captured separately to `$SPECK_HOME/console.log`.
+
+```bash
+spk logs                   # print the full daemon log
+spk logs --tail            # print the last 20 lines
+spk logs --follow          # stream new entries as they are written (like tail -f)
+```
+
+## Shell completion
+
+```bash
+# zsh — add to ~/.zshrc
+eval "$(spk completion zsh)"
+
+# bash — add to ~/.bashrc
+eval "$(spk completion bash)"
+
+# fish — add to ~/.config/fish/conf.d/speck_completion.fish
+spk completion fish | source
+```
+
 ## Diagnostics
 
 ```bash

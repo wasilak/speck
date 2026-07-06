@@ -12,6 +12,8 @@ use tokio::io::AsyncWriteExt;
 use tokio::net::UnixListener;
 use tokio::signal::unix::{SignalKind, signal};
 
+use anstream::{eprint, eprintln, print, println};
+
 use crate::UpArgs;
 use crate::config::{EffectiveConfig, EffectiveVmConfig};
 use crate::docker_client::DockerClient;
@@ -25,6 +27,13 @@ const KATA_KERNEL_FILE: &str = "vmlinux-6.18.35-197";
 const KATA_INITRD_FILE: &str = "kata-alpine-3.22.initrd";
 const INITRD_VERSION: &str = "0.1.0";
 const LAUNCHD_LABEL: &str = "io.speck.vm";
+
+/// Returns true when running interactively (stderr is a TTY and not launched as
+/// a launchd daemon). Used to decide whether to show curl progress bars.
+fn is_interactive() -> bool {
+    use std::io::IsTerminal as _;
+    std::env::var("SPECK_DAEMONIZED").as_deref() != Ok("1") && std::io::stderr().is_terminal()
+}
 
 pub fn daemonize(speck_home: &Path, binary: &Path) -> anyhow::Result<()> {
     let _ = speck_home;
@@ -89,8 +98,11 @@ pub fn daemonize(speck_home: &Path, binary: &Path) -> anyhow::Result<()> {
         status.success(),
         "launchctl bootstrap failed - check that launchd is running (macOS only)"
     );
-    println!("{NEON_CYAN}Speck VM is running{RESET}");
-    println!("  Use `spk logs` to follow boot, `spk down` to stop");
+    println!("{NEON_CYAN}Speck daemon registered — VM is starting in the background.{RESET}");
+    println!("  Follow boot:  spk logs --follow");
+    println!("  Check status: spk status");
+    println!("  For scripts:  spk up --wait  (blocks until ready)");
+    println!("  To stop:      spk down");
     Ok(())
 }
 
@@ -156,14 +168,17 @@ async fn fetch_kata_assets(speck_home: &Path) -> anyhow::Result<()> {
     // curl → zstdcat → tar, extracting only the two files we need.
     // The shell command contains only fixed URLs/filenames; destination paths
     // are handled below with Rust filesystem calls to avoid shell injection.
+    // curl_flags is one of two hardcoded strings, so no shell injection risk.
+    let curl_flags = if is_interactive() { "-fL --progress-bar" } else { "-fsSL" };
     let status = tokio::process::Command::new("bash")
         .args([
             "-c",
             &format!(
-                r#"curl -fsSL {url} | zstdcat -c | tar -C /tmp/speck-kata-assets-{pid} \
+                r#"curl {curl_flags} {url} | zstdcat -c | tar -C /tmp/speck-kata-assets-{pid} \
                     --strip-components=5 -xf - \
                     ./opt/kata/share/kata-containers/{KATA_KERNEL_FILE} \
                     ./opt/kata/share/kata-containers/{KATA_INITRD_FILE}"#,
+                curl_flags = curl_flags,
                 url = url,
                 pid = std::process::id(),
             ),
@@ -200,8 +215,14 @@ async fn fetch_initrd(speck_home: &Path) -> anyhow::Result<()> {
 
     println!("  Downloading initrd {INITRD_VERSION}...");
 
-    let status = tokio::process::Command::new("curl")
-        .args(["-fsSL", "--progress-bar", &format!("{base}/{name}")])
+    let mut curl_cmd = tokio::process::Command::new("curl");
+    if is_interactive() {
+        curl_cmd.args(["-fL", "--progress-bar"]);
+    } else {
+        curl_cmd.arg("-fsSL");
+    }
+    let status = curl_cmd
+        .arg(&format!("{base}/{name}"))
         .arg("-o")
         .arg(&tmp)
         .status()
@@ -234,8 +255,14 @@ async fn fetch_rootfs(speck_home: &Path) -> anyhow::Result<()> {
 
     println!("  Downloading rootfs {ROOTFS_VERSION} ({ROOTFS_BACKEND})...");
 
-    let curl_status = tokio::process::Command::new("curl")
-        .args(["-fsSL", "--progress-bar", &format!("{base}/{gz_name}")])
+    let mut curl_cmd = tokio::process::Command::new("curl");
+    if is_interactive() {
+        curl_cmd.args(["-fL", "--progress-bar"]);
+    } else {
+        curl_cmd.arg("-fsSL");
+    }
+    let curl_status = curl_cmd
+        .arg(&format!("{base}/{gz_name}"))
         .arg("-o")
         .arg(&gz_tmp)
         .status()
@@ -704,6 +731,38 @@ async fn shutdown_gracefully(
     Ok(())
 }
 
+/// Poll `sock_path` with `GET /_ping` until the Docker API responds with HTTP 200
+/// or `timeout_secs` elapses. Progress dots are printed to stderr every 500 ms.
+/// Returns an error (non-zero exit) on timeout.
+pub async fn wait_for_socket(
+    sock_path: &std::path::Path,
+    timeout_secs: u64,
+) -> anyhow::Result<()> {
+    use std::time::{Duration, Instant};
+
+    let deadline = Instant::now() + Duration::from_secs(timeout_secs);
+    let client = DockerClient::new(sock_path);
+
+    eprintln!("Waiting for Speck to be ready (timeout: {timeout_secs}s)...");
+
+    loop {
+        if Instant::now() >= deadline {
+            anyhow::bail!(
+                "timed out after {timeout_secs}s waiting for {} — run `spk logs` for details",
+                sock_path.display()
+            );
+        }
+
+        if client.ping().await {
+            eprintln!("Speck is ready.");
+            return Ok(());
+        }
+
+        eprint!(".");
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1011,5 +1070,97 @@ mod tests {
             !run_up.contains("export SPECK_HOME="),
             "run_up production code must not hardcode `export SPECK_HOME=`; use shell::render_speck_home instead"
         );
+    }
+
+    #[test]
+    fn run_up_includes_console_log_hint_on_ready_timeout() {
+        let source = include_str!("up.rs");
+        let run_up_start = source.find("pub async fn run_up").unwrap();
+        let tests_start = source.find("#[cfg(test)]").unwrap();
+        let run_up = &source[run_up_start..tests_start];
+
+        assert!(
+            run_up.contains("console.log"),
+            "run_up must reference console.log in the GuestReadyTimeout error hint"
+        );
+        assert!(
+            run_up.contains("console_log_hint"),
+            "run_up must bind a console_log_hint and attach it to the wait_for_ready error"
+        );
+    }
+
+    #[test]
+    fn wait_for_socket_is_exported() {
+        let source = include_str!("up.rs");
+        assert!(
+            source.contains("pub async fn wait_for_socket("),
+            "wait_for_socket must be pub async so main.rs can call it after daemonize"
+        );
+    }
+
+    #[test]
+    fn wait_for_socket_uses_ping_method() {
+        let source = include_str!("up.rs");
+        assert!(
+            source.contains("client.ping()"),
+            "wait_for_socket must use DockerClient::ping() to check readiness"
+        );
+    }
+
+    #[test]
+    fn wait_for_socket_prints_timeout_message() {
+        let source = include_str!("up.rs");
+        assert!(
+            source.contains("spk logs"),
+            "wait_for_socket timeout error must direct the user to spk logs"
+        );
+    }
+
+    #[tokio::test]
+    async fn wait_for_socket_times_out_when_socket_absent() {
+        let dir =
+            std::env::temp_dir().join(format!("speck-wait-timeout-{}", std::process::id()));
+        let sock = dir.join("speck.sock");
+
+        let err = wait_for_socket(&sock, 1).await.unwrap_err().to_string();
+
+        assert!(err.contains("timed out after 1s"), "expected timeout, got: {err}");
+        assert!(err.contains("spk logs"), "timeout error must reference spk logs");
+    }
+
+    #[tokio::test]
+    async fn wait_for_socket_succeeds_when_socket_ready() {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+        use tokio::net::UnixListener;
+
+        let dir =
+            std::env::temp_dir().join(format!("speck-wait-ready-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let sock_path = dir.join("speck.sock");
+        let _ = std::fs::remove_file(&sock_path);
+
+        let listener = UnixListener::bind(&sock_path).unwrap();
+        let sock_path_clone = sock_path.clone();
+
+        // Serve a minimal HTTP/1.1 200 OK: read the request first so hyper doesn't
+        // see an empty read before it finishes sending the request headers.
+        tokio::spawn(async move {
+            if let Ok((mut stream, _)) = listener.accept().await {
+                let mut buf = vec![0u8; 4096];
+                let _ = stream.read(&mut buf).await;
+                let _ = stream
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK",
+                    )
+                    .await;
+            }
+        });
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let result = wait_for_socket(&sock_path_clone, 10).await;
+        let _ = std::fs::remove_file(&sock_path_clone);
+
+        assert!(result.is_ok(), "wait_for_socket should succeed when socket serves HTTP 200");
     }
 }

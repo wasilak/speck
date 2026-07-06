@@ -4,6 +4,8 @@ use std::time::Duration;
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncReadExt;
 
+use anstream::println;
+
 use crate::config;
 use crate::docker_client::DockerClient;
 use crate::theme::{GREEN, RED, RESET, YELLOW};
@@ -108,7 +110,10 @@ pub fn check_cert_injection(speck_home: &Path) -> CheckResult {
 
     if app_config.ca.extra_certs.is_empty() {
         return CheckResult::PassWithDetail {
-            detail: "no CA certs configured".into(),
+            detail: format!(
+                "no CA certs configured — add paths to ca.extra_certs in {}/config.yaml",
+                speck_home.display()
+            ),
         };
     }
 
@@ -181,7 +186,7 @@ pub fn check_vpn_dns() -> CheckResult {
     let table = speck_net::read_resolver_table_once();
     if table.is_empty() {
         CheckResult::Skip {
-            reason: "no VPN-scoped resolvers detected (no VPN active)".into(),
+            reason: "no VPN active — connect a VPN to verify split-DNS inheritance".into(),
         }
     } else {
         CheckResult::Pass
@@ -349,6 +354,14 @@ pub async fn run_doctor(speck_home: &Path, args: DoctorArgs) -> anyhow::Result<i
     }
 
     println!("Speck Doctor\n");
+
+    let speck_home_note = if std::env::var("SPECK_HOME").is_ok() {
+        " (from $SPECK_HOME env)"
+    } else {
+        ""
+    };
+    println!("  SPECK_HOME: {}{speck_home_note}", speck_home.display());
+    println!();
 
     let checks: Vec<(&str, CheckResult)> = vec![
         ("codesign entitlement", check_codesign()),

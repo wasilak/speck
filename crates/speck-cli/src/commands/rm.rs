@@ -1,5 +1,7 @@
 use std::path::Path;
 
+use anstream::println;
+
 use crate::RmArgs;
 use crate::docker_client::DockerClient;
 use crate::theme::NEON_CYAN;
