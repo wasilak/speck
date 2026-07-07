@@ -273,6 +273,18 @@ mod tests {
     }
 
     #[test]
+    fn up_args_has_pull_flag() {
+        assert!(
+            MAIN_SOURCE.contains("Force re-download of VM assets even if present on disk"),
+            "UpArgs --pull help text must explain that it refreshes VM assets"
+        );
+        assert!(
+            MAIN_SOURCE.contains("pull: bool"),
+            "UpArgs must expose --pull as a bool flag"
+        );
+    }
+
+    #[test]
     fn env_command_registered() {
         let production = production_source();
         assert!(

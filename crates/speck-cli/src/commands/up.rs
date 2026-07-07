@@ -851,6 +851,100 @@ mod tests {
     }
 
     #[test]
+    fn check_asset_versions_allows_matching_version_files() {
+        let dir = std::env::temp_dir().join(format!(
+            "speck-asset-version-match-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("initrd")).unwrap();
+        std::fs::write(dir.join("rootfs.version"), format!("{ROOTFS_VERSION}\n")).unwrap();
+        std::fs::write(
+            dir.join("initrd/initrd.version"),
+            format!("{INITRD_VERSION}\n"),
+        )
+        .unwrap();
+
+        check_asset_versions(&dir).unwrap();
+    }
+
+    #[test]
+    fn check_asset_versions_rejects_stale_rootfs_with_pull_hint() {
+        let dir = std::env::temp_dir().join(format!(
+            "speck-asset-version-rootfs-stale-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("initrd")).unwrap();
+        std::fs::write(dir.join("rootfs.version"), "0.0.1\n").unwrap();
+        std::fs::write(
+            dir.join("initrd/initrd.version"),
+            format!("{INITRD_VERSION}\n"),
+        )
+        .unwrap();
+
+        let err = check_asset_versions(&dir).unwrap_err().to_string();
+
+        assert!(err.contains("rootfs.version"), "error names stale file: {err}");
+        assert!(err.contains("0.0.1"), "error includes on-disk version: {err}");
+        assert!(
+            err.contains(ROOTFS_VERSION),
+            "error includes required version: {err}"
+        );
+        assert!(err.contains("spk up --pull"), "error includes pull hint: {err}");
+    }
+
+    #[test]
+    fn check_asset_versions_rejects_stale_initrd_with_pull_hint() {
+        let dir = std::env::temp_dir().join(format!(
+            "speck-asset-version-initrd-stale-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("initrd")).unwrap();
+        std::fs::write(dir.join("rootfs.version"), format!("{ROOTFS_VERSION}\n")).unwrap();
+        std::fs::write(dir.join("initrd/initrd.version"), "0.0.1\n").unwrap();
+
+        let err = check_asset_versions(&dir).unwrap_err().to_string();
+
+        assert!(
+            err.contains("initrd/initrd.version"),
+            "error names stale file: {err}"
+        );
+        assert!(err.contains("0.0.1"), "error includes on-disk version: {err}");
+        assert!(
+            err.contains(INITRD_VERSION),
+            "error includes required version: {err}"
+        );
+        assert!(err.contains("spk up --pull"), "error includes pull hint: {err}");
+    }
+
+    #[test]
+    fn run_up_checks_versions_unless_pull_or_full_overrides() {
+        let source = include_str!("up.rs");
+        let run_up_start = source.find("pub async fn run_up").unwrap();
+        let tests_start = source.find("#[cfg(test)]").unwrap();
+        let run_up = &source[run_up_start..tests_start];
+
+        assert!(
+            run_up.contains("check_asset_versions(speck_home)?"),
+            "run_up must check asset versions before ensure_assets"
+        );
+        assert!(
+            run_up.contains("!args.pull"),
+            "--pull must bypass stale version checks"
+        );
+        assert!(
+            run_up.contains("!has_all_overrides"),
+            "full explicit asset overrides must bypass version checks"
+        );
+        assert!(
+            run_up.contains("ensure_assets(speck_home, effective.vm.disk_gb, args.pull).await"),
+            "--pull must force asset refresh through ensure_assets"
+        );
+    }
+
+    #[test]
     fn run_up_no_longer_uses_fixed_512_mib_data_disk_creation() {
         let source = include_str!("up.rs");
         let run_up_start = source.find("pub async fn run_up").unwrap();
