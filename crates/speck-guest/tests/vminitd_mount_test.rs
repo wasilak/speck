@@ -1,24 +1,17 @@
 //! Network-free, root-free mount orchestration tests.
 //!
-//! Uses `mockall::mock!` locally because `#[cfg_attr(test, mockall::automock)]`
+//! Uses `mockall::mock!` locally because `#[cfg_attr(test, mockall::automock)]
 //! on the `Syscalls` trait only generates `MockSyscalls` when compiling the
 //! library with `--cfg test` (unit tests).  Integration tests compile the crate
 //! as a normal dependency where `#[cfg(test)]` is inactive.
 //!
 //! Tests verify the mount ordering and call sequences of the extracted
 //! mount functions without requiring root or a Linux host.
-//!
-//! # GREEN phase
-//!
-//! The mount functions now call `syscalls.mount()` with the expected
-//! arguments.  `mount_disks` is excluded from mock testing because
-//! it calls `grow_data_filesystem_if_needed` which uses real
-//! filesystem paths (`/rootfs/var/lib/containerd`) — it requires a
-//! Linux host to test meaningfully.
 
 use mockall::Sequence;
 use speck_guest::mount::{
-    mount_early_filesystems, mount_rootfs_runtime_filesystems,
+    chroot_into_rootfs, mount_disks, mount_early_filesystems,
+    mount_rootfs_runtime_filesystems,
 };
 use speck_guest::Syscalls;
 
@@ -33,6 +26,7 @@ mockall::mock! {
         fn chroot(&self, path: &[u8]) -> i32;
         fn chdir(&self, path: &[u8]) -> i32;
         fn sysctl_write(&self, name: &str, value: &str) -> Result<(), std::io::Error>;
+        fn grow_filesystem(&self, device: &str, mountpoint: &str) -> Result<(), std::io::Error>;
     }
 }
 
@@ -150,4 +144,103 @@ fn mount_rootfs_runtime_mounts_proc_sys_dev_then_tmpfs_run() {
         .returning(|_, _, _, _| 0);
 
     mount_rootfs_runtime_filesystems(&mock);
+}
+
+// ---------------------------------------------------------------------------
+// Root switch (chroot + chdir) tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn chroot_into_rootfs_calls_chroot_before_chdir() {
+    let mut mock = MockSyscallProxy::new();
+    let mut seq = Sequence::new();
+
+    mock.expect_chroot()
+        .withf(|path| path == b"/rootfs\0")
+        .times(1)
+        .in_sequence(&mut seq)
+        .returning(|_| 0);
+
+    mock.expect_chdir()
+        .withf(|path| path == b"/\0")
+        .times(1)
+        .in_sequence(&mut seq)
+        .returning(|_| 0);
+
+    let result = chroot_into_rootfs(&mock);
+    assert!(result.is_ok());
+}
+
+#[test]
+fn chroot_into_rootfs_returns_error_when_chroot_fails() {
+    let mut mock = MockSyscallProxy::new();
+
+    mock.expect_chroot()
+        .withf(|path| path == b"/rootfs\0")
+        .times(1)
+        .returning(|_| -1);
+
+    // chdir should never be called if chroot fails
+    mock.expect_chdir().never();
+
+    let result = chroot_into_rootfs(&mock);
+    assert!(result.is_err());
+}
+
+#[test]
+fn chroot_into_rootfs_returns_error_when_chdir_fails() {
+    let mut mock = MockSyscallProxy::new();
+
+    mock.expect_chroot()
+        .withf(|path| path == b"/rootfs\0")
+        .times(1)
+        .returning(|_| 0);
+
+    mock.expect_chdir()
+        .withf(|path| path == b"/\0")
+        .times(1)
+        .returning(|_| -1);
+
+    let result = chroot_into_rootfs(&mock);
+    assert!(result.is_err());
+}
+
+// ---------------------------------------------------------------------------
+// Disk mount ordering test (uses mock for grow step)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn mount_disks_mounts_vda_before_vdb_before_grow_before_dirs() {
+    let mut mock = MockSyscallProxy::new();
+    let mut seq = Sequence::new();
+
+    // Expect /dev/vda → /rootfs mount first
+    mock.expect_mount()
+        .withf(|source, target, _, _| {
+            source == b"/dev/vda\0" && target == b"/rootfs\0"
+        })
+        .times(1)
+        .in_sequence(&mut seq)
+        .returning(|_, _, _, _| 0);
+
+    // Expect /dev/vdb → /rootfs/var/lib/containerd mount second
+    mock.expect_mount()
+        .withf(|source, target, _, _| {
+            source == b"/dev/vdb\0" && target == b"/rootfs/var/lib/containerd\0"
+        })
+        .times(1)
+        .in_sequence(&mut seq)
+        .returning(|_, _, _, _| 0);
+
+    // Expect grow_filesystem after mounts succeed
+    mock.expect_grow_filesystem()
+        .withf(|device, mountpoint| {
+            device == "/dev/vdb" && mountpoint == "/rootfs/var/lib/containerd"
+        })
+        .times(1)
+        .in_sequence(&mut seq)
+        .returning(|_, _| Ok(()));
+
+    mount_disks(&mock);
+    // Expectations verified by mockall on drop
 }
