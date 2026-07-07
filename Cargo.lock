@@ -2540,6 +2540,8 @@ name = "speck-guest"
 version = "0.1.0"
 dependencies = [
  "libc",
+ "mockall",
+ "tracing",
 ]
 
 [[package]]
