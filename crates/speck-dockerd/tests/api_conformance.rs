@@ -11,6 +11,7 @@ use bollard::query_parameters::{
 };
 use futures_util::StreamExt;
 use futures_util::TryStreamExt;
+use tokio::net::TcpStream;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -530,8 +531,26 @@ async fn test_port_publish_nginx() {
         .await
         .expect("start nginx");
 
-    // Give nginx a moment to bind its port before cleanup.
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    // Give nginx a moment to bind its port.
+    tokio::time::sleep(Duration::from_secs(3)).await;
+
+    // Verify actual TCP traffic through the published port on the macOS host.
+    // This exercises the full path: host → smoltcp port forwarding → VM → nginx.
+    let mut tcp = TcpStream::connect("127.0.0.1:18080")
+        .await
+        .expect("TCP connect to published port 18080 should succeed");
+
+    use tokio::io::AsyncReadExt;
+    let mut response = Vec::new();
+    tcp.read_to_end(&mut response)
+        .await
+        .expect("read HTTP response from published port");
+
+    let response_str = String::from_utf8_lossy(&response);
+    assert!(
+        response_str.contains("nginx"),
+        "HTTP response from published port should contain 'nginx', got: {response_str:.80}"
+    );
 
     docker
         .remove_container(
@@ -543,8 +562,6 @@ async fn test_port_publish_nginx() {
         )
         .await
         .expect("remove nginx container");
-    // Test passes if create+start succeeded without error — port binding negotiation
-    // completed. Use `curl http://127.0.0.1:18080/` for full round-trip verification.
 }
 
 /// Verify that DNS resolves inside a container, confirming that Speck's host-resolver
