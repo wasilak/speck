@@ -395,6 +395,26 @@ mod tests {
         dir
     }
 
+    // --- Environment-safety guard ---
+
+    #[test]
+    fn no_unsafe_env_mutation() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/src/config.rs");
+        let src = std::fs::read_to_string(path).unwrap();
+        let test_section = src.find("#[cfg(test)]").unwrap_or(0);
+        let test_code = &src[test_section..];
+
+        for op in ["set_var", "remove_var"] {
+            let needle = format!("{}::{}", "std::env", op);
+            assert!(
+                !test_code.contains(&needle),
+                "test code must use temp_env::with_var(s), not raw unsafe {}::{}",
+                "std::env",
+                op,
+            );
+        }
+    }
+
     #[test]
     fn unknown_keys_warn_lenient_strict_rejects() {
         let home = temp_speck_home("unknown-keys");
