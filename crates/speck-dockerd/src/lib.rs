@@ -16,6 +16,7 @@ pub mod middleware;
 pub mod registry_auth;
 pub mod router;
 pub mod server;
+pub mod storage;
 pub mod state;
 pub mod stream;
 
