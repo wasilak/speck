@@ -1,6 +1,7 @@
 use std::fmt;
 
 use base64::Engine;
+use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -96,7 +97,7 @@ mod tests {
     fn test_registry_auth_base64_is_valid_base64() {
         let auth = RegistryAuth {
             username: "user".into(),
-            password: "secret".into(),
+            password: SecretString::from("secret".to_string()),
             server_address: "registry.example.com".into(),
         };
 
@@ -115,7 +116,7 @@ mod tests {
     fn registry_auth_debug_masks_password() {
         let auth = RegistryAuth {
             username: "user".into(),
-            password: "secret".into(),
+            password: SecretString::from("secret".to_string()),
             server_address: "registry.example.com".into(),
         };
 
