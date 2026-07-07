@@ -79,6 +79,11 @@ impl Guest {
         self.thread.connect_dns_vsock(port)
     }
 
+    /// Return the configured vminitd log relay vsock port, if enabled.
+    pub fn log_relay_vsock_port(&self) -> Option<u32> {
+        self.config.log_relay_vsock_port
+    }
+
     pub fn add_port_map(&self, host_port: u16, container_port: u16) -> Result<(), Error> {
         self.thread.add_port_map(host_port, container_port)
     }

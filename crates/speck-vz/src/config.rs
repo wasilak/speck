@@ -109,6 +109,12 @@ pub struct GuestConfig {
     /// Recommended: 9003.
     pub docker_vsock_port: Option<u32>,
 
+    /// Vsock port for the vminitd log relay service.
+    ///
+    /// vminitd listens on this port to relay container stdout and stderr over
+    /// vsock. Recommended: 9005.
+    pub log_relay_vsock_port: Option<u32>,
+
     /// Published TCP port maps (`-p host:container`).
     ///
     /// Each entry spawns a host TcpListener in speck-net after VM start.
@@ -161,6 +167,7 @@ impl Default for GuestConfig {
             buildkitd_vsock_port: None,
             ready_vsock_port: None,
             docker_vsock_port: None,
+            log_relay_vsock_port: None,
             port_maps: Vec::new(),
             volume_mounts: Vec::new(),
             speck_home: default_speck_home(),
@@ -281,6 +288,7 @@ pub struct GuestConfigBuilder {
     buildkitd_vsock_port: Option<u32>,
     ready_vsock_port: Option<u32>,
     docker_vsock_port: Option<u32>,
+    log_relay_vsock_port: Option<u32>,
     port_maps: Vec<PortMapConfig>,
     volume_mounts: Vec<VolumeMountConfig>,
     speck_home: PathBuf,
@@ -306,6 +314,7 @@ impl Default for GuestConfigBuilder {
             buildkitd_vsock_port: None,
             ready_vsock_port: None,
             docker_vsock_port: None,
+            log_relay_vsock_port: None,
             port_maps: Vec::new(),
             volume_mounts: Vec::new(),
             speck_home: default_speck_home(),
@@ -422,6 +431,14 @@ impl GuestConfigBuilder {
         self
     }
 
+    /// Set the vsock port for the vminitd log relay service.
+    ///
+    /// Recommended: 9005.
+    pub fn log_relay_vsock_port(mut self, port: u32) -> Self {
+        self.log_relay_vsock_port = Some(port);
+        self
+    }
+
     /// Add a published TCP port map (`-p host:container`).
     pub fn add_port_map(mut self, config: PortMapConfig) -> Self {
         self.port_maps.push(config);
@@ -484,6 +501,7 @@ impl GuestConfigBuilder {
             buildkitd_vsock_port: self.buildkitd_vsock_port,
             ready_vsock_port: self.ready_vsock_port,
             docker_vsock_port: self.docker_vsock_port,
+            log_relay_vsock_port: self.log_relay_vsock_port,
             port_maps: self.port_maps,
             volume_mounts: self.volume_mounts,
             speck_home: self.speck_home,
