@@ -9,6 +9,7 @@ pub mod buildkit;
 pub mod containerd_client;
 pub mod error;
 pub mod handlers;
+pub mod middleware;
 pub mod registry_auth;
 pub mod router;
 pub mod server;
