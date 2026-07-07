@@ -15,6 +15,7 @@ pub enum VmState {
     Starting,
     Running,
     Stopping,
+    Restarting,
     Error(String),
 }
 
@@ -56,6 +57,12 @@ mod tests {
     fn vm_state_partial_eq() {
         assert_eq!(VmState::Running, VmState::Running);
         assert_ne!(VmState::Error("x".into()), VmState::Running);
+    }
+
+    #[test]
+    fn restarting_variant_exists() {
+        let _r = VmState::Restarting;
+        assert_ne!(VmState::Restarting, VmState::Running);
     }
 
     #[test]

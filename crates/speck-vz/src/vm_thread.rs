@@ -160,6 +160,7 @@ pub enum InternalState {
     Starting,
     Running,
     Stopping,
+    Restarting,
 }
 
 impl From<InternalState> for speck_core::VmState {
@@ -169,6 +170,7 @@ impl From<InternalState> for speck_core::VmState {
             InternalState::Starting => speck_core::VmState::Starting,
             InternalState::Running => speck_core::VmState::Running,
             InternalState::Stopping => speck_core::VmState::Stopping,
+            InternalState::Restarting => speck_core::VmState::Restarting,
         }
     }
 }
