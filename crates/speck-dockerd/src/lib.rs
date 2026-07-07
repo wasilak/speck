@@ -38,7 +38,23 @@ impl SpeckDockerd {
         let containerd_proxy_path = guest
             .containerd_unix_proxy()
             .map_err(|err| DockerApiError::Internal(err.to_string()))?;
-        let state = state::AppState::with_containerd_proxy(guest, containerd_proxy_path);
+
+        let speck_home = sock_path
+            .parent()
+            .ok_or_else(|| DockerApiError::Internal("sock_path has no parent directory".into()))?;
+        let storage_dir = speck_home.join("data");
+        std::fs::create_dir_all(&storage_dir)
+            .map_err(|e| DockerApiError::Internal(format!("create storage dir: {e}")))?;
+        let storage_path = storage_dir.join("docker-state.db");
+        let storage = storage::Storage::open(&storage_path)?;
+        tracing::info!(path = %storage_path.display(), "SQLite Docker state storage initialized");
+
+        let reconciled = storage.reconcile_execs()?;
+        if reconciled > 0 {
+            tracing::info!(count = reconciled, "reconciled exec sessions on startup");
+        }
+
+        let state = state::AppState::with_storage(guest, containerd_proxy_path, storage);
         let router = router::build_router(state)
             .layer(RestartCheckLayer::new(vm_state));
         let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
