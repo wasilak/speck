@@ -17,6 +17,7 @@ pub struct AppState {
     pub network_store: Arc<tokio::sync::Mutex<HashMap<String, NetworkSummary>>>,
     pub volume_store: Arc<tokio::sync::Mutex<HashMap<String, VolumeSummary>>>,
     pub event_tx: Arc<tokio::sync::broadcast::Sender<serde_json::Value>>,
+    pub storage: Arc<tokio::sync::Mutex<crate::storage::Storage>>,
 }
 
 #[derive(Default)]
@@ -64,6 +65,7 @@ impl ExecStore {
 
 impl AppState {
     pub fn new(guest: Arc<speck_vz::Guest>) -> Self {
+        let storage = crate::storage::Storage::open(":memory:").expect("in-memory storage");
         Self {
             guest,
             containerd_proxy: Arc::new(tokio::sync::Mutex::new(None)),
@@ -71,10 +73,12 @@ impl AppState {
             network_store: Arc::new(tokio::sync::Mutex::new(default_networks())),
             volume_store: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             event_tx: Arc::new(tokio::sync::broadcast::channel(256).0),
+            storage: Arc::new(tokio::sync::Mutex::new(storage)),
         }
     }
 
     pub fn with_containerd_proxy(guest: Arc<speck_vz::Guest>, path: PathBuf) -> Self {
+        let storage = crate::storage::Storage::open(":memory:").expect("in-memory storage");
         Self {
             guest,
             containerd_proxy: Arc::new(tokio::sync::Mutex::new(Some(path))),
@@ -82,6 +86,37 @@ impl AppState {
             network_store: Arc::new(tokio::sync::Mutex::new(default_networks())),
             volume_store: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             event_tx: Arc::new(tokio::sync::broadcast::channel(256).0),
+            storage: Arc::new(tokio::sync::Mutex::new(storage)),
+        }
+    }
+
+    pub fn with_storage(
+        guest: Arc<speck_vz::Guest>,
+        path: PathBuf,
+        storage: crate::storage::Storage,
+    ) -> Self {
+        let volumes = storage.load_volumes().unwrap_or_default();
+        let networks = {
+            let mut nets = default_networks();
+            match storage.load_networks() {
+                Ok(loaded) => nets.extend(loaded),
+                Err(e) => tracing::warn!(error = %e, "failed to load networks from storage; using defaults"),
+            }
+            nets
+        };
+        tracing::info!(
+            volumes = volumes.len(),
+            networks = networks.len(),
+            "loaded persisted Docker state from storage"
+        );
+        Self {
+            guest,
+            containerd_proxy: Arc::new(tokio::sync::Mutex::new(Some(path))),
+            exec_store: Arc::new(tokio::sync::Mutex::new(ExecStore::default())),
+            network_store: Arc::new(tokio::sync::Mutex::new(networks)),
+            volume_store: Arc::new(tokio::sync::Mutex::new(volumes)),
+            event_tx: Arc::new(tokio::sync::broadcast::channel(256).0),
+            storage: Arc::new(tokio::sync::Mutex::new(storage)),
         }
     }
 
