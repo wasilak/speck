@@ -1227,6 +1227,22 @@ mod tests {
     }
 
     #[test]
+    fn console_log_hint_includes_exact_speck_home_path() {
+        let dir = std::env::temp_dir().join(format!(
+            "speck-console-hint-{}",
+            std::process::id()
+        ));
+        let hint = console_log_hint(&dir);
+        let expected_path = dir.join("console.log");
+
+        assert!(
+            hint.contains(&expected_path.display().to_string()),
+            "hint must include exact console log path {}; got {hint}",
+            expected_path.display()
+        );
+    }
+
+    #[test]
     fn wait_for_socket_is_exported() {
         let source = include_str!("up.rs");
         assert!(
