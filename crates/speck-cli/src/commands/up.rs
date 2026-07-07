@@ -182,6 +182,13 @@ fn check_asset_versions(speck_home: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn console_log_hint(speck_home: &Path) -> String {
+    format!(
+        "check {} for guest boot messages",
+        speck_home.join("console.log").display()
+    )
+}
+
 /// Download the Kata Containers kernel + initrd from GitHub Releases and
 /// place them under `speck_home/kernel/` and `speck_home/initrd/`.
 async fn fetch_kata_assets(speck_home: &Path) -> anyhow::Result<()> {
@@ -630,7 +637,7 @@ pub async fn run_up(
     spinner.set_message("Starting VM...");
     spinner.enable_steady_tick(std::time::Duration::from_millis(100));
 
-    let console_log_hint = format!("check {} for guest boot messages", speck_home.join("console.log").display());
+    let console_log_hint = console_log_hint(speck_home);
     let spinner_for_start = spinner.clone();
     let guest = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
         guest.start().context("failed to start VM")?;
@@ -1217,8 +1224,8 @@ mod tests {
         let run_up = &source[run_up_start..tests_start];
 
         assert!(
-            run_up.contains("console.log"),
-            "run_up must reference console.log in the GuestReadyTimeout error hint"
+            run_up.contains("console_log_hint(speck_home)"),
+            "run_up must build the GuestReadyTimeout hint from speck_home"
         );
         assert!(
             run_up.contains("console_log_hint"),
