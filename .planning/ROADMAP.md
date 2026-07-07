@@ -32,7 +32,7 @@ Full details: `.planning/milestones/v1.1-ROADMAP.md`
 
 - [x] **Phase 15: Stability Foundation** — Unit-test seams for DNS proxy and vminitd; console log, version check, unsafe sweep, secret wrapping (completed 2026-07-07)
 - [ ] **Phase 16: Daemon Polish** — Reliable `spk down` via PID fallback; first-class `spk restart`; port and exec verified end-to-end
-- [ ] **Phase 17: testcontainers Conformance** — SpeckDockerd wired as intercepting layer; SQLite state persistence; Docker API conformance tests pass
+- [x] **Phase 17: testcontainers Conformance** — SpeckDockerd wired as intercepting layer; SQLite state persistence; Docker API conformance tests pass (completed 2026-07-07)
 - [ ] **Phase 18: Developer ID Distribution** — Developer ID signing + notarytool + `.pkg` + Homebrew Cask
 
 ---
@@ -106,7 +106,7 @@ Plans:
 - [x] 17-03-PLAN.md — Persist port bindings; inject into container inspect response
 - [x] 17-04-PLAN.md — Real container log output through encode_frame multiplexing
 - [x] 17-05-PLAN.md — Wire SpeckDockerd as production layer; fix image_push + network validation
-- [ ] 17-06-PLAN.md — Enable three bollard conformance tests
+- [x] 17-06-PLAN.md — Enable three bollard conformance tests
 
 ### Phase 18: Developer ID Distribution
 
@@ -145,5 +145,5 @@ Plans:
 | 14. Homebrew Distribution | v1.1 | 3/3 | Complete | 2026-07-06 |
 | 15. Stability Foundation | v1.2 | 8/8 | Complete   | 2026-07-07 |
 | 16. Daemon Polish | v1.2 | 3/5 | In Progress|  |
-| 17. testcontainers Conformance | v1.2 | 5/6 | In Progress|  |
+| 17. testcontainers Conformance | v1.2 | 6/6 | Complete   | 2026-07-07 |
 | 18. Developer ID Distribution | v1.2 | 0/TBD | Not started | — |
