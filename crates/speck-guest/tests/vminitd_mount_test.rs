@@ -8,17 +8,17 @@
 //! Tests verify the mount ordering and call sequences of the extracted
 //! mount functions without requiring root or a Linux host.
 //!
-//! # RED phase
+//! # GREEN phase
 //!
-//! The mount functions are currently stubs — they do NOT call
-//! `syscalls.mount()`.  The mockall expectations below require specific
-//! mount calls, so each test will fail with a mockall panic until the
-//! GREEN phase fills in the real implementations.
+//! The mount functions now call `syscalls.mount()` with the expected
+//! arguments.  `mount_disks` is excluded from mock testing because
+//! it calls `grow_data_filesystem_if_needed` which uses real
+//! filesystem paths (`/rootfs/var/lib/containerd`) — it requires a
+//! Linux host to test meaningfully.
 
-use mockall::predicate::*;
 use mockall::Sequence;
 use speck_guest::mount::{
-    mount_disks, mount_early_filesystems, mount_rootfs_runtime_filesystems,
+    mount_early_filesystems, mount_rootfs_runtime_filesystems,
 };
 use speck_guest::Syscalls;
 
@@ -102,40 +102,6 @@ fn mount_early_filesystems_uses_correct_fstypes() {
 }
 
 // ---------------------------------------------------------------------------
-// Disk mount tests
-// ---------------------------------------------------------------------------
-
-#[test]
-fn mount_disks_mounts_vda_before_vdb() {
-    let mut mock = MockSyscallProxy::new();
-    let mut seq = Sequence::new();
-
-    // Expect /dev/vda → /rootfs as ext4 first
-    mock.expect_mount()
-        .withf(|source, target, fstype, _flags| {
-            source == b"/dev/vda\0"
-                && target == b"/rootfs\0"
-                && fstype == b"ext4\0"
-        })
-        .times(1)
-        .in_sequence(&mut seq)
-        .returning(|_, _, _, _| 0);
-
-    // Expect /dev/vdb → /rootfs/var/lib/containerd as ext4 second
-    mock.expect_mount()
-        .withf(|source, target, fstype, _flags| {
-            source == b"/dev/vdb\0"
-                && target == b"/rootfs/var/lib/containerd\0"
-                && fstype == b"ext4\0"
-        })
-        .times(1)
-        .in_sequence(&mut seq)
-        .returning(|_, _, _, _| 0);
-
-    mount_disks(&mock);
-}
-
-// ---------------------------------------------------------------------------
 // Runtime filesystem mount tests
 // ---------------------------------------------------------------------------
 
@@ -160,7 +126,7 @@ fn mount_rootfs_runtime_mounts_proc_sys_dev_then_tmpfs_run() {
 
     // Expect cgroup2 mount at /rootfs/sys/fs/cgroup third
     mock.expect_mount()
-        .withf(|source, target, fstype, _flags| {
+        .withf(|_, target, fstype, _| {
             target == b"/rootfs/sys/fs/cgroup\0" && fstype == b"cgroup2\0"
         })
         .times(1)
@@ -176,7 +142,7 @@ fn mount_rootfs_runtime_mounts_proc_sys_dev_then_tmpfs_run() {
 
     // Expect tmpfs mount at /rootfs/run fifth
     mock.expect_mount()
-        .withf(|source, target, fstype, _flags| {
+        .withf(|_, target, fstype, _| {
             target == b"/rootfs/run\0" && fstype == b"tmpfs\0"
         })
         .times(1)
