@@ -27,6 +27,8 @@ enum Commands {
     Up(UpArgs),
     /// Stop the Speck VM
     Down,
+    /// Restart the Speck VM (graceful stop then fresh start)
+    Restart,
     /// Pull an image and run a container
     Run(RunArgs),
     /// List running containers
@@ -442,6 +444,26 @@ mod tests {
             "Commands::Up must exit with code 1 when wait_for_socket times out"
         );
     }
+
+    #[test]
+    fn restart_command_registered() {
+        let production = production_source();
+        assert!(
+            production.contains("Restart"),
+            "spk restart subcommand must be registered as a variant in the Commands enum"
+        );
+    }
+
+    #[test]
+    fn restart_command_dispatched() {
+        let main_fn = &MAIN_SOURCE[MAIN_SOURCE
+            .rfind("async fn main()")
+            .expect("main.rs must define async main")..];
+        assert!(
+            main_fn.contains("commands::restart::run_restart"),
+            "the restart subcommand dispatch arm must invoke the run_restart entrypoint"
+        );
+    }
 }
 
 #[tokio::main]
@@ -485,6 +507,10 @@ async fn main() -> anyhow::Result<()> {
         Commands::Down => {
             init_tracing(&default_tracing_filter())?;
             commands::down::run_down(&speck_home).await?
+        }
+        Commands::Restart => {
+            init_tracing(&default_tracing_filter())?;
+            commands::restart::run_restart(&speck_home).await?
         }
         Commands::Run(args) => {
             init_tracing(&default_tracing_filter())?;

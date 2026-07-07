@@ -9,6 +9,7 @@ pub mod init;
 pub mod logging;
 pub mod logs;
 pub mod ps;
+pub mod restart;
 pub mod rm;
 pub mod run;
 pub mod status;
