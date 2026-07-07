@@ -20,12 +20,12 @@ fn main() {
 #[cfg(target_os = "linux")]
 mod linux {
 
-    use std::io;
+    use speck_guest::LibcSyscalls;
     use speck_guest::mount::{
         chroot_into_rootfs, configure_sysctl_params, mount_disks, mount_early_filesystems,
         mount_rootfs_runtime_filesystems,
     };
-    use speck_guest::LibcSyscalls;
+    use std::io;
 
     pub(super) fn main() {
         let libc_syscalls = LibcSyscalls;
@@ -39,6 +39,7 @@ mod linux {
         let dns_port = parse_cmdline_dns_port("/proc/cmdline");
         let ready_port = parse_cmdline_ready_vsock_port("/proc/cmdline").unwrap_or(9000);
         let docker_port = parse_cmdline_docker_vsock_port("/proc/cmdline").unwrap_or(9003);
+        let log_relay_port = parse_cmdline_log_relay_vsock_port("/proc/cmdline");
         let guest_ip = parse_cmdline_guest_ip("/proc/cmdline");
         let gateway = parse_cmdline_gateway("/proc/cmdline");
         eprintln!("vminitd: docker_port={docker_port}");
@@ -127,6 +128,27 @@ mod linux {
         }
         eprintln!("vminitd: dockerd socket ready");
 
+        if let Some(port) = log_relay_port {
+            let (ready_tx, ready_rx) = std::sync::mpsc::channel::<io::Result<()>>();
+            std::thread::spawn(move || {
+                if let Err(e) = speck_guest::log_relay::serve_with_ready(port, ready_tx) {
+                    eprintln!("vminitd: log relay error: {e}");
+                }
+            });
+
+            match ready_rx.recv() {
+                Ok(Ok(())) => eprintln!("vminitd: log relay ready on vsock port {port}"),
+                Ok(Err(e)) => {
+                    eprintln!("vminitd: log relay failed to start before READY: {e}");
+                    std::process::exit(1);
+                }
+                Err(e) => {
+                    eprintln!("vminitd: log relay readiness channel closed before READY: {e}");
+                    std::process::exit(1);
+                }
+            }
+        }
+
         send_ready_signal(ready_port);
 
         // Forward dockerd's Unix socket over vsock port 9003.
@@ -214,6 +236,17 @@ mod linux {
         let content = std::fs::read_to_string(path).ok()?;
         for word in content.split_whitespace() {
             if let Some(port_str) = word.strip_prefix("docker_vsock_port=") {
+                return port_str.parse::<u32>().ok();
+            }
+        }
+        None
+    }
+
+    /// Parse `log_relay_vsock_port=PORT` from the kernel command line.
+    fn parse_cmdline_log_relay_vsock_port(path: &str) -> Option<u32> {
+        let content = std::fs::read_to_string(path).ok()?;
+        for word in content.split_whitespace() {
+            if let Some(port_str) = word.strip_prefix("log_relay_vsock_port=") {
                 return port_str.parse::<u32>().ok();
             }
         }
