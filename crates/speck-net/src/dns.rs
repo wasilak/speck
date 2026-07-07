@@ -363,6 +363,61 @@ fn build_servfail_response(query_header: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::resolver_table::ResolverTable;
+
+    #[test]
+    fn system_resolver_is_send_sync() {
+        // Verify SystemResolver satisfies the Resolver supertrait bounds.
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<SystemResolver>();
+    }
+
+    #[test]
+    fn resolve_with_table_calls_resolve_on_default_path() {
+        let mut mock = MockResolver::new();
+        mock.expect_resolve()
+            .with(
+                mockall::predicate::eq("example.com"),
+                mockall::predicate::always(),
+            )
+            .returning(|_, _| Some(vec![0u8; 12]));
+        mock.expect_direct_query()
+            .returning(|_, _| Some(vec![0u8; 12]));
+
+        let table = ResolverTable::default();
+        let result = resolve_with_table(&mock, &table, "example.com", b"\x00\x01");
+        assert!(!result.is_empty());
+    }
+
+    #[test]
+    fn resolve_with_table_calls_direct_query_on_vpn_path() {
+        let mut mock = MockResolver::new();
+        let ns: std::net::IpAddr = "1.2.3.4".parse().unwrap();
+        mock.expect_direct_query()
+            .with(
+                mockall::predicate::eq(ns),
+                mockall::predicate::always(),
+            )
+            .returning(|_, _| Some(vec![0u8; 12]));
+
+        let mut table = ResolverTable::default();
+        table.add_entry("corp.example".to_string(), vec![ns]);
+        let result = resolve_with_table(&mock, &table, "host.corp.example", b"\x00\x01");
+        assert!(!result.is_empty());
+    }
+
+    #[test]
+    fn resolve_with_table_falls_back_to_servfail_when_resolve_returns_none() {
+        let mut mock = MockResolver::new();
+        mock.expect_resolve()
+            .returning(|_, _| None);
+
+        let table = ResolverTable::default();
+        let result = resolve_with_table(&mock, &table, "example.com", b"\x00\x01");
+        // SERVFAIL header: bytes [2..4] = 0x81 0x82
+        assert_eq!(result.len(), 12);
+        assert_eq!(result[3] & 0x0f, 2);
+    }
 
     #[test]
     fn nxdomain_to_servfail_rewrites_rcode() {
