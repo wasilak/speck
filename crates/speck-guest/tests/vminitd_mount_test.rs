@@ -10,7 +10,7 @@
 
 use mockall::Sequence;
 use speck_guest::mount::{
-    chroot_into_rootfs, mount_disks, mount_early_filesystems,
+    chroot_into_rootfs, configure_sysctl_params, mount_disks, mount_early_filesystems,
     mount_rootfs_runtime_filesystems,
 };
 use speck_guest::Syscalls;
@@ -243,4 +243,50 @@ fn mount_disks_mounts_vda_before_vdb_before_grow_before_dirs() {
 
     mount_disks(&mock);
     // Expectations verified by mockall on drop
+}
+
+// ---------------------------------------------------------------------------
+// Sysctl parameter configuration tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn configure_sysctl_params_writes_ip_forward_before_userns() {
+    let mut mock = MockSyscallProxy::new();
+    let mut seq = Sequence::new();
+
+    // Expect net.ipv4.ip_forward first
+    mock.expect_sysctl_write()
+        .withf(|name, value| name == "net.ipv4.ip_forward" && value == "1")
+        .times(1)
+        .in_sequence(&mut seq)
+        .returning(|_, _| Ok(()));
+
+    // Expect kernel.unprivileged_userns_clone second
+    mock.expect_sysctl_write()
+        .withf(|name, value| name == "kernel.unprivileged_userns_clone" && value == "1")
+        .times(1)
+        .in_sequence(&mut seq)
+        .returning(|_, _| Ok(()));
+
+    let result = configure_sysctl_params(&mock);
+    assert!(result.is_ok());
+}
+
+#[test]
+fn configure_sysctl_params_propagates_first_error() {
+    let mut mock = MockSyscallProxy::new();
+
+    // First sysctl_write fails
+    mock.expect_sysctl_write()
+        .withf(|name, _| name == "net.ipv4.ip_forward")
+        .times(1)
+        .returning(|_, _| Err(std::io::Error::new(std::io::ErrorKind::Other, "test error")));
+
+    // Second should never be called
+    mock.expect_sysctl_write()
+        .withf(|name, _| name == "kernel.unprivileged_userns_clone")
+        .never();
+
+    let result = configure_sysctl_params(&mock);
+    assert!(result.is_err());
 }
