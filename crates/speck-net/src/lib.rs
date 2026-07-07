@@ -1,7 +1,7 @@
 pub mod config;
 pub mod device;
 pub(crate) mod dhcp;
-pub(crate) mod dns;
+pub mod dns;
 pub mod error;
 pub mod interface;
 pub mod mtu;
@@ -65,7 +65,11 @@ impl SpeckNet {
         let mut handles = Vec::new();
 
         if let Some(vfd) = vsock_fd {
-            handles.push(dns::spawn_dns_proxy(vfd, resolver_rx));
+            handles.push(dns::spawn_dns_proxy(
+                vfd,
+                resolver_rx,
+                std::sync::Arc::new(dns::SystemResolver),
+            ));
         }
 
         handles.push(tokio::task::spawn(async move {

@@ -75,6 +75,7 @@ pub fn resolve_with_table(
 pub fn spawn_dns_proxy(
     vsock_fd: RawFd,
     mut resolver_rx: tokio::sync::watch::Receiver<crate::resolver_table::ResolverTable>,
+    resolver: std::sync::Arc<dyn Resolver>,
 ) -> tokio::task::JoinHandle<std::result::Result<(), error::Error>> {
     tokio::task::spawn_blocking(move || {
         // Ensure the fd is in blocking mode — VZ framework may return non-blocking fds.
@@ -129,26 +130,11 @@ pub fn spawn_dns_proxy(
             let qname = extract_qname(&buf[..query_len]);
             tracing::debug!(domain = ?qname, "dns-proxy resolving");
             let current_table = resolver_rx.borrow_and_update().clone();
-            let response = if let Some(domain) = qname {
-                if let Some(servers) = current_table.find_resolver(&domain) {
-                    // VPN-scoped path: direct UDP to first VPN nameserver (DNS-04)
-                    let mut resp = servers
-                        .iter()
-                        .find_map(|&ns| direct_dns_query(ns, &buf[..query_len]))
-                        .unwrap_or_else(|| build_servfail_response(&buf[..query_len]));
-                    translate_nxdomain_to_servfail(&mut resp);
-                    Some(resp)
-                } else {
-                    // Default path: macOS system resolver via getaddrinfo (DNS-02, DNS-03)
-                    resolve_dns(&domain, &buf[..query_len])
-                }
-            } else {
-                None
-            };
-
-            let to_send = if let Some(resp_bytes) = response {
-                tracing::debug!(bytes = resp_bytes.len(), "dns-proxy resolved ok");
-                resp_bytes
+            let to_send = if let Some(domain) = qname {
+                let response =
+                    resolve_with_table(resolver.as_ref(), &current_table, &domain, &buf[..query_len]);
+                tracing::debug!(bytes = response.len(), "dns-proxy resolved ok");
+                response
             } else {
                 tracing::debug!(fd = vsock_fd, "dns-proxy resolve failed, sending SERVFAIL");
                 build_servfail_response(&buf[..query_len])
