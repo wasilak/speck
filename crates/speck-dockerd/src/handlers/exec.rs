@@ -70,7 +70,8 @@ pub async fn create(
         })
         .await?;
 
-    if let Ok(storage) = state.storage.lock() {
+    {
+        let storage = state.storage.lock().await;
         if let Err(e) = storage.save_exec(&spec) {
             tracing::warn!(error = ?e, exec_id = %exec_id, "failed to persist exec session to SQLite");
         }
@@ -106,7 +107,8 @@ pub async fn start(
         .lock()
         .await
         .update(&id, running_spec.clone());
-    if let Ok(storage) = state.storage.lock() {
+    {
+        let storage = state.storage.lock().await;
         if let Err(e) = storage.update_exec(&running_spec) {
             tracing::warn!(error = ?e, exec_id = %running_spec.id, "failed to update exec session in SQLite");
         }

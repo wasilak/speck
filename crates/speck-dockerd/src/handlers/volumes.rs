@@ -37,11 +37,11 @@ pub async fn volume_create(
         .lock()
         .await
         .insert(volume.name.clone(), volume.clone());
-    if let Ok(storage) = state.storage.lock() {
-        if let Err(e) = storage.save_volume(&volume) {
-            tracing::warn!(error = ?e, volume = %volume.name, "failed to persist volume to SQLite");
-        }
+    let storage = state.storage.lock().await;
+    if let Err(e) = storage.save_volume(&volume) {
+        tracing::warn!(error = ?e, volume = %volume.name, "failed to persist volume to SQLite");
     }
+    drop(storage);
     Ok((StatusCode::CREATED, Json(volume)))
 }
 
@@ -59,10 +59,9 @@ pub async fn volume_inspect(
 
 pub async fn volume_remove(State(state): State<AppState>, Path(name): Path<String>) -> StatusCode {
     state.volume_store.lock().await.remove(&name);
-    if let Ok(storage) = state.storage.lock() {
-        if let Err(e) = storage.delete_volume(&name) {
-            tracing::warn!(error = ?e, volume = %name, "failed to delete volume from SQLite");
-        }
+    let storage = state.storage.lock().await;
+    if let Err(e) = storage.delete_volume(&name) {
+        tracing::warn!(error = ?e, volume = %name, "failed to delete volume from SQLite");
     }
     StatusCode::NO_CONTENT
 }

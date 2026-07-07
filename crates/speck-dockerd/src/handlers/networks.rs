@@ -46,11 +46,11 @@ pub async fn network_create(
         .lock()
         .await
         .insert(id.clone(), network.clone());
-    if let Ok(storage) = state.storage.lock() {
-        if let Err(e) = storage.save_network(&network) {
-            tracing::warn!(error = ?e, network = %network.name, "failed to persist network to SQLite");
-        }
+    let storage = state.storage.lock().await;
+    if let Err(e) = storage.save_network(&network) {
+        tracing::warn!(error = ?e, network = %network.name, "failed to persist network to SQLite");
     }
+    drop(storage);
     crate::handlers::events::emit_event(
         &state,
         json!({"Type": "network", "Action": "create", "Actor": {"ID": id, "Attributes": {"name": network.name}}}),
@@ -89,10 +89,9 @@ pub async fn network_remove(State(state): State<AppState>, Path(id): Path<String
     }
     drop(networks);
     if let Some(remove_id) = remove_id {
-        if let Ok(storage) = state.storage.lock() {
-            if let Err(e) = storage.delete_network(&remove_id) {
-                tracing::warn!(error = ?e, network = %remove_id, "failed to delete network from SQLite");
-            }
+        let storage = state.storage.lock().await;
+        if let Err(e) = storage.delete_network(&remove_id) {
+            tracing::warn!(error = ?e, network = %remove_id, "failed to delete network from SQLite");
         }
     }
     StatusCode::NO_CONTENT
