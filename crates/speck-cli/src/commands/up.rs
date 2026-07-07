@@ -1,9 +1,11 @@
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Arc;
 
 use anyhow::Context as _;
 use indicatif::ProgressBar;
+use speck_dockerd::SpeckDockerd;
 use speck_net::config::NetworkConfig;
 use speck_vz::config::GuestConfig;
 use tokio::io::AsyncWriteExt;
@@ -535,6 +537,7 @@ pub async fn run_up(
     })
     .await
     .context("VM startup task failed")??;
+    let guest = Arc::new(guest);
 
     write_vm_resource_snapshot(speck_home, &effective.vm)?;
 
@@ -583,9 +586,11 @@ pub async fn run_up(
         });
     }
 
-    spinner.set_message("Starting Docker API proxy...");
+    spinner.set_message("Starting Docker API server...");
     let sock_path = speck_home.join("speck.sock");
-    let _docker_proxy_path = guest.docker_api_unix_proxy(sock_path.clone())?;
+    let _dockerd = SpeckDockerd::start(guest.clone(), sock_path.clone())
+        .context("failed to start Docker API server")?;
+    tracing::info!("Docker API server started at {}", sock_path.display());
 
     spinner.finish_with_message(format!("{NEON_CYAN}Speck is running{RESET}"));
 
@@ -634,7 +639,7 @@ pub async fn run_up(
 }
 
 async fn shutdown_gracefully(
-    guest: &speck_vz::Guest,
+    guest: &Arc<speck_vz::Guest>,
     sock_path: &Path,
     speck_home: &Path,
 ) -> anyhow::Result<()> {
