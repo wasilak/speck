@@ -433,6 +433,7 @@ mod tests {
             memory: None,
             disk: None,
             foreground: false,
+            pull: false,
             wait: false,
             timeout: 300,
         };
@@ -471,6 +472,7 @@ mod tests {
             memory: Some(2048),
             disk: Some(20),
             foreground: false,
+            pull: false,
             wait: false,
             timeout: 300,
         };
@@ -568,6 +570,7 @@ mod tests {
             memory: None,
             disk: None,
             foreground: false,
+            pull: false,
             wait: false,
             timeout: 300,
         }

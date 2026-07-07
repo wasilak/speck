@@ -73,6 +73,9 @@ struct UpArgs {
     disk: Option<u64>,
     #[arg(long)]
     foreground: bool,
+    /// Force re-download of VM assets even if present on disk
+    #[arg(long)]
+    pull: bool,
     /// Block until the Docker socket responds to GET /_ping with HTTP 200
     #[arg(long)]
     wait: bool,

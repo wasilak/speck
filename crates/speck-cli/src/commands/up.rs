@@ -111,7 +111,11 @@ pub fn daemonize(speck_home: &Path, binary: &Path) -> anyhow::Result<()> {
 ///
 /// This makes `spk up` self-bootstrapping: first run works with no separate
 /// init step, exactly like `colima start`.
-async fn ensure_assets(speck_home: &Path, requested_disk_gb: u64) -> anyhow::Result<()> {
+async fn ensure_assets(
+    speck_home: &Path,
+    requested_disk_gb: u64,
+    force_refresh: bool,
+) -> anyhow::Result<()> {
     std::fs::create_dir_all(speck_home.join("kernel"))?;
     std::fs::create_dir_all(speck_home.join("initrd"))?;
 
@@ -120,26 +124,60 @@ async fn ensure_assets(speck_home: &Path, requested_disk_gb: u64) -> anyhow::Res
     let rootfs = speck_home.join("rootfs.img");
     let data = speck_home.join("data.img");
 
-    if !kernel.exists() || !initrd.exists() {
+    if force_refresh || !kernel.exists() || !initrd.exists() {
         fetch_kata_assets(speck_home)
             .await
             .context("failed to download kernel + initrd")?;
     }
 
     let custom_initrd = speck_home.join("initrd/initrd.cpio.gz");
-    if !custom_initrd.exists() {
+    if force_refresh || !custom_initrd.exists() {
         fetch_initrd(speck_home)
             .await
             .context("failed to download initrd")?;
     }
 
-    if !rootfs.exists() {
+    if force_refresh || !rootfs.exists() {
         fetch_rootfs(speck_home)
             .await
             .context("failed to download rootfs")?;
     }
 
     reconcile_data_disk(&data, requested_disk_gb).context("failed to reconcile data disk")?;
+
+    Ok(())
+}
+
+fn check_asset_version_file(
+    path: &Path,
+    asset_name: &str,
+    required_version: &str,
+) -> anyhow::Result<()> {
+    if !path.exists() {
+        return Ok(());
+    }
+
+    let on_disk_version = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read {}", path.display()))?
+        .trim()
+        .to_owned();
+
+    anyhow::ensure!(
+        on_disk_version == required_version,
+        "stale {asset_name} asset version at {}: found {on_disk_version}, required {required_version}; run `spk up --pull` to refresh VM assets",
+        path.display()
+    );
+
+    Ok(())
+}
+
+fn check_asset_versions(speck_home: &Path) -> anyhow::Result<()> {
+    check_asset_version_file(&speck_home.join("rootfs.version"), "rootfs", ROOTFS_VERSION)?;
+    check_asset_version_file(
+        &speck_home.join("initrd/initrd.version"),
+        "initrd",
+        INITRD_VERSION,
+    )?;
 
     Ok(())
 }
@@ -235,6 +273,7 @@ async fn fetch_initrd(speck_home: &Path) -> anyhow::Result<()> {
     }
 
     std::fs::rename(&tmp, &dest)?;
+    std::fs::write(speck_home.join("initrd/initrd.version"), format!("{INITRD_VERSION}\n"))?;
     println!("  Initrd ready: {}", dest.display());
     Ok(())
 }
@@ -329,6 +368,7 @@ async fn fetch_rootfs(speck_home: &Path) -> anyhow::Result<()> {
     // On checksum mismatch, remove the corrupted tmp file.
     // On success, atomically rename to final path.
     std::fs::rename(&tmp, &dest)?;
+    std::fs::write(speck_home.join("rootfs.version"), format!("{ROOTFS_VERSION}\n"))?;
     println!("  Rootfs ready: {}", dest.display());
     Ok(())
 }
@@ -511,7 +551,10 @@ pub async fn run_up(
         && args.rootfs.is_some()
         && args.data_disk.is_some();
     if !has_all_overrides {
-        ensure_assets(speck_home, effective.vm.disk_gb).await?;
+        if !args.pull {
+            check_asset_versions(speck_home)?;
+        }
+        ensure_assets(speck_home, effective.vm.disk_gb, args.pull).await?;
     }
 
     let kernel_path = args
@@ -951,7 +994,7 @@ mod tests {
         let tests_start = source.find("#[cfg(test)]").unwrap();
         let run_up = &source[run_up_start..tests_start];
 
-        assert!(run_up.contains("ensure_assets(speck_home, effective.vm.disk_gb).await"));
+        assert!(run_up.contains("ensure_assets(speck_home, effective.vm.disk_gb, args.pull).await"));
         assert!(!run_up.contains("create_data_disk"));
         assert!(!run_up.contains("count=512"));
     }
