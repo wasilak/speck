@@ -4,6 +4,9 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::RwLock;
+
+use speck_core::VmState;
 
 pub mod buildkit;
 pub mod containerd_client;
@@ -18,18 +21,25 @@ pub mod stream;
 
 pub use error::{DockerApiError, Result};
 
+use crate::middleware::restart_503::RestartCheckLayer;
+
 pub struct SpeckDockerd {
     sock_path: PathBuf,
     shutdown_tx: tokio::sync::watch::Sender<bool>,
 }
 
 impl SpeckDockerd {
-    pub fn start(guest: Arc<speck_vz::Guest>, sock_path: PathBuf) -> Result<Self> {
+    pub fn start(
+        guest: Arc<speck_vz::Guest>,
+        sock_path: PathBuf,
+        vm_state: Arc<RwLock<VmState>>,
+    ) -> Result<Self> {
         let containerd_proxy_path = guest
             .containerd_unix_proxy()
             .map_err(|err| DockerApiError::Internal(err.to_string()))?;
         let state = state::AppState::with_containerd_proxy(guest, containerd_proxy_path);
-        let router = router::build_router(state);
+        let router = router::build_router(state)
+            .layer(RestartCheckLayer::new(vm_state));
         let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
         tokio::spawn(server::serve(router, sock_path.clone(), shutdown_rx));
