@@ -132,6 +132,8 @@ pub async fn create(
     }
 
     let image_for_event = body.image.clone();
+    // Capture port_bindings_json before labels is moved into ContainerCreateSpec.
+    let port_bindings_json: Option<String> = labels.get("speck.port_bindings").cloned();
     let client = state.containerd_client().await?;
     let container_id = client
         .container_create(ContainerCreateSpec {
@@ -146,6 +148,25 @@ pub async fn create(
             cpu_shares: host_config.cpu_shares,
         })
         .await?;
+
+    // Persist container metadata (including port bindings) to SQLite.
+    // Storage failures are non-fatal — the container was already created in containerd.
+    {
+        let created_at = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs().to_string())
+            .unwrap_or_default();
+        let create_body_json = format!("{{\"Image\":\"{}\"}}", image_for_event);
+        let storage = state.storage.lock().await;
+        let _ = storage.save_container_meta(
+            &container_id,
+            &image_for_event,
+            &create_body_json,
+            &port_bindings_json,
+            &created_at,
+        );
+    }
+
     crate::handlers::events::emit_event(
         &state,
         json!({"Type": "container", "Action": "create", "Actor": {"ID": container_id, "Attributes": {"image": image_for_event}}}),
