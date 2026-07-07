@@ -21,12 +21,18 @@ fn main() {
 mod linux {
 
     use std::io;
+    use speck_guest::mount::{
+        mount_disks, mount_early_filesystems, mount_rootfs_runtime_filesystems,
+    };
+    use speck_guest::LibcSyscalls;
 
     pub(super) fn main() {
+        let libc_syscalls = LibcSyscalls;
+
         // Mount early filesystems (/proc, /sys, /dev) before reading
         // /proc/cmdline — the kernel cmdline lives at /proc/cmdline and
         // all cmdline parsers below depend on /proc being reachable.
-        mount_early_filesystems();
+        mount_early_filesystems(&libc_syscalls);
 
         let _port = parse_cmdline_vsock_port("/proc/cmdline").unwrap_or(1234);
         let dns_port = parse_cmdline_dns_port("/proc/cmdline");
@@ -42,7 +48,7 @@ mod linux {
             eprintln!("vminitd: gateway={gw}");
         }
 
-        mount_disks();
+        mount_disks(&libc_syscalls);
 
         // Mount VirtioFS volumes and Speck home for Ryuk socket access
         mount_virtiofs_volumes("/proc/cmdline");
@@ -91,7 +97,7 @@ mod linux {
         }
 
         // Mount proc/sys/dev/run into /rootfs so dockerd can see them.
-        mount_rootfs_runtime_filesystems();
+        mount_rootfs_runtime_filesystems(&libc_syscalls);
 
         // Create the socket directory inside the chroot.
         if let Err(e) = std::fs::create_dir_all("/rootfs/run/speck") {
@@ -207,331 +213,10 @@ mod linux {
     }
 
     // ---------------------------------------------------------------------------
-    // Filesystem mounting
+    // Filesystem mounting — now handled by extracted `speck_guest::mount::*`
+    // via the `Syscalls` trait.  The inline implementations were removed in
+    // phase 15-04; see `crates/speck-guest/src/mount.rs` for current logic.
     // ---------------------------------------------------------------------------
-
-    /// Mount /proc, /sys, and /dev (devtmpfs) before any disk operations.
-    ///
-    /// Each mount is non-fatal — errors are logged but execution continues
-    /// (may already be mounted by the kernel during early boot).
-    fn mount_early_filesystems() {
-        // procfs
-        let ret = unsafe {
-            libc::mount(
-                b"proc\0".as_ptr() as *const libc::c_char,
-                b"/proc\0".as_ptr() as *const libc::c_char,
-                b"proc\0".as_ptr() as *const libc::c_char,
-                0,
-                std::ptr::null(),
-            )
-        };
-        if ret < 0 {
-            eprintln!(
-                "vminitd: mount /proc failed: {:?}",
-                io::Error::last_os_error()
-            );
-        }
-
-        // sysfs
-        let ret = unsafe {
-            libc::mount(
-                b"sysfs\0".as_ptr() as *const libc::c_char,
-                b"/sys\0".as_ptr() as *const libc::c_char,
-                b"sysfs\0".as_ptr() as *const libc::c_char,
-                0,
-                std::ptr::null(),
-            )
-        };
-        if ret < 0 {
-            eprintln!(
-                "vminitd: mount /sys failed: {:?}",
-                io::Error::last_os_error()
-            );
-        }
-
-        // devtmpfs
-        let ret = unsafe {
-            libc::mount(
-                b"devtmpfs\0".as_ptr() as *const libc::c_char,
-                b"/dev\0".as_ptr() as *const libc::c_char,
-                b"devtmpfs\0".as_ptr() as *const libc::c_char,
-                0,
-                std::ptr::null(),
-            )
-        };
-        if ret < 0 {
-            eprintln!(
-                "vminitd: mount /dev failed: {:?}",
-                io::Error::last_os_error()
-            );
-        }
-    }
-
-    /// Bind-mount /proc, /sys, /dev from the initrd namespace into /rootfs,
-    /// and mount a fresh tmpfs at /rootfs/run.
-    ///
-    /// This is required before running dockerd (or any process) in a chroot
-    /// rooted at /rootfs: the chroot'd process must be able to see proc, sys,
-    /// and dev, which only exist in the outer namespace after
-    /// `mount_early_filesystems()` runs.
-    ///
-    /// Call order: must run AFTER `mount_disks()` so that /rootfs is a
-    /// valid ext4 mount point, and AFTER `mount_early_filesystems()` so
-    /// that the bind sources (/proc, /sys, /dev) themselves exist.
-    ///
-    /// Mount failures are non-fatal — errors are logged and execution
-    /// continues.  A chroot'd process that cannot see /proc will typically
-    /// fail to start on its own; the error log is sufficient for diagnosis.
-    fn mount_rootfs_runtime_filesystems() {
-        // /rootfs/proc — bind from /proc
-        let _ = std::fs::create_dir_all("/rootfs/proc");
-        bind_mount("/proc", "/rootfs/proc");
-
-        // /rootfs/sys — bind from /sys
-        let _ = std::fs::create_dir_all("/rootfs/sys");
-        bind_mount("/sys", "/rootfs/sys");
-
-        // /rootfs/sys/fs/cgroup — mount cgroup2 hierarchy.
-        // A plain MS_BIND of /sys does NOT carry cgroupv2 submounts;
-        // crun sees sysfs type at /sys/fs/cgroup and rejects it with
-        // "invalid file system type". Mount cgroup2 directly on top.
-        let _ = std::fs::create_dir_all("/rootfs/sys/fs/cgroup");
-        let ret = unsafe {
-            libc::mount(
-                b"cgroup2\0".as_ptr() as *const libc::c_char,
-                b"/rootfs/sys/fs/cgroup\0".as_ptr() as *const libc::c_char,
-                b"cgroup2\0".as_ptr() as *const libc::c_char,
-                0,
-                std::ptr::null(),
-            )
-        };
-        if ret < 0 {
-            eprintln!(
-                "vminitd: mount cgroup2 at /rootfs/sys/fs/cgroup failed: {:?}",
-                io::Error::last_os_error()
-            );
-        } else {
-            eprintln!("vminitd: mounted cgroup2 at /rootfs/sys/fs/cgroup");
-        }
-
-        // /rootfs/dev — bind from /dev
-        let _ = std::fs::create_dir_all("/rootfs/dev");
-        bind_mount("/dev", "/rootfs/dev");
-
-        // /rootfs/run — fresh tmpfs (runtime sockets + pid files are ephemeral)
-        let _ = std::fs::create_dir_all("/rootfs/run");
-        let ret = unsafe {
-            libc::mount(
-                b"tmpfs\0".as_ptr() as *const libc::c_char,
-                b"/rootfs/run\0".as_ptr() as *const libc::c_char,
-                b"tmpfs\0".as_ptr() as *const libc::c_char,
-                0,
-                std::ptr::null(),
-            )
-        };
-        if ret < 0 {
-            eprintln!(
-                "vminitd: mount tmpfs at /rootfs/run failed: {:?}",
-                io::Error::last_os_error()
-            );
-        }
-    }
-
-    /// Bind-mount `source` onto `target` using MS_BIND.
-    ///
-    /// Non-fatal: logs the error and returns.  The filesystem type is
-    /// ignored by the kernel for bind mounts.
-    fn bind_mount(source: &str, target: &str) {
-        use std::ffi::CString;
-        let src = CString::new(source).unwrap_or_default();
-        let tgt = CString::new(target).unwrap_or_default();
-        let ret = unsafe {
-            libc::mount(
-                src.as_ptr(),
-                tgt.as_ptr(),
-                std::ptr::null(), // fstype ignored for MS_BIND
-                libc::MS_BIND,
-                std::ptr::null(),
-            )
-        };
-        if ret < 0 {
-            eprintln!(
-                "vminitd: bind mount {source} → {target} failed: {:?}",
-                io::Error::last_os_error()
-            );
-        }
-    }
-
-    /// Mount the rootfs and data disks.
-    ///
-    /// 1. Mount /dev/vda (rootfs) at /rootfs as ext4.
-    /// 2. Mount /dev/vdb (data disk) at /rootfs/var/lib/containerd as ext4.
-    ///    If the data disk has no filesystem (EINVAL), format it with mke2fs
-    ///    only after proving it has no filesystem signature, then retry.
-    ///    Failure on the second attempt is fatal.
-    /// 3. Create /rootfs/run/ and /rootfs/tmp/.
-    fn mount_disks() {
-        // Create root mount point
-        let _ = std::fs::create_dir_all("/rootfs");
-
-        // Mount /dev/vda → /rootfs (rootfs disk)
-        let ret = unsafe {
-            libc::mount(
-                b"/dev/vda\0".as_ptr() as *const libc::c_char,
-                b"/rootfs\0".as_ptr() as *const libc::c_char,
-                b"ext4\0".as_ptr() as *const libc::c_char,
-                libc::MS_RELATIME,
-                std::ptr::null(),
-            )
-        };
-        if ret < 0 {
-            eprintln!(
-                "vminitd: mount /dev/vda → /rootfs failed: {:?}",
-                io::Error::last_os_error()
-            );
-            std::process::exit(1);
-        }
-
-        // Create containerd data directory on rootfs
-        let _ = std::fs::create_dir_all("/rootfs/var/lib/containerd");
-
-        // Try to mount /dev/vdb → /rootfs/var/lib/containerd (data disk)
-        let ret = unsafe {
-            libc::mount(
-                b"/dev/vdb\0".as_ptr() as *const libc::c_char,
-                b"/rootfs/var/lib/containerd\0".as_ptr() as *const libc::c_char,
-                b"ext4\0".as_ptr() as *const libc::c_char,
-                libc::MS_RELATIME,
-                std::ptr::null(),
-            )
-        };
-        if ret < 0 {
-            let err = io::Error::last_os_error();
-            if err.raw_os_error() == Some(libc::EINVAL) {
-                if !data_disk_has_no_filesystem_signature("/dev/vdb") {
-                    eprintln!(
-                        "vminitd: /dev/vdb mount failed but disk is not proven blank; refusing to format: {:?}",
-                        err
-                    );
-                    std::process::exit(1);
-                }
-                eprintln!("vminitd: /dev/vdb has no filesystem signature — formatting with mke2fs");
-                let mke2fs_status = std::process::Command::new("/sbin/mke2fs")
-                    .args(["-t", "ext4", "/dev/vdb"])
-                    .status()
-                    .expect("vminitd: failed to start /sbin/mke2fs");
-                if !mke2fs_status.success() {
-                    eprintln!("vminitd: mke2fs failed with {mke2fs_status}");
-                    std::process::exit(1);
-                }
-                // Retry mount after formatting
-                let ret = unsafe {
-                    libc::mount(
-                        b"/dev/vdb\0".as_ptr() as *const libc::c_char,
-                        b"/rootfs/var/lib/containerd\0".as_ptr() as *const libc::c_char,
-                        b"ext4\0".as_ptr() as *const libc::c_char,
-                        libc::MS_RELATIME,
-                        std::ptr::null(),
-                    )
-                };
-                if ret < 0 {
-                    eprintln!(
-                        "vminitd: mount /dev/vdb → /rootfs/var/lib/containerd failed after format: {:?}",
-                        io::Error::last_os_error()
-                    );
-                    std::process::exit(1);
-                }
-            } else {
-                eprintln!(
-                    "vminitd: mount /dev/vdb → /rootfs/var/lib/containerd failed: {:?}",
-                    err
-                );
-                std::process::exit(1);
-            }
-        }
-
-        grow_data_filesystem_if_needed("/dev/vdb", "/rootfs/var/lib/containerd");
-
-        // Create runtime directories needed by containerd
-        let _ = std::fs::create_dir_all("/rootfs/run");
-        let _ = std::fs::create_dir_all("/rootfs/tmp");
-    }
-
-    /// Grow the mounted ext4 data filesystem to match the current block device size.
-    ///
-    /// This is fatal because continuing with the old filesystem size after the
-    /// host grew `data.img` would silently violate the configured VM disk size.
-    fn grow_data_filesystem_if_needed(device: &str, mountpoint: &str) {
-        if !std::path::Path::new(mountpoint).exists() {
-            eprintln!("vminitd: data filesystem mountpoint missing for {device}: {mountpoint}");
-            std::process::exit(1);
-        }
-
-        let resize_tool = "/sbin/resize2fs";
-        if !std::path::Path::new(resize_tool).exists() {
-            eprintln!(
-                "vminitd: data filesystem resize tool missing or failed for {device}: {resize_tool} not found"
-            );
-            std::process::exit(1);
-        }
-
-        eprintln!("vminitd: growing data filesystem on {device}");
-        match run_resize_tool(resize_tool, &[device]) {
-            Ok(status) if status.success() => {}
-            Ok(status) => {
-                eprintln!("vminitd: resize2fs failed with {status}");
-                std::process::exit(1);
-            }
-            Err(e) => {
-                eprintln!(
-                    "vminitd: data filesystem resize tool missing or failed for {device}: {e}"
-                );
-                std::process::exit(1);
-            }
-        }
-    }
-
-    fn run_resize_tool(tool: &str, args: &[&str]) -> io::Result<std::process::ExitStatus> {
-        std::process::Command::new(tool).args(args).status()
-    }
-
-    /// Return true only when a bounded signature probe positively reports that
-    /// the data disk has no recognizable filesystem signature.
-    ///
-    /// Fail-safe semantics: recognized signatures, missing probe tools,
-    /// execution failures, and ambiguous output all return false, which means
-    /// the caller must not format the disk.
-    fn data_disk_has_no_filesystem_signature(device: &str) -> bool {
-        let output = match std::process::Command::new("/sbin/blkid")
-            .arg(device)
-            .output()
-        {
-            Ok(output) => output,
-            Err(e) => {
-                eprintln!("vminitd: failed to run /sbin/blkid for {device}: {e}");
-                return false;
-            }
-        };
-
-        if output.status.success() {
-            eprintln!("vminitd: /sbin/blkid found a signature on {device}; refusing to format");
-            return false;
-        }
-
-        let stdout_empty = output.stdout.iter().all(|b| b.is_ascii_whitespace());
-        let stderr_empty = output.stderr.iter().all(|b| b.is_ascii_whitespace());
-
-        match output.status.code() {
-            Some(2) if stdout_empty && stderr_empty => true,
-            code => {
-                eprintln!(
-                    "vminitd: /sbin/blkid did not prove {device} is blank (status: {:?}); refusing to format",
-                    code
-                );
-                false
-            }
-        }
-    }
 
     // ---------------------------------------------------------------------------
     // Docker Engine socket readiness
@@ -1416,6 +1101,7 @@ mod linux {
 #[cfg(test)]
 mod tests {
     const SOURCE: &str = include_str!("vminitd.rs");
+    const MOUNT_SOURCE: &str = include_str!("../mount.rs");
 
     #[test]
     fn guest_resize_tooling_provisioning_path_exists() {
@@ -1455,7 +1141,8 @@ mod tests {
 
     #[test]
     fn mount_disks_grows_data_filesystem_before_runtime_dirs() {
-        let data_mount = SOURCE
+        // Internal ordering within mount_disks (now in mount.rs)
+        let data_mount = MOUNT_SOURCE
             .find("b\"/dev/vdb\\0\"")
             .expect("mount_disks should mount /dev/vdb");
         let grow_call = [
@@ -1463,15 +1150,17 @@ mod tests {
             ", \"/rootfs/var/lib/containerd\")",
         ]
         .concat();
-        let grow = SOURCE
+        let grow = MOUNT_SOURCE
             .find(&grow_call)
             .expect("mount_disks should grow /dev/vdb after mounting it");
-        let runtime_dir = SOURCE[grow..]
+        let runtime_dir = MOUNT_SOURCE[grow..]
             .find("std::fs::create_dir_all(\"/rootfs/run\")")
             .map(|offset| grow + offset)
             .expect("mount_disks should create /rootfs/run");
+
+        // Boot path ordering in vminitd.rs
         let boot_mount = SOURCE
-            .find("mount_disks();")
+            .find("mount_disks(&libc_syscalls)")
             .expect("boot path should mount disks before services");
         let dockerd_spawn = SOURCE
             .find("spawn_dockerd_with_restart")
