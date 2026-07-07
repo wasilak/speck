@@ -1,7 +1,7 @@
 use std::fmt;
 
 use base64::Engine;
-use secrecy::SecretString;
+use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -38,10 +38,10 @@ pub struct ImageInspect {
     pub architecture: String,
 }
 
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct RegistryAuth {
     pub username: String,
-    pub password: String,
+    pub password: SecretString,
     pub server_address: String,
 }
 
@@ -56,7 +56,7 @@ impl RegistryAuth {
 
         let auth = DockerAuth {
             username: &self.username,
-            password: &self.password,
+            password: self.password.expose_secret(),
             serveraddress: &self.server_address,
         };
         let json = serde_json::to_vec(&auth).expect("registry auth serialization cannot fail");
