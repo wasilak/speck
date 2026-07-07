@@ -334,7 +334,11 @@ pub async fn inspect(
         .task_get(&id)
         .await?
         .unwrap_or_else(|| stopped_task(&id));
-    Ok(Json(container_inspect_json(info, task)))
+    let port_bindings = {
+        let storage = state.storage.lock().await;
+        storage.load_port_bindings(&id).unwrap_or(None)
+    };
+    Ok(Json(container_inspect_json(info, task, port_bindings)))
 }
 
 pub async fn list(
@@ -603,8 +607,16 @@ fn container_summary_json(container: ContainerInfo, running_ids: &HashSet<String
 fn container_inspect_json(
     container: ContainerInfo,
     task: crate::containerd_client::TaskInfo,
+    port_bindings: Option<HashMap<String, Vec<PortBindingBody>>>,
 ) -> Value {
     let running = task.status == TaskStatus::Running;
+    let ports: serde_json::Map<String, Value> = match port_bindings {
+        Some(pb) => pb
+            .into_iter()
+            .map(|(k, v)| (k, serde_json::to_value(v).unwrap_or(Value::Null)))
+            .collect(),
+        None => serde_json::Map::new(),
+    };
     json!({
         "Id": container.id,
         "Name": format!("/{}", container.labels.get("speck.name").cloned().unwrap_or_else(|| "speck".into())),
@@ -616,7 +628,7 @@ fn container_inspect_json(
             "ExitCode": task.exit_status,
         },
         "Mounts": [],
-        "NetworkSettings": { "Ports": {} },
+        "NetworkSettings": { "Ports": Value::Object(ports) },
     })
 }
 
