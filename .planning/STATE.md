@@ -3,38 +3,36 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Hardened Runtime
 status: executing
-last_updated: "2026-07-07T17:55:00.000Z"
-last_activity: 2026-07-07 -- Phase 16 Plan 02 completed (ESRCH + PID path fix)
+last_updated: "2026-07-07T13:58:00.713Z"
+last_activity: 2026-07-07 -- Phase 17 execution resumed (wave continue)
 progress:
-   total_phases: 4
-    completed_phases: 1
-    total_plans: 9
-    completed_plans: 9
-    percent: 25
-verification: passed
-review: issues_found (advisory — non-blocking)
+  total_phases: 4
+  completed_phases: 2
+  total_plans: 19
+  completed_plans: 13
+  percent: 50
 ---
 
 # State — Milestone v1.2 Hardened Runtime
 
-**Status:** Phase 16 — Plan 02 complete
+**Status:** Executing Phase 17
 
 ## Project Reference
 
 See: .planning/PROJECT.md (updated 2026-07-06)
 
 **Core value:** A container runtime on Apple Silicon that never loses the network — micro-VMs inherit the host's routing/DNS live, surviving corporate VPNs and Cloudflare WARP where Docker Desktop fails.
-**Current focus:** Phase 15 — stability-foundation (complete)
+**Current focus:** Phase 17 — testcontainers-conformance
 
 ## Current Position
 
-Phase: 16 (daemon-polish) — IN PROGRESS
-Plan: 2 of TBD
-Status: Plan 02 complete (ESRCH + PID path fix)
-Last activity: 2026-07-07 -- Phase 16 Plan 02 completed (ESRCH + PID path fix)
+Phase: 17 (testcontainers-conformance) — EXECUTING
+Plan: 1 of 6
+Status: Executing Phase 17
+Last activity: 2026-07-07 -- Phase 17 execution resumed (wave continue)
 
 ```
-Progress: [████████████████████] 25% (1/4 phases)
+Progress: [████████████████████████████████████████] 50% (2/4 phases)
 ```
 
 ## Milestone v1.2 Phase Overview
@@ -42,7 +40,7 @@ Progress: [████████████████████] 25% (1/
 | Phase | Name | Requirements | Status |
 |-------|------|--------------|--------|
 | 15 | Stability Foundation | TEST-01..07 | Complete ✅ |
-| 16 | Daemon Polish | DAEMON-01..04 | In Progress |
+| 16 | Daemon Polish | DAEMON-01..04 | Complete ✅ |
 | 17 | testcontainers Conformance | CONF-01..07 | Not started |
 | 18 | Developer ID Distribution | DIST-01..04 | Not started |
 
@@ -58,6 +56,8 @@ Progress: [████████████████████] 25% (1/
 | Phase 15-stability-foundation P07 | 6min | 2 tasks | 3 files |
 | Phase 15-stability-foundation P08 | 15min | 3 tasks | 4 files |
 | Phase 16-daemon-polish P02 | 12min | 2 tasks | 2 files |
+| Phase 16-daemon-polish P03 | 12min | 2 tasks | 3 files |
+| Phase 16-daemon-polish P05 | 8min | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -86,7 +86,7 @@ Progress: [████████████████████] 25% (1/
 
 ## Session Continuity
 
-**To resume:** Run `/gsd-plan-phase 16-03` or continue with the next plan in the Daemon Polish phase.
+**To resume:** Run `/gsd-discuss-phase 17` to begin testcontainers Conformance planning.
 
 ## Decisions
 
@@ -94,3 +94,5 @@ Progress: [████████████████████] 25% (1/
 - [Phase ?]: mount flag constants (MS_BIND=4096, MS_RELATIME=2097152) defined locally to avoid macOS libc dependency
 - [Phase ?]: mount_disks integration test excluded due to real filesystem deps; mount_early_filesystems validates mock pattern
 - [Phase 15-08]: Added source-inspection safety guard tests per file (no_unsafe_env_mutation) to enforce no raw env mutation in test code
+- [Phase 16-03]: spk restart uses external process sequencing (subprocess stop + start) with exit code guards — prevents double-VM on failed stop; PREPARE_RESTART signal sent over control socket for daemon 503 middleware
+- [Phase 16-05]: Used std::sync::RwLock instead of parking_lot for middleware VmState (parking_lot not in any crate's dep tree); did not modify guest::docker_api_unix_proxy signature — it's a raw byte proxy, middleware wiring belongs in SpeckDockerd axum layer
