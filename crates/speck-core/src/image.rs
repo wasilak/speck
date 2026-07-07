@@ -38,7 +38,7 @@ pub struct ImageInspect {
     pub architecture: String,
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct RegistryAuth {
     pub username: String,
     pub password: SecretString,
