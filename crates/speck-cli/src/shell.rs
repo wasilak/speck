@@ -97,9 +97,6 @@ pub fn render_speck_home(speck_home: &Path, shell: EnvShell) -> String {
 mod tests {
     use super::*;
     use std::path::PathBuf;
-    use std::sync::Mutex;
-
-    static SHELL_ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn home() -> PathBuf {
         PathBuf::from("/tmp/speck-home")
@@ -183,79 +180,57 @@ mod tests {
 
     #[test]
     fn detect_shell_defaults_to_zsh_when_unset() {
-        let _guard = SHELL_ENV_LOCK.lock().unwrap();
-        unsafe {
-            std::env::remove_var("SHELL");
-        }
-        assert_eq!(
-            detect_shell(),
-            ShellTarget::Zsh,
-            "detect_shell must default to Zsh on macOS when SHELL is unset"
-        );
+        temp_env::with_var("SHELL", None::<&str>, || {
+            assert_eq!(
+                detect_shell(),
+                ShellTarget::Zsh,
+                "detect_shell must default to Zsh on macOS when SHELL is unset"
+            );
+        });
     }
 
     #[test]
     fn detect_shell_returns_bash_for_bash_shell() {
-        let _guard = SHELL_ENV_LOCK.lock().unwrap();
-        unsafe {
-            std::env::set_var("SHELL", "/bin/bash");
-        }
-        assert_eq!(
-            detect_shell(),
-            ShellTarget::Bash,
-            "detect_shell must return Bash when SHELL contains `bash`"
-        );
-        unsafe {
-            std::env::remove_var("SHELL");
-        }
+        temp_env::with_var("SHELL", Some("/bin/bash"), || {
+            assert_eq!(
+                detect_shell(),
+                ShellTarget::Bash,
+                "detect_shell must return Bash when SHELL contains `bash`"
+            );
+        });
     }
 
     #[test]
     fn detect_shell_returns_zsh_for_zsh_shell() {
-        let _guard = SHELL_ENV_LOCK.lock().unwrap();
-        unsafe {
-            std::env::set_var("SHELL", "/bin/zsh");
-        }
-        assert_eq!(
-            detect_shell(),
-            ShellTarget::Zsh,
-            "detect_shell must return Zsh when SHELL contains `zsh`"
-        );
-        unsafe {
-            std::env::remove_var("SHELL");
-        }
+        temp_env::with_var("SHELL", Some("/bin/zsh"), || {
+            assert_eq!(
+                detect_shell(),
+                ShellTarget::Zsh,
+                "detect_shell must return Zsh when SHELL contains `zsh`"
+            );
+        });
     }
 
     #[test]
     fn detect_shell_returns_fish_for_fish_shell() {
-        let _guard = SHELL_ENV_LOCK.lock().unwrap();
-        unsafe {
-            std::env::set_var("SHELL", "/usr/local/bin/fish");
-        }
-        assert_eq!(
-            detect_shell(),
-            ShellTarget::Fish,
-            "detect_shell must return Fish when SHELL contains `fish`"
-        );
-        unsafe {
-            std::env::remove_var("SHELL");
-        }
+        temp_env::with_var("SHELL", Some("/usr/local/bin/fish"), || {
+            assert_eq!(
+                detect_shell(),
+                ShellTarget::Fish,
+                "detect_shell must return Fish when SHELL contains `fish`"
+            );
+        });
     }
 
     #[test]
     fn detect_shell_defaults_to_zsh_for_unrecognized_shell() {
-        let _guard = SHELL_ENV_LOCK.lock().unwrap();
-        unsafe {
-            std::env::set_var("SHELL", "/bin/sh");
-        }
-        assert_eq!(
-            detect_shell(),
-            ShellTarget::Zsh,
-            "detect_shell must default to Zsh for unrecognized SHELL values"
-        );
-        unsafe {
-            std::env::remove_var("SHELL");
-        }
+        temp_env::with_var("SHELL", Some("/bin/sh"), || {
+            assert_eq!(
+                detect_shell(),
+                ShellTarget::Zsh,
+                "detect_shell must default to Zsh for unrecognized SHELL values"
+            );
+        });
     }
 
     #[test]
