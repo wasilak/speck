@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Hardened Runtime
 status: executing
-last_updated: "2026-07-07T17:10:00.000Z"
-last_activity: 2026-07-07 -- Phase 16 Plan 01 completed (Restarting variant)
+last_updated: "2026-07-07T17:55:00.000Z"
+last_activity: 2026-07-07 -- Phase 16 Plan 02 completed (ESRCH + PID path fix)
 progress:
    total_phases: 4
     completed_phases: 1
@@ -17,7 +17,7 @@ review: issues_found (advisory — non-blocking)
 
 # State — Milestone v1.2 Hardened Runtime
 
-**Status:** Phase 16 — Plan 01 complete
+**Status:** Phase 16 — Plan 02 complete
 
 ## Project Reference
 
@@ -29,9 +29,9 @@ See: .planning/PROJECT.md (updated 2026-07-06)
 ## Current Position
 
 Phase: 16 (daemon-polish) — IN PROGRESS
-Plan: 1 of TBD
-Status: Plan 01 complete (VmState::Restarting variant added)
-Last activity: 2026-07-07 -- Phase 16 Plan 01 completed (Restarting variant)
+Plan: 2 of TBD
+Status: Plan 02 complete (ESRCH + PID path fix)
+Last activity: 2026-07-07 -- Phase 16 Plan 02 completed (ESRCH + PID path fix)
 
 ```
 Progress: [████████████████████] 25% (1/4 phases)
@@ -57,6 +57,7 @@ Progress: [████████████████████] 25% (1/
 | Phase 15-stability-foundation P04 | 40 | - tasks | - files |
 | Phase 15-stability-foundation P07 | 6min | 2 tasks | 3 files |
 | Phase 15-stability-foundation P08 | 15min | 3 tasks | 4 files |
+| Phase 16-daemon-polish P02 | 12min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -85,7 +86,7 @@ Progress: [████████████████████] 25% (1/
 
 ## Session Continuity
 
-**To resume:** Run `/gsd-discuss-phase 16` or `/gsd-plan-phase 16` to plan Daemon Polish.
+**To resume:** Run `/gsd-plan-phase 16-03` or continue with the next plan in the Daemon Polish phase.
 
 ## Decisions
 
