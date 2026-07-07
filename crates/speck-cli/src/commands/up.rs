@@ -9,6 +9,7 @@ use anyhow::Context as _;
 use indicatif::ProgressBar;
 use sha2::{Digest as _, Sha256};
 use speck_core::VmState;
+use speck_dockerd::SpeckDockerd;
 use speck_net::config::NetworkConfig;
 use speck_vz::config::GuestConfig;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -652,6 +653,7 @@ pub async fn run_up(
     })
     .await
     .context("VM startup task failed")??;
+    let guest = Arc::new(guest);
 
     write_vm_resource_snapshot(speck_home, &effective.vm)?;
 
@@ -700,9 +702,12 @@ pub async fn run_up(
         });
     }
 
-    spinner.set_message("Starting Docker API proxy...");
+    spinner.set_message("Starting Docker API server...");
     let sock_path = speck_home.join("speck.sock");
-    let _docker_proxy_path = guest.docker_api_unix_proxy(sock_path.clone())?;
+    let vm_state: Arc<RwLock<VmState>> = Arc::new(RwLock::new(VmState::Running));
+    let _dockerd = SpeckDockerd::start(guest.clone(), sock_path.clone(), vm_state.clone())
+        .context("failed to start Docker API server")?;
+    tracing::info!("Docker API server started at {}", sock_path.display());
 
     spinner.finish_with_message(format!("{NEON_CYAN}Speck is running{RESET}"));
 
@@ -716,8 +721,6 @@ pub async fn run_up(
     let pid_path = speck_home.join("run/speck.pid");
     std::fs::write(&pid_path, format!("{}\n", std::process::id()))
         .context("failed to write pid file")?;
-
-    let vm_state: Arc<RwLock<VmState>> = Arc::new(RwLock::new(VmState::Running));
 
     let ctrl_sock_path = speck_home.join("run/control.sock");
     let _ = std::fs::remove_file(&ctrl_sock_path);
@@ -775,7 +778,7 @@ pub async fn run_up(
 }
 
 async fn shutdown_gracefully(
-    guest: &speck_vz::Guest,
+    guest: &Arc<speck_vz::Guest>,
     sock_path: &Path,
     speck_home: &Path,
 ) -> anyhow::Result<()> {

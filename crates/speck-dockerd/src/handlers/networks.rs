@@ -98,17 +98,32 @@ pub async fn network_remove(State(state): State<AppState>, Path(id): Path<String
 }
 
 pub async fn network_connect(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     Path(id): Path<String>,
     Json(body): Json<NetworkConnectBody>,
 ) -> Result<StatusCode> {
     validate_network_name(&id)?;
-    let _ = body.container;
+    if let Some(container_id) = &body.container {
+        let client = state.containerd_client().await?;
+        client.container_get(container_id).await.map_err(|_| {
+            DockerApiError::NotFound(format!("container {container_id} not found"))
+        })?;
+    }
     Ok(StatusCode::OK)
 }
 
-pub async fn network_disconnect(Path(id): Path<String>) -> Result<StatusCode> {
+pub async fn network_disconnect(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<NetworkConnectBody>,
+) -> Result<StatusCode> {
     validate_network_name(&id)?;
+    if let Some(container_id) = &body.container {
+        let client = state.containerd_client().await?;
+        client.container_get(container_id).await.map_err(|_| {
+            DockerApiError::NotFound(format!("container {container_id} not found"))
+        })?;
+    }
     Ok(StatusCode::OK)
 }
 

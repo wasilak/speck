@@ -77,7 +77,10 @@ pub async fn image_push(
     let server = registry_server(&name);
     let credentials = registry_credentials(&headers, &server);
     let client = state.containerd_client().await?;
-    client.image_push(&name, credentials).await?;
+    client.image_push(&name, credentials).await.map_err(|e| {
+        tracing::warn!(%name, error = %e, "image push failed");
+        e
+    })?;
     Ok(json_progress_stream(vec![
         json!({"status": format!("Pushed {name}")}),
     ]))
