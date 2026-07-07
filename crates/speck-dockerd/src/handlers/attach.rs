@@ -83,21 +83,17 @@ pub async fn container_logs(
     Query(query): Query<LogsQuery>,
 ) -> Result<impl IntoResponse> {
     let client = state.containerd_client().await?;
-    let task = client
-        .task_get(&id)
-        .await?
-        .ok_or_else(|| DockerApiError::NotFound(format!("container {id}")))?;
-    let line = if query.timestamps {
-        format!(
-            "1970-01-01T00:00:00Z container {} status {:?}\n",
-            task.container_id, task.status
-        )
+    let raw = client.task_logs(&id).await?;
+    let output = if query.timestamps {
+        let mut with_ts = b"1970-01-01T00:00:00Z ".to_vec();
+        with_ts.extend_from_slice(&raw);
+        with_ts
     } else {
-        format!("container {} status {:?}\n", task.container_id, task.status)
+        raw
     };
     let mut frames = Vec::new();
     if query.stdout || !query.stderr {
-        frames.push(Bytes::from(encode_frame(1, line.as_bytes())));
+        frames.push(Bytes::from(encode_frame(1, &output)));
     }
     if query.stderr {
         frames.push(Bytes::from(encode_frame(2, b"")));
