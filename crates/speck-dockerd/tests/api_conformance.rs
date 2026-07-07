@@ -6,8 +6,8 @@ use bollard::models::{
 };
 use bollard::query_parameters::CreateImageOptionsBuilder;
 use bollard::query_parameters::{
-    CreateContainerOptionsBuilder, ListContainersOptions, LogsOptions, RemoveContainerOptions,
-    StartContainerOptions, WaitContainerOptions,
+    CreateContainerOptionsBuilder, InspectContainerOptions, ListContainersOptions, LogsOptions,
+    RemoveContainerOptions, StartContainerOptions, WaitContainerOptions,
 };
 use futures_util::StreamExt;
 use futures_util::TryStreamExt;
@@ -195,66 +195,204 @@ async fn test_container_start_wait_remove() {
 }
 
 #[tokio::test]
-#[ignore = "requires signed binary + spk up running"]
 async fn test_container_logs() {
-    let docker = speck_docker();
-    let config = ContainerCreateBody {
-        image: Some("alpine".to_string()),
-        cmd: Some(vec!["echo".to_string(), "hello-from-speck".to_string()]),
-        ..Default::default()
-    };
-    let options = CreateContainerOptionsBuilder::default()
-        .name("test-conformance-logs")
-        .build();
-    let response = docker
-        .create_container(Some(options), config)
-        .await
-        .expect("create container");
-    let container_id = response.id;
+    if std::env::var("SPECK_TEST_INTEGRATION").is_err() {
+        eprintln!("skipping integration test: SPECK_TEST_INTEGRATION not set");
+        return;
+    }
+    let result = tokio::time::timeout(Duration::from_secs(30), async {
+        let docker = speck_docker();
+        let config = ContainerCreateBody {
+            image: Some("alpine".to_string()),
+            cmd: Some(vec!["echo".to_string(), "hello-from-speck".to_string()]),
+            ..Default::default()
+        };
+        let options = CreateContainerOptionsBuilder::default()
+            .name("test-conformance-logs")
+            .build();
+        let response = docker
+            .create_container(Some(options), config)
+            .await
+            .expect("create container");
+        let container_id = response.id;
 
-    docker
-        .start_container(&container_id, None::<StartContainerOptions>)
-        .await
-        .expect("start container");
+        docker
+            .start_container(&container_id, None::<StartContainerOptions>)
+            .await
+            .expect("start container");
 
-    docker
-        .wait_container(&container_id, None::<WaitContainerOptions>)
-        .try_collect::<Vec<_>>()
-        .await
-        .expect("wait container");
+        docker
+            .wait_container(&container_id, None::<WaitContainerOptions>)
+            .try_collect::<Vec<_>>()
+            .await
+            .expect("wait container");
 
-    let logs = docker
-        .logs(
-            &container_id,
-            Some(LogsOptions {
-                stdout: true,
-                stderr: true,
+        let logs = docker
+            .logs(
+                &container_id,
+                Some(LogsOptions {
+                    stdout: true,
+                    stderr: true,
+                    ..Default::default()
+                }),
+            )
+            .try_collect::<Vec<_>>()
+            .await
+            .expect("get logs");
+        let output: String = logs
+            .iter()
+            .flat_map(|l| l.as_ref())
+            .map(|&b| b as char)
+            .collect();
+        assert!(
+            output.contains("hello-from-speck"),
+            "log output should contain 'hello-from-speck', got: {output:?}"
+        );
+
+        docker
+            .remove_container(
+                &container_id,
+                Some(RemoveContainerOptions {
+                    force: true,
+                    ..Default::default()
+                }),
+            )
+            .await
+            .expect("remove container");
+    })
+    .await;
+    assert!(result.is_ok(), "test_container_logs timed out after 30s");
+}
+
+#[tokio::test]
+async fn test_inspect_shows_port_bindings() {
+    if std::env::var("SPECK_TEST_INTEGRATION").is_err() {
+        eprintln!("skipping integration test: SPECK_TEST_INTEGRATION not set");
+        return;
+    }
+    let result = tokio::time::timeout(Duration::from_secs(30), async {
+        let docker = speck_docker();
+        let mut port_bindings = HashMap::new();
+        port_bindings.insert(
+            "80/tcp".to_string(),
+            Some(vec![PortBinding {
+                host_ip: Some("127.0.0.1".to_string()),
+                host_port: Some("18081".to_string()),
+            }]),
+        );
+        let config = ContainerCreateBody {
+            image: Some("alpine".to_string()),
+            cmd: Some(vec![
+                "sh".to_string(),
+                "-c".to_string(),
+                "exit 0".to_string(),
+            ]),
+            host_config: Some(HostConfig {
+                port_bindings: Some(port_bindings),
                 ..Default::default()
             }),
-        )
-        .try_collect::<Vec<_>>()
-        .await
-        .expect("get logs");
-    let output: String = logs
-        .iter()
-        .flat_map(|l| l.as_ref())
-        .map(|&b| b as char)
-        .collect();
+            ..Default::default()
+        };
+        let options = CreateContainerOptionsBuilder::default()
+            .name("test-conformance-inspect-ports")
+            .build();
+        let response = docker
+            .create_container(Some(options), config)
+            .await
+            .expect("create container");
+        let container_id = response.id;
+
+        let inspect = docker
+            .inspect_container(&container_id, None::<InspectContainerOptions>)
+            .await
+            .expect("inspect container");
+
+        let ports = inspect
+            .network_settings
+            .as_ref()
+            .and_then(|ns| ns.ports.as_ref())
+            .expect("NetworkSettings.Ports should be present");
+        assert!(
+            ports.contains_key("80/tcp"),
+            "Ports should contain '80/tcp', got: {ports:?}"
+        );
+
+        docker
+            .remove_container(
+                &container_id,
+                Some(RemoveContainerOptions {
+                    force: true,
+                    ..Default::default()
+                }),
+            )
+            .await
+            .expect("remove container");
+    })
+    .await;
     assert!(
-        output.contains("hello-from-speck"),
-        "log output should contain 'hello-from-speck', got: {output:?}"
+        result.is_ok(),
+        "test_inspect_shows_port_bindings timed out after 30s"
     );
+}
 
-    docker
-        .remove_container(
-            &container_id,
-            Some(RemoveContainerOptions {
-                force: true,
-                ..Default::default()
-            }),
-        )
-        .await
-        .expect("remove container");
+#[tokio::test]
+async fn test_container_wait_exit_code() {
+    if std::env::var("SPECK_TEST_INTEGRATION").is_err() {
+        eprintln!("skipping integration test: SPECK_TEST_INTEGRATION not set");
+        return;
+    }
+    let result = tokio::time::timeout(Duration::from_secs(30), async {
+        let docker = speck_docker();
+        let config = ContainerCreateBody {
+            image: Some("alpine".to_string()),
+            cmd: Some(vec![
+                "sh".to_string(),
+                "-c".to_string(),
+                "exit 42".to_string(),
+            ]),
+            ..Default::default()
+        };
+        let options = CreateContainerOptionsBuilder::default()
+            .name("test-conformance-wait-exit-code")
+            .build();
+        let response = docker
+            .create_container(Some(options), config)
+            .await
+            .expect("create container");
+        let container_id = response.id;
+
+        docker
+            .start_container(&container_id, None::<StartContainerOptions>)
+            .await
+            .expect("start container");
+
+        let wait = docker
+            .wait_container(&container_id, None::<WaitContainerOptions>)
+            .try_collect::<Vec<_>>()
+            .await
+            .expect("wait container");
+        assert_eq!(
+            wait.first().map(|r| r.status_code),
+            Some(42),
+            "exit code should be 42"
+        );
+
+        docker
+            .remove_container(
+                &container_id,
+                Some(RemoveContainerOptions {
+                    force: true,
+                    ..Default::default()
+                }),
+            )
+            .await
+            .expect("remove container");
+    })
+    .await;
+    assert!(
+        result.is_ok(),
+        "test_container_wait_exit_code timed out after 30s"
+    );
 }
 
 #[tokio::test]
