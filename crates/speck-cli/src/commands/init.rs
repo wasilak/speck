@@ -165,9 +165,6 @@ pub async fn run_init(args: InitArgs, speck_home: &Path) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     const INIT_SOURCE: &str = include_str!("init.rs");
 
@@ -235,7 +232,7 @@ mod tests {
         );
     }
 
-    // --- Environment-safety guard (no raw std::env::set_var / remove_var) ---
+    // --- Environment-safety guard (no raw env set_var / remove_var) ---
 
     #[test]
     fn no_unsafe_env_mutation() {
@@ -259,241 +256,231 @@ mod tests {
 
     #[test]
     fn init_writes_bashrc_block() {
-        let _guard = ENV_LOCK.lock().unwrap();
         let home = temp_home("bashrc");
-        unsafe {
-            std::env::set_var("HOME", &home);
-            std::env::remove_var("DOCKER_HOST");
-            std::env::remove_var("XDG_CONFIG_HOME");
-        }
+        temp_env::with_vars(
+            [
+                ("HOME", Some(home.to_str().unwrap())),
+                ("DOCKER_HOST", None),
+                ("XDG_CONFIG_HOME", None),
+            ],
+            || {
+                let speck_home = home.join(".local/share/speck");
+                std::fs::create_dir_all(&speck_home).unwrap();
 
-        let speck_home = home.join(".local/share/speck");
-        std::fs::create_dir_all(&speck_home).unwrap();
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap();
+                rt.block_on(run_init(
+                    InitArgs {
+                        set_docker_host: true,
+                        shell: Some("bash".into()),
+                    },
+                    &speck_home,
+                ))
+                .unwrap();
 
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        rt.block_on(run_init(
-            InitArgs {
-                set_docker_host: true,
-                shell: Some("bash".into()),
+                let bashrc = std::fs::read_to_string(home.join(".bashrc")).unwrap();
+                let begin_count = bashrc.matches("# BEGIN speck").count();
+                assert_eq!(
+                    begin_count, 1,
+                    "bashrc must contain exactly one # BEGIN speck block; got {begin_count}"
+                );
+                let end_count = bashrc.matches("# END speck").count();
+                assert_eq!(
+                    end_count, 1,
+                    "bashrc must contain exactly one # END speck block; got {end_count}"
+                );
             },
-            &speck_home,
-        ))
-        .unwrap();
-
-        let bashrc = std::fs::read_to_string(home.join(".bashrc")).unwrap();
-        let begin_count = bashrc.matches("# BEGIN speck").count();
-        assert_eq!(
-            begin_count, 1,
-            "bashrc must contain exactly one # BEGIN speck block; got {begin_count}"
         );
-        let end_count = bashrc.matches("# END speck").count();
-        assert_eq!(
-            end_count, 1,
-            "bashrc must contain exactly one # END speck block; got {end_count}"
-        );
-
-        unsafe {
-            std::env::remove_var("HOME");
-        }
     }
 
     #[test]
     fn init_is_idempotent_for_zsh() {
-        let _guard = ENV_LOCK.lock().unwrap();
         let home = temp_home("zsh-idempotent");
-        unsafe {
-            std::env::set_var("HOME", &home);
-            std::env::remove_var("DOCKER_HOST");
-            std::env::remove_var("XDG_CONFIG_HOME");
-        }
+        temp_env::with_vars(
+            [
+                ("HOME", Some(home.to_str().unwrap())),
+                ("DOCKER_HOST", None),
+                ("XDG_CONFIG_HOME", None),
+            ],
+            || {
+                let speck_home = home.join(".local/share/speck");
+                std::fs::create_dir_all(&speck_home).unwrap();
 
-        let speck_home = home.join(".local/share/speck");
-        std::fs::create_dir_all(&speck_home).unwrap();
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap();
+                let args = InitArgs {
+                    set_docker_host: true,
+                    shell: Some("zsh".into()),
+                };
+                rt.block_on(run_init(args.clone(), &speck_home)).unwrap();
+                rt.block_on(run_init(args, &speck_home)).unwrap();
 
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        let args = InitArgs {
-            set_docker_host: true,
-            shell: Some("zsh".into()),
-        };
-        rt.block_on(run_init(args.clone(), &speck_home)).unwrap();
-        rt.block_on(run_init(args, &speck_home)).unwrap();
-
-        let zshrc = std::fs::read_to_string(home.join(".zshrc"))
-            .expect("zshrc must exist after init --set-docker-host");
-        let begin_count = zshrc.matches("# BEGIN speck").count();
-        assert_eq!(
-            begin_count, 1,
-            "running spk init --set-docker-host twice must produce exactly one block; got {begin_count}"
+                let zshrc = std::fs::read_to_string(home.join(".zshrc"))
+                    .expect("zshrc must exist after init --set-docker-host");
+                let begin_count = zshrc.matches("# BEGIN speck").count();
+                assert_eq!(
+                    begin_count, 1,
+                    "running spk init --set-docker-host twice must produce exactly one block; got {begin_count}"
+                );
+            },
         );
-
-        unsafe {
-            std::env::remove_var("HOME");
-        }
     }
 
     #[test]
     fn init_writes_fish_conf_d() {
-        let _guard = ENV_LOCK.lock().unwrap();
         let home = temp_home("fish");
         let xdg = home.join("config");
-        unsafe {
-            std::env::set_var("HOME", &home);
-            std::env::set_var("XDG_CONFIG_HOME", &xdg);
-            std::env::remove_var("DOCKER_HOST");
-        }
+        temp_env::with_vars(
+            [
+                ("HOME", Some(home.to_str().unwrap())),
+                ("XDG_CONFIG_HOME", Some(xdg.to_str().unwrap())),
+                ("DOCKER_HOST", None),
+            ],
+            || {
+                let speck_home = home.join(".local/share/speck");
+                std::fs::create_dir_all(&speck_home).unwrap();
 
-        let speck_home = home.join(".local/share/speck");
-        std::fs::create_dir_all(&speck_home).unwrap();
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap();
+                rt.block_on(run_init(
+                    InitArgs {
+                        set_docker_host: true,
+                        shell: Some("fish".into()),
+                    },
+                    &speck_home,
+                ))
+                .unwrap();
 
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        rt.block_on(run_init(
-            InitArgs {
-                set_docker_host: true,
-                shell: Some("fish".into()),
+                let fish_file = xdg.join("fish/conf.d/speck.fish");
+                assert!(
+                    fish_file.exists(),
+                    "conf.d/speck.fish must exist after fish init --set-docker-host"
+                );
+                let content = std::fs::read_to_string(&fish_file).unwrap();
+                assert!(
+                    content.contains("# BEGIN speck"),
+                    "fish conf.d file must contain the # BEGIN speck marker; got: {content:?}"
+                );
+                assert!(
+                    content.contains("spk env --shell fish | source"),
+                    "fish conf.d file must invoke `spk env --shell fish | source`; got: {content:?}"
+                );
             },
-            &speck_home,
-        ))
-        .unwrap();
-
-        let fish_file = xdg.join("fish/conf.d/speck.fish");
-        assert!(
-            fish_file.exists(),
-            "conf.d/speck.fish must exist after fish init --set-docker-host"
         );
-        let content = std::fs::read_to_string(&fish_file).unwrap();
-        assert!(
-            content.contains("# BEGIN speck"),
-            "fish conf.d file must contain the # BEGIN speck marker; got: {content:?}"
-        );
-        assert!(
-            content.contains("spk env --shell fish | source"),
-            "fish conf.d file must invoke `spk env --shell fish | source`; got: {content:?}"
-        );
-
-        unsafe {
-            std::env::remove_var("HOME");
-            std::env::remove_var("XDG_CONFIG_HOME");
-        }
     }
 
     #[test]
     fn init_warns_when_docker_host_conflict() {
-        let _guard = ENV_LOCK.lock().unwrap();
         let home = temp_home("docker-host-conflict");
-        unsafe {
-            std::env::set_var("HOME", &home);
-            std::env::set_var("DOCKER_HOST", "unix:///var/run/docker.sock");
-            std::env::remove_var("XDG_CONFIG_HOME");
-        }
+        temp_env::with_vars(
+            [
+                ("HOME", Some(home.to_str().unwrap())),
+                ("DOCKER_HOST", Some("unix:///var/run/docker.sock")),
+                ("XDG_CONFIG_HOME", None),
+            ],
+            || {
+                let speck_home = home.join(".local/share/speck");
+                std::fs::create_dir_all(&speck_home).unwrap();
 
-        let speck_home = home.join(".local/share/speck");
-        std::fs::create_dir_all(&speck_home).unwrap();
-
-        // Capture stderr by running init without --set-docker-host (returns Ok, no writes).
-        // The warning is to eprintln, so we can't capture it programmatically without
-        // redirecting stderr; instead we just assert that run_init completes Ok
-        // (the warning is informational, not a hard error).
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        let result = rt.block_on(run_init(
-            InitArgs {
-                set_docker_host: false,
-                shell: Some("zsh".into()),
+                // Capture stderr by running init without --set-docker-host (returns Ok, no writes).
+                // The warning is to eprintln, so we can't capture it programmatically without
+                // redirecting stderr; instead we just assert that run_init completes Ok
+                // (the warning is informational, not a hard error).
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap();
+                let result = rt.block_on(run_init(
+                    InitArgs {
+                        set_docker_host: false,
+                        shell: Some("zsh".into()),
+                    },
+                    &speck_home,
+                ));
+                assert!(
+                    result.is_ok(),
+                    "run_init must complete Ok even when DOCKER_HOST conflicts (warning only)"
+                );
             },
-            &speck_home,
-        ));
-        assert!(
-            result.is_ok(),
-            "run_init must complete Ok even when DOCKER_HOST conflicts (warning only)"
         );
-
-        unsafe {
-            std::env::remove_var("HOME");
-            std::env::remove_var("DOCKER_HOST");
-        }
     }
 
     #[test]
     fn init_creates_config_yaml_when_absent() {
-        let _guard = ENV_LOCK.lock().unwrap();
         let home = temp_home("config-scaffold");
-        unsafe {
-            std::env::set_var("HOME", &home);
-            std::env::remove_var("DOCKER_HOST");
-            std::env::remove_var("XDG_CONFIG_HOME");
-        }
+        temp_env::with_vars(
+            [
+                ("HOME", Some(home.to_str().unwrap())),
+                ("DOCKER_HOST", None),
+                ("XDG_CONFIG_HOME", None),
+            ],
+            || {
+                let speck_home = home.join(".speck");
+                std::fs::create_dir_all(&speck_home).unwrap();
 
-        let speck_home = home.join(".speck");
-        std::fs::create_dir_all(&speck_home).unwrap();
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap();
+                rt.block_on(run_init(
+                    InitArgs { set_docker_host: false, shell: Some("zsh".into()) },
+                    &speck_home,
+                ))
+                .unwrap();
 
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        rt.block_on(run_init(
-            InitArgs { set_docker_host: false, shell: Some("zsh".into()) },
-            &speck_home,
-        ))
-        .unwrap();
+                let config = speck_home.join("config.yaml");
+                assert!(config.exists(), "config.yaml must be created by spk init");
+                let content = std::fs::read_to_string(&config).unwrap();
+                assert!(content.contains("version: 1"), "scaffold must include version: 1");
+                assert!(content.contains("vm:"), "scaffold must include vm: section");
+                assert!(content.contains("ca:"), "scaffold must include ca: section");
+                assert!(content.contains("extra_certs"), "scaffold must mention extra_certs");
 
-        let config = speck_home.join("config.yaml");
-        assert!(config.exists(), "config.yaml must be created by spk init");
-        let content = std::fs::read_to_string(&config).unwrap();
-        assert!(content.contains("version: 1"), "scaffold must include version: 1");
-        assert!(content.contains("vm:"), "scaffold must include vm: section");
-        assert!(content.contains("ca:"), "scaffold must include ca: section");
-        assert!(content.contains("extra_certs"), "scaffold must mention extra_certs");
-
-        // Verify it's a valid config (parseable by load_config_file)
-        let (app_config, warnings) = crate::config::load_config_file(&speck_home).unwrap();
-        assert_eq!(app_config.version, Some(1));
-        assert!(warnings.is_empty(), "scaffold must produce no unknown-key warnings");
-
-        unsafe { std::env::remove_var("HOME"); }
+                // Verify it's a valid config (parseable by load_config_file)
+                let (app_config, warnings) = crate::config::load_config_file(&speck_home).unwrap();
+                assert_eq!(app_config.version, Some(1));
+                assert!(warnings.is_empty(), "scaffold must produce no unknown-key warnings");
+            },
+        );
     }
 
     #[test]
     fn init_does_not_overwrite_existing_config_yaml() {
-        let _guard = ENV_LOCK.lock().unwrap();
         let home = temp_home("config-no-overwrite");
-        unsafe {
-            std::env::set_var("HOME", &home);
-            std::env::remove_var("DOCKER_HOST");
-            std::env::remove_var("XDG_CONFIG_HOME");
-        }
+        temp_env::with_vars(
+            [
+                ("HOME", Some(home.to_str().unwrap())),
+                ("DOCKER_HOST", None),
+                ("XDG_CONFIG_HOME", None),
+            ],
+            || {
+                let speck_home = home.join(".speck");
+                std::fs::create_dir_all(&speck_home).unwrap();
+                let config = speck_home.join("config.yaml");
+                std::fs::write(&config, "version: 1\n# custom user content\n").unwrap();
 
-        let speck_home = home.join(".speck");
-        std::fs::create_dir_all(&speck_home).unwrap();
-        let config = speck_home.join("config.yaml");
-        std::fs::write(&config, "version: 1\n# custom user content\n").unwrap();
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap();
+                rt.block_on(run_init(
+                    InitArgs { set_docker_host: false, shell: Some("zsh".into()) },
+                    &speck_home,
+                ))
+                .unwrap();
 
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        rt.block_on(run_init(
-            InitArgs { set_docker_host: false, shell: Some("zsh".into()) },
-            &speck_home,
-        ))
-        .unwrap();
-
-        let after = std::fs::read_to_string(&config).unwrap();
-        assert!(
-            after.contains("custom user content"),
-            "spk init must not overwrite existing config.yaml"
+                let after = std::fs::read_to_string(&config).unwrap();
+                assert!(
+                    after.contains("custom user content"),
+                    "spk init must not overwrite existing config.yaml"
+                );
+            },
         );
-
-        unsafe { std::env::remove_var("HOME"); }
     }
 }
