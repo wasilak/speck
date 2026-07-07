@@ -306,6 +306,18 @@ async fn test_exec_create_start() {
         "exec output should contain 'from-exec', got: {output_text:?}"
     );
 
+    // Verify the exec process exit code via inspect_exec.
+    let inspect = docker
+        .inspect_exec(&exec.id)
+        .await
+        .expect("inspect exec should succeed");
+    assert_eq!(
+        inspect.exit_code,
+        Some(0),
+        "exec exit code should be 0, got: {:?}",
+        inspect.exit_code,
+    );
+
     docker
         .remove_container(
             &container_id,
