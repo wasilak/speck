@@ -132,6 +132,8 @@ pub async fn create(
     }
 
     let image_for_event = body.image.clone();
+    // Capture port_bindings_json before labels is moved into ContainerCreateSpec.
+    let port_bindings_json: Option<String> = labels.get("speck.port_bindings").cloned();
     let client = state.containerd_client().await?;
     let container_id = client
         .container_create(ContainerCreateSpec {
@@ -146,6 +148,25 @@ pub async fn create(
             cpu_shares: host_config.cpu_shares,
         })
         .await?;
+
+    // Persist container metadata (including port bindings) to SQLite.
+    // Storage failures are non-fatal — the container was already created in containerd.
+    {
+        let created_at = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs().to_string())
+            .unwrap_or_default();
+        let create_body_json = format!("{{\"Image\":\"{}\"}}", image_for_event);
+        let storage = state.storage.lock().await;
+        let _ = storage.save_container_meta(
+            &container_id,
+            &image_for_event,
+            &create_body_json,
+            &port_bindings_json,
+            &created_at,
+        );
+    }
+
     crate::handlers::events::emit_event(
         &state,
         json!({"Type": "container", "Action": "create", "Actor": {"ID": container_id, "Attributes": {"image": image_for_event}}}),
@@ -313,7 +334,11 @@ pub async fn inspect(
         .task_get(&id)
         .await?
         .unwrap_or_else(|| stopped_task(&id));
-    Ok(Json(container_inspect_json(info, task)))
+    let port_bindings = {
+        let storage = state.storage.lock().await;
+        storage.load_port_bindings(&id).unwrap_or(None)
+    };
+    Ok(Json(container_inspect_json(info, task, port_bindings)))
 }
 
 pub async fn list(
@@ -582,8 +607,16 @@ fn container_summary_json(container: ContainerInfo, running_ids: &HashSet<String
 fn container_inspect_json(
     container: ContainerInfo,
     task: crate::containerd_client::TaskInfo,
+    port_bindings: Option<HashMap<String, Vec<PortBindingBody>>>,
 ) -> Value {
     let running = task.status == TaskStatus::Running;
+    let ports: serde_json::Map<String, Value> = match port_bindings {
+        Some(pb) => pb
+            .into_iter()
+            .map(|(k, v)| (k, serde_json::to_value(v).unwrap_or(Value::Null)))
+            .collect(),
+        None => serde_json::Map::new(),
+    };
     json!({
         "Id": container.id,
         "Name": format!("/{}", container.labels.get("speck.name").cloned().unwrap_or_else(|| "speck".into())),
@@ -595,7 +628,7 @@ fn container_inspect_json(
             "ExitCode": task.exit_status,
         },
         "Mounts": [],
-        "NetworkSettings": { "Ports": {} },
+        "NetworkSettings": { "Ports": Value::Object(ports) },
     })
 }
 
