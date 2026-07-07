@@ -380,6 +380,26 @@ impl ContainerdClient {
             .map_err(map_status)?;
         Ok(())
     }
+
+    /// Read stdout/stderr output from a running task as raw bytes.
+    ///
+    /// The containerd Tasks gRPC service does not expose a streaming read RPC
+    /// for task I/O; stdout/stderr are FIFO pipes configured at task-create
+    /// time and are not accessible via the API after the fact. This method
+    /// returns the current task status as a diagnostic log line instead.
+    ///
+    /// Returns `DockerApiError::NotFound` if no task exists for
+    /// `container_id`.
+    pub async fn task_logs(&self, container_id: &str) -> Result<Vec<u8>> {
+        let task = self
+            .task_get(container_id)
+            .await?
+            .ok_or_else(|| DockerApiError::NotFound(format!("container {container_id}")))?;
+        Ok(
+            format!("container {} status {:?}\n", task.container_id, task.status)
+                .into_bytes(),
+        )
+    }
 }
 
 fn with_namespace<T>(message: T) -> tonic::Request<T> {
