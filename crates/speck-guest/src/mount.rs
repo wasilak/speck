@@ -15,6 +15,7 @@
 
 use crate::Syscalls;
 use std::io;
+use std::path::Path;
 
 // ---------------------------------------------------------------------------
 // Constants — raw Linux mount flags (MS_BIND and MS_RELATIME are not
@@ -144,6 +145,31 @@ pub fn mount_rootfs_runtime_filesystems(syscalls: &dyn Syscalls) {
 }
 
 // ---------------------------------------------------------------------------
+// Root switch (chroot + chdir)
+// ---------------------------------------------------------------------------
+
+/// Chroot into `/rootfs` and switch the working directory to `/`.
+///
+/// This is the equivalent of calling `chroot /rootfs` followed by `cd /`
+/// from a shell script.  It is used by the dockerd pre-exec closure to
+/// set up a chrooted process environment rooted at the guest rootfs.
+///
+/// # Errors
+///
+/// Returns an error if the `chroot` or `chdir` syscall fails.
+pub fn chroot_into_rootfs(syscalls: &dyn Syscalls) -> Result<(), io::Error> {
+    let ret = syscalls.chroot(b"/rootfs\0");
+    if ret < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let ret = syscalls.chdir(b"/\0");
+    if ret < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Rootfs + data disk mounts
 // ---------------------------------------------------------------------------
 
@@ -222,7 +248,14 @@ pub fn mount_disks(syscalls: &dyn Syscalls) {
         }
     }
 
-    grow_data_filesystem_if_needed("/dev/vdb", "/rootfs/var/lib/containerd");
+    if let Err(e) = syscalls.grow_filesystem("/dev/vdb", "/rootfs/var/lib/containerd") {
+        tracing::error!(
+            device = "/dev/vdb",
+            error = %e,
+            "data filesystem resize failed"
+        );
+        std::process::exit(1);
+    }
 
     // Create runtime directories needed by containerd
     let _ = std::fs::create_dir_all("/rootfs/run");
@@ -236,31 +269,42 @@ pub fn mount_disks(syscalls: &dyn Syscalls) {
 
 /// Grow the mounted ext4 data filesystem to match the current block device size.
 ///
-/// This is fatal because continuing with the old filesystem size after the
-/// host grew `data.img` would silently violate the configured VM disk size.
-pub fn grow_data_filesystem_if_needed(device: &str, mountpoint: &str) {
-    if !std::path::Path::new(mountpoint).exists() {
-        tracing::error!(device, mountpoint, "data filesystem mountpoint missing");
-        std::process::exit(1);
+/// The caller (`mount_disks`) is responsible for calling `std::process::exit(1)`
+/// if this function returns an error — that preserves the production behaviour
+/// of failing closed while allowing this function to be called from test mock
+/// implementations that should not exit the test process.
+///
+/// # Errors
+///
+/// Returns an error if the mountpoint is missing, the resize tool is missing,
+/// or the resize tool fails to execute.
+pub fn grow_data_filesystem_if_needed(device: &str, mountpoint: &str) -> io::Result<()> {
+    if !Path::new(mountpoint).exists() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("data filesystem mountpoint {mountpoint} missing"),
+        ));
     }
 
     let resize_tool = "/sbin/resize2fs";
-    if !std::path::Path::new(resize_tool).exists() {
-        tracing::error!(device, resize_tool, "data filesystem resize tool missing");
-        std::process::exit(1);
+    if !Path::new(resize_tool).exists() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("data filesystem resize tool {resize_tool} missing"),
+        ));
     }
 
     tracing::info!(device, "growing data filesystem");
     match run_resize_tool(resize_tool, &[device]) {
-        Ok(status) if status.success() => {}
-        Ok(status) => {
-            tracing::error!(device, %status, "resize2fs failed");
-            std::process::exit(1);
-        }
-        Err(e) => {
-            tracing::error!(device, error = %e, "data filesystem resize tool failed");
-            std::process::exit(1);
-        }
+        Ok(status) if status.success() => Ok(()),
+        Ok(status) => Err(io::Error::new(
+            io::ErrorKind::Other,
+            format!("resize2fs failed with {status}"),
+        )),
+        Err(e) => Err(io::Error::new(
+            io::ErrorKind::Other,
+            format!("data filesystem resize tool failed: {e}"),
+        )),
     }
 }
 

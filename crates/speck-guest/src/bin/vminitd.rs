@@ -22,7 +22,8 @@ mod linux {
 
     use std::io;
     use speck_guest::mount::{
-        mount_disks, mount_early_filesystems, mount_rootfs_runtime_filesystems,
+        chroot_into_rootfs, mount_disks, mount_early_filesystems,
+        mount_rootfs_runtime_filesystems,
     };
     use speck_guest::LibcSyscalls;
 
@@ -803,15 +804,8 @@ mod linux {
 
                 unsafe {
                     cmd.pre_exec(|| {
-                        let ret = libc::chroot(b"/rootfs\0".as_ptr() as *const libc::c_char);
-                        if ret < 0 {
-                            return Err(io::Error::last_os_error());
-                        }
-                        let ret = libc::chdir(b"/\0".as_ptr() as *const libc::c_char);
-                        if ret < 0 {
-                            return Err(io::Error::last_os_error());
-                        }
-                        Ok(())
+                        let sc = speck_guest::LibcSyscalls;
+                        chroot_into_rootfs(&sc)
                     });
                 }
 
@@ -1145,13 +1139,9 @@ mod tests {
         let data_mount = MOUNT_SOURCE
             .find("b\"/dev/vdb\\0\"")
             .expect("mount_disks should mount /dev/vdb");
-        let grow_call = [
-            "grow_data_filesystem_if_needed(\"/dev/vdb\"",
-            ", \"/rootfs/var/lib/containerd\")",
-        ]
-        .concat();
+        let grow_call = "grow_filesystem(\"/dev/vdb\", \"/rootfs/var/lib/containerd\")";
         let grow = MOUNT_SOURCE
-            .find(&grow_call)
+            .find(grow_call)
             .expect("mount_disks should grow /dev/vdb after mounting it");
         let runtime_dir = MOUNT_SOURCE[grow..]
             .find("std::fs::create_dir_all(\"/rootfs/run\")")

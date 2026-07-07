@@ -28,6 +28,12 @@ pub trait Syscalls: Send + Sync + 'static {
     /// Write a kernel parameter via `sysctl`.  Mirrors `libc::sysctl` or
     /// `/proc/sys/` file write.
     fn sysctl_write(&self, name: &str, value: &str) -> Result<(), std::io::Error>;
+
+    /// Grow an ext4 filesystem to match the block device size.
+    ///
+    /// On Linux this calls the real `grow_data_filesystem_if_needed` which
+    /// runs `/sbin/resize2fs`.  Tests use a mock to control the outcome.
+    fn grow_filesystem(&self, device: &str, mountpoint: &str) -> Result<(), std::io::Error>;
 }
 
 /// Production syscall implementation backed by raw `libc` calls.
@@ -63,6 +69,10 @@ impl Syscalls for LibcSyscalls {
             std::io::ErrorKind::Unsupported,
             "sysctl_write not yet implemented via libc",
         ))
+    }
+
+    fn grow_filesystem(&self, device: &str, mountpoint: &str) -> Result<(), std::io::Error> {
+        crate::mount::grow_data_filesystem_if_needed(device, mountpoint)
     }
 }
 
