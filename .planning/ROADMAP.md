@@ -103,9 +103,9 @@ Plans:
 
 - [x] 17-01-PLAN.md — SQLite-backed storage module with schema, CRUD, exec reconciliation
 - [x] 17-02-PLAN.md — Persist volume/network/exec handlers through storage
-- [ ] 17-03-PLAN.md — Persist port bindings; inject into container inspect response
-- [ ] 17-04-PLAN.md — Real container log output through encode_frame multiplexing
-- [ ] 17-05-PLAN.md — Wire SpeckDockerd as production layer; fix image_push + network validation
+- [x] 17-03-PLAN.md — Persist port bindings; inject into container inspect response
+- [x] 17-04-PLAN.md — Real container log output through encode_frame multiplexing
+- [x] 17-05-PLAN.md — Wire SpeckDockerd as production layer; fix image_push + network validation
 - [ ] 17-06-PLAN.md — Enable three bollard conformance tests
 
 ### Phase 18: Developer ID Distribution
@@ -145,5 +145,5 @@ Plans:
 | 14. Homebrew Distribution | v1.1 | 3/3 | Complete | 2026-07-06 |
 | 15. Stability Foundation | v1.2 | 8/8 | Complete   | 2026-07-07 |
 | 16. Daemon Polish | v1.2 | 3/5 | In Progress|  |
-| 17. testcontainers Conformance | v1.2 | 2/6 | In Progress|  |
+| 17. testcontainers Conformance | v1.2 | 5/6 | In Progress|  |
 | 18. Developer ID Distribution | v1.2 | 0/TBD | Not started | — |
