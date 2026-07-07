@@ -218,11 +218,7 @@ async fn fetch_kata_assets(speck_home: &Path) -> anyhow::Result<()> {
     // The shell command contains only fixed URLs/filenames; destination paths
     // are handled below with Rust filesystem calls to avoid shell injection.
     // curl_flags is one of two hardcoded strings, so no shell injection risk.
-    let curl_flags = if is_interactive() {
-        "-fL --progress-bar"
-    } else {
-        "-fsSL"
-    };
+    let curl_flags = if is_interactive() { "-fL --progress-bar" } else { "-fsSL" };
     let status = tokio::process::Command::new("bash")
         .args([
             "-c",
@@ -288,10 +284,7 @@ async fn fetch_initrd(speck_home: &Path) -> anyhow::Result<()> {
     }
 
     std::fs::rename(&tmp, &dest)?;
-    std::fs::write(
-        speck_home.join("initrd/initrd.version"),
-        format!("{INITRD_VERSION}\n"),
-    )?;
+    std::fs::write(speck_home.join("initrd/initrd.version"), format!("{INITRD_VERSION}\n"))?;
     println!("  Initrd ready: {}", dest.display());
     Ok(())
 }
@@ -372,9 +365,7 @@ async fn fetch_rootfs(speck_home: &Path) -> anyhow::Result<()> {
         let mut buf = vec![0u8; 64 * 1024];
         loop {
             let n = f.read(&mut buf).context("read error during checksum")?;
-            if n == 0 {
-                break;
-            }
+            if n == 0 { break; }
             hasher.update(&buf[..n]);
         }
         format!("{:x}", hasher.finalize())
@@ -388,10 +379,7 @@ async fn fetch_rootfs(speck_home: &Path) -> anyhow::Result<()> {
     // On checksum mismatch, remove the corrupted tmp file.
     // On success, atomically rename to final path.
     std::fs::rename(&tmp, &dest)?;
-    std::fs::write(
-        speck_home.join("rootfs.version"),
-        format!("{ROOTFS_VERSION}\n"),
-    )?;
+    std::fs::write(speck_home.join("rootfs.version"), format!("{ROOTFS_VERSION}\n"))?;
     println!("  Rootfs ready: {}", dest.display());
     Ok(())
 }
@@ -659,9 +647,9 @@ pub async fn run_up(
     let guest = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
         guest.start().context("failed to start VM")?;
         spinner_for_start.set_message("Waiting for guest...");
-        guest
-            .wait_for_ready()
-            .map_err(|e| anyhow::anyhow!("{} — {}", e, console_log_hint))?;
+        guest.wait_for_ready().map_err(|e| {
+            anyhow::anyhow!("{} — {}", e, console_log_hint)
+        })?;
         Ok(guest)
     })
     .await
@@ -748,7 +736,9 @@ pub async fn run_up(
                     tokio::spawn(async move {
                         let mut buf = [0u8; 32];
                         let n = stream.read(&mut buf).await.unwrap_or(0);
-                        let cmd = std::str::from_utf8(&buf[..n]).unwrap_or("").trim();
+                        let cmd = std::str::from_utf8(&buf[..n])
+                            .unwrap_or("")
+                            .trim();
                         match cmd {
                             "PREPARE_RESTART" => {
                                 *state.write().expect("VmState RwLock poisoned") =
@@ -820,7 +810,10 @@ async fn shutdown_gracefully(
 /// Poll `sock_path` with `GET /_ping` until the Docker API responds with HTTP 200
 /// or `timeout_secs` elapses. Progress dots are printed to stderr every 500 ms.
 /// Returns an error (non-zero exit) on timeout.
-pub async fn wait_for_socket(sock_path: &std::path::Path, timeout_secs: u64) -> anyhow::Result<()> {
+pub async fn wait_for_socket(
+    sock_path: &std::path::Path,
+    timeout_secs: u64,
+) -> anyhow::Result<()> {
     use std::time::{Duration, Instant};
 
     let deadline = Instant::now() + Duration::from_secs(timeout_secs);
@@ -935,8 +928,10 @@ mod tests {
 
     #[test]
     fn check_asset_versions_allows_matching_version_files() {
-        let dir =
-            std::env::temp_dir().join(format!("speck-asset-version-match-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "speck-asset-version-match-{}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("initrd")).unwrap();
         std::fs::write(dir.join("rootfs.version"), format!("{ROOTFS_VERSION}\n")).unwrap();
@@ -966,22 +961,13 @@ mod tests {
 
         let err = check_asset_versions(&dir).unwrap_err().to_string();
 
-        assert!(
-            err.contains("rootfs.version"),
-            "error names stale file: {err}"
-        );
-        assert!(
-            err.contains("0.0.1"),
-            "error includes on-disk version: {err}"
-        );
+        assert!(err.contains("rootfs.version"), "error names stale file: {err}");
+        assert!(err.contains("0.0.1"), "error includes on-disk version: {err}");
         assert!(
             err.contains(ROOTFS_VERSION),
             "error includes required version: {err}"
         );
-        assert!(
-            err.contains("spk up --pull"),
-            "error includes pull hint: {err}"
-        );
+        assert!(err.contains("spk up --pull"), "error includes pull hint: {err}");
     }
 
     #[test]
@@ -1001,18 +987,12 @@ mod tests {
             err.contains("initrd/initrd.version"),
             "error names stale file: {err}"
         );
-        assert!(
-            err.contains("0.0.1"),
-            "error includes on-disk version: {err}"
-        );
+        assert!(err.contains("0.0.1"), "error includes on-disk version: {err}");
         assert!(
             err.contains(INITRD_VERSION),
             "error includes required version: {err}"
         );
-        assert!(
-            err.contains("spk up --pull"),
-            "error includes pull hint: {err}"
-        );
+        assert!(err.contains("spk up --pull"), "error includes pull hint: {err}");
     }
 
     #[test]
@@ -1047,9 +1027,7 @@ mod tests {
         let tests_start = source.find("#[cfg(test)]").unwrap();
         let run_up = &source[run_up_start..tests_start];
 
-        assert!(
-            run_up.contains("ensure_assets(speck_home, effective.vm.disk_gb, args.pull).await")
-        );
+        assert!(run_up.contains("ensure_assets(speck_home, effective.vm.disk_gb, args.pull).await"));
         assert!(!run_up.contains("create_data_disk"));
         assert!(!run_up.contains("count=512"));
     }
@@ -1175,10 +1153,7 @@ mod tests {
         let source = include_str!("up.rs");
 
         assert!(source.contains("KeepAlive") && source.contains("<true/>"));
-        assert!(
-            source.contains("RunAtLoad") && source.contains("<true/>"),
-            "RunAtLoad must be true so the daemon starts immediately on bootstrap"
-        );
+        assert!(source.contains("RunAtLoad") && source.contains("<true/>"), "RunAtLoad must be true so the daemon starts immediately on bootstrap");
     }
 
     #[test]
@@ -1286,7 +1261,10 @@ mod tests {
 
     #[test]
     fn console_log_hint_includes_exact_speck_home_path() {
-        let dir = std::env::temp_dir().join(format!("speck-console-hint-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "speck-console-hint-{}",
+            std::process::id()
+        ));
         let hint = console_log_hint(&dir);
         let expected_path = dir.join("console.log");
 
@@ -1326,19 +1304,14 @@ mod tests {
 
     #[tokio::test]
     async fn wait_for_socket_times_out_when_socket_absent() {
-        let dir = std::env::temp_dir().join(format!("speck-wait-timeout-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("speck-wait-timeout-{}", std::process::id()));
         let sock = dir.join("speck.sock");
 
         let err = wait_for_socket(&sock, 1).await.unwrap_err().to_string();
 
-        assert!(
-            err.contains("timed out after 1s"),
-            "expected timeout, got: {err}"
-        );
-        assert!(
-            err.contains("spk logs"),
-            "timeout error must reference spk logs"
-        );
+        assert!(err.contains("timed out after 1s"), "expected timeout, got: {err}");
+        assert!(err.contains("spk logs"), "timeout error must reference spk logs");
     }
 
     #[tokio::test]
@@ -1346,7 +1319,8 @@ mod tests {
         use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
         use tokio::net::UnixListener;
 
-        let dir = std::env::temp_dir().join(format!("speck-wait-ready-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("speck-wait-ready-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let sock_path = dir.join("speck.sock");
         let _ = std::fs::remove_file(&sock_path);
@@ -1373,10 +1347,7 @@ mod tests {
         let result = wait_for_socket(&sock_path_clone, 10).await;
         let _ = std::fs::remove_file(&sock_path_clone);
 
-        assert!(
-            result.is_ok(),
-            "wait_for_socket should succeed when socket serves HTTP 200"
-        );
+        assert!(result.is_ok(), "wait_for_socket should succeed when socket serves HTTP 200");
     }
 
     #[test]
