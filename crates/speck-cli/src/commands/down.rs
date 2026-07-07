@@ -10,56 +10,67 @@ const LAUNCHD_LABEL: &str = "io.speck.vm";
 pub async fn run_down(speck_home: &Path) -> anyhow::Result<()> {
     // Step 1 — Liveness check: confirm the daemon is running before issuing bootout
     let sock_path = speck_home.join("run/control.sock");
-    let mut stream = UnixStream::connect(&sock_path)
-        .await
-        .context("daemon is not running (control socket not reachable — start with spk up)")?;
-    let mut buf = [0u8; 8];
-    let _ = stream.read(&mut buf).await;
-    drop(stream);
-    tracing::info!("daemon is alive, proceeding with shutdown");
-
-    // Step 2 — Stop the daemon. Try launchctl bootout first (launchd-managed case);
-    // if it fails (daemon was started directly, e.g. spk up --foreground), fall back
-    // to SIGTERM via the PID file.
-    let out = std::process::Command::new("id")
-        .arg("-u")
-        .output()
-        .context("failed to run id -u")?;
-    let uid_str = std::str::from_utf8(&out.stdout)
-        .context("non-UTF8 uid")?
-        .trim()
-        .to_owned();
-    let bootout_ok = tokio::process::Command::new("launchctl")
-        .args(["bootout", &format!("gui/{uid_str}/{LAUNCHD_LABEL}")])
-        .status()
-        .await
-        .context("launchctl bootout failed")?
-        .success();
-
-    if !bootout_ok {
-        tracing::info!("launchctl bootout failed — trying pid file fallback");
-        kill_via_pid_file(speck_home)?;
-    }
-
-    // Step 3 — Remove io.speck.vm.plist to prevent auto-registration on next login
-    let home = std::env::var("HOME").context("HOME not set")?;
-    let plist_path = PathBuf::from(home)
-        .join("Library/LaunchAgents")
-        .join("io.speck.vm.plist");
-    match std::fs::remove_file(&plist_path) {
-        Ok(()) => tracing::info!("plist removed"),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => tracing::warn!(error = %e, "failed to remove plist"),
-    }
-
-    // Step 4 — Poll for clean shutdown: wait until control.sock disappears (timeout 30s)
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while sock_path.exists() {
-        if Instant::now() >= deadline {
-            tracing::warn!("daemon did not stop within 30 seconds");
-            break;
+    let alive = match UnixStream::connect(&sock_path).await {
+        Ok(mut stream) => {
+            let mut buf = [0u8; 8];
+            let _ = stream.read(&mut buf).await;
+            drop(stream);
+            true
         }
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        Err(_) => false,
+    };
+
+    if alive {
+        tracing::info!("daemon is alive, proceeding with shutdown");
+
+        // Step 2 — Stop the daemon. Try launchctl bootout first (launchd-managed case);
+        // if it fails (daemon was started directly, e.g. spk up --foreground), fall back
+        // to SIGTERM via the PID file.
+        let out = std::process::Command::new("id")
+            .arg("-u")
+            .output()
+            .context("failed to run id -u")?;
+        let uid_str = std::str::from_utf8(&out.stdout)
+            .context("non-UTF8 uid")?
+            .trim()
+            .to_owned();
+        let bootout_ok = tokio::process::Command::new("launchctl")
+            .args(["bootout", &format!("gui/{uid_str}/{LAUNCHD_LABEL}")])
+            .status()
+            .await
+            .context("launchctl bootout failed")?
+            .success();
+
+        if !bootout_ok {
+            tracing::info!("launchctl bootout failed — trying pid file fallback");
+            kill_via_pid_file(speck_home)?;
+        }
+
+        // Step 3 — Remove io.speck.vm.plist to prevent auto-registration on next login
+        let home = std::env::var("HOME").context("HOME not set")?;
+        let plist_path = PathBuf::from(home)
+            .join("Library/LaunchAgents")
+            .join("io.speck.vm.plist");
+        match std::fs::remove_file(&plist_path) {
+            Ok(()) => tracing::info!("plist removed"),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => tracing::warn!(error = %e, "failed to remove plist"),
+        }
+
+        // Step 4 — Poll for clean shutdown: wait until control.sock disappears (timeout 30s)
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while sock_path.exists() {
+            if Instant::now() >= deadline {
+                tracing::warn!("daemon did not stop within 30 seconds");
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    } else {
+        tracing::info!(
+            "control socket not reachable (daemon may already be stopped), trying PID file fallback"
+        );
+        kill_via_pid_file(speck_home)?;
     }
 
     // Step 5 — User-facing confirmation
@@ -81,8 +92,23 @@ fn kill_via_pid_file(speck_home: &Path) -> anyhow::Result<()> {
         .args(["-TERM", &pid])
         .status()
         .context("failed to run kill")?;
+    if status.success() {
+        tracing::info!(pid, "sent SIGTERM via pid file");
+        return Ok(());
+    }
+    // First attempt failed — check for stale PID (ESRCH) by inspecting stderr
+    let output = std::process::Command::new("kill")
+        .args(["-TERM", &pid])
+        .output()
+        .context("failed to run kill")?;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if stderr.contains("No such process") {
+        tracing::info!("stale pid file detected — removing");
+        std::fs::remove_file(&pid_path)
+            .context("failed to remove stale pid file")?;
+        return Ok(());
+    }
     anyhow::ensure!(status.success(), "kill -TERM {pid} failed");
-    tracing::info!(pid, "sent SIGTERM via pid file");
     Ok(())
 }
 
@@ -182,6 +208,32 @@ mod tests {
         assert!(
             !src.contains("fn run_restart"),
             "down.rs must not define a run_restart function — DAEMON-04 is met by spk down && spk up"
+        );
+    }
+
+    #[test]
+    fn kill_via_pid_file_handles_esrch() {
+        let src = production_code();
+        assert!(
+            src.contains("No such process"),
+            "kill_via_pid_file must detect ESRCH by checking kill stderr for 'No such process'"
+        );
+        assert!(
+            src.contains("remove_file"),
+            "kill_via_pid_file must remove the stale PID file when ESRCH is detected"
+        );
+    }
+
+    #[test]
+    fn down_handles_control_socket_gone() {
+        let src = production_code();
+        let connect_pos = src
+            .find("UnixStream::connect")
+            .expect("run_down must call UnixStream::connect");
+        let after_connect = &src[connect_pos..];
+        assert!(
+            after_connect.contains("Err"),
+            "run_down must handle UnixStream::connect failure by matching on Err"
         );
     }
 }
