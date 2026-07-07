@@ -65,15 +65,7 @@ impl RegistryAuth {
     }
 }
 
-impl fmt::Debug for RegistryAuth {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("RegistryAuth")
-            .field("username", &self.username)
-            .field("password", &"[REDACTED]")
-            .field("server_address", &self.server_address)
-            .finish()
-    }
-}
+
 
 #[cfg(test)]
 mod tests {
