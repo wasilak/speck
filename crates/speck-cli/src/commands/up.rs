@@ -2,13 +2,16 @@ use std::io::Read as _;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Arc;
+use std::sync::RwLock;
 
 use anyhow::Context as _;
 use indicatif::ProgressBar;
 use sha2::{Digest as _, Sha256};
+use speck_core::VmState;
 use speck_net::config::NetworkConfig;
 use speck_vz::config::GuestConfig;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixListener;
 use tokio::signal::unix::{SignalKind, signal};
 
@@ -714,16 +717,35 @@ pub async fn run_up(
     std::fs::write(&pid_path, format!("{}\n", std::process::id()))
         .context("failed to write pid file")?;
 
+    let vm_state: Arc<RwLock<VmState>> = Arc::new(RwLock::new(VmState::Running));
+
     let ctrl_sock_path = speck_home.join("run/control.sock");
     let _ = std::fs::remove_file(&ctrl_sock_path);
     let listener = UnixListener::bind(&ctrl_sock_path).context("failed to bind control socket")?;
     std::fs::set_permissions(&ctrl_sock_path, std::fs::Permissions::from_mode(0o600))?;
+    let vm_state_ctrl = vm_state.clone();
     tokio::spawn(async move {
         loop {
             match listener.accept().await {
                 Ok((mut stream, _)) => {
+                    let state = vm_state_ctrl.clone();
                     tokio::spawn(async move {
-                        let _ = stream.write_all(b"PONG\n").await;
+                        let mut buf = [0u8; 32];
+                        let n = stream.read(&mut buf).await.unwrap_or(0);
+                        let cmd = std::str::from_utf8(&buf[..n])
+                            .unwrap_or("")
+                            .trim();
+                        match cmd {
+                            "PREPARE_RESTART" => {
+                                *state.write().expect("VmState RwLock poisoned") =
+                                    VmState::Restarting;
+                                tracing::info!("VmState set to Restarting — 503 middleware active");
+                                let _ = stream.write_all(b"OK\n").await;
+                            }
+                            _ => {
+                                let _ = stream.write_all(b"PONG\n").await;
+                            }
+                        }
                     });
                 }
                 Err(e) => {
@@ -1322,5 +1344,22 @@ mod tests {
         let _ = std::fs::remove_file(&sock_path_clone);
 
         assert!(result.is_ok(), "wait_for_socket should succeed when socket serves HTTP 200");
+    }
+
+    #[test]
+    fn control_socket_handles_prepare_restart() {
+        let source = include_str!("up.rs");
+        let run_up_start = source.find("pub async fn run_up").unwrap();
+        let tests_start = source.find("#[cfg(test)]").unwrap();
+        let run_up = &source[run_up_start..tests_start];
+
+        assert!(
+            run_up.contains("PREPARE_RESTART"),
+            "control socket handler must read and dispatch PREPARE_RESTART command"
+        );
+        assert!(
+            run_up.contains("VmState::Restarting"),
+            "control socket handler must set VmState::Restarting on PREPARE_RESTART"
+        );
     }
 }
