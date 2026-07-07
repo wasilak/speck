@@ -3,6 +3,65 @@ use std::os::unix::io::RawFd;
 
 use crate::error;
 
+/// Abstraction over DNS resolution strategies.
+///
+/// `Send + Sync + 'static` so implementors can be passed as `Arc<dyn Resolver>`
+/// across thread boundaries (e.g., `tokio::task::spawn_blocking`).
+#[cfg_attr(test, mockall::automock)]
+pub trait Resolver: Send + Sync + 'static {
+    /// Resolve `domain` using the system resolver (getaddrinfo). Returns a
+    /// complete DNS response on success, `None` on transient failure.
+    fn resolve(&self, domain: &str, query: &[u8]) -> Option<Vec<u8>>;
+
+    /// Forward a DNS query directly to `nameserver` via UDP. Returns a
+    /// complete DNS response on success, `None` on timeout / failure.
+    fn direct_query(&self, nameserver: std::net::IpAddr, query: &[u8]) -> Option<Vec<u8>>;
+}
+
+/// Production resolver backed by the macOS system resolver.
+///
+/// Delegates `resolve` → `resolve_dns` (getaddrinfo) and
+/// `direct_query` → `direct_dns_query` (raw UDP).
+pub struct SystemResolver;
+
+impl Resolver for SystemResolver {
+    fn resolve(&self, domain: &str, query: &[u8]) -> Option<Vec<u8>> {
+        resolve_dns(domain, query)
+    }
+
+    fn direct_query(&self, nameserver: std::net::IpAddr, query: &[u8]) -> Option<Vec<u8>> {
+        direct_dns_query(nameserver, query)
+    }
+}
+
+/// Perform the resolver-table routing logic and return a complete DNS response.
+///
+/// Extracted from the `spawn_dns_proxy` loop body: if `table.find_resolver`
+/// returns VPN-scoped servers the query is forwarded via `resolver.direct_query`;
+/// otherwise it falls through to `resolver.resolve`.  Always returns a complete
+/// response (success payload or SERVFAIL), never `None`.
+pub fn resolve_with_table(
+    resolver: &dyn Resolver,
+    table: &crate::resolver_table::ResolverTable,
+    domain: &str,
+    query: &[u8],
+) -> Vec<u8> {
+    if let Some(servers) = table.find_resolver(domain) {
+        // VPN-scoped path: direct UDP to first matching VPN nameserver (DNS-04)
+        let mut resp = servers
+            .iter()
+            .find_map(|&ns| resolver.direct_query(ns, query))
+            .unwrap_or_else(|| build_servfail_response(query));
+        translate_nxdomain_to_servfail(&mut resp);
+        resp
+    } else {
+        // Default path: macOS system resolver via getaddrinfo (DNS-02, DNS-03)
+        resolver
+            .resolve(domain, query)
+            .unwrap_or_else(|| build_servfail_response(query))
+    }
+}
+
 /// Spawn a thread that reads length-prefixed DNS queries from a vsock fd,
 /// resolves them via the macOS system resolver (getaddrinfo), and writes responses.
 ///
