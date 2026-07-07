@@ -170,6 +170,28 @@ pub fn chroot_into_rootfs(syscalls: &dyn Syscalls) -> Result<(), io::Error> {
 }
 
 // ---------------------------------------------------------------------------
+// Sysctl initialization
+// ---------------------------------------------------------------------------
+
+/// Write kernel parameters needed for container runtime operation.
+///
+/// Calls `sysctl_write` for each required parameter in a fixed order.
+/// Returns the first error encountered; subsequent parameters are not
+/// attempted.
+///
+/// # Parameters set
+///
+/// | Key | Value | Reason |
+/// |-----|-------|--------|
+/// | `net.ipv4.ip_forward` | `1` | Enable IP forwarding for container bridge/networking |
+/// | `kernel.unprivileged_userns_clone` | `1` | Allow unprivileged user namespace cloning (required by crun) |
+pub fn configure_sysctl_params(syscalls: &dyn Syscalls) -> Result<(), io::Error> {
+    syscalls.sysctl_write("net.ipv4.ip_forward", "1")?;
+    syscalls.sysctl_write("kernel.unprivileged_userns_clone", "1")?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Rootfs + data disk mounts
 // ---------------------------------------------------------------------------
 

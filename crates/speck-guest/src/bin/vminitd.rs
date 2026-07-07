@@ -22,7 +22,7 @@ mod linux {
 
     use std::io;
     use speck_guest::mount::{
-        chroot_into_rootfs, mount_disks, mount_early_filesystems,
+        chroot_into_rootfs, configure_sysctl_params, mount_disks, mount_early_filesystems,
         mount_rootfs_runtime_filesystems,
     };
     use speck_guest::LibcSyscalls;
@@ -109,6 +109,13 @@ mod linux {
         // the container runtime (CERT-02, CERT-03).
         install_ca_certs();
         write_containerd_hosts_toml();
+
+        // Configure kernel parameters needed by the container runtime
+        // before spawning dockerd.  Failures are logged but non-fatal —
+        // the guest may still work with reduced functionality.
+        if let Err(e) = configure_sysctl_params(&libc_syscalls) {
+            eprintln!("vminitd: sysctl configuration failed: {e}");
+        }
 
         let dockerd_bin = detect_dockerd_bin_in_chroot();
         eprintln!("vminitd: using dockerd at chroot-relative path {dockerd_bin}");
