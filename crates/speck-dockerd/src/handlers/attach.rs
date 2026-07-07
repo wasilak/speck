@@ -1,4 +1,5 @@
 use std::convert::Infallible;
+use std::sync::Arc;
 
 use axum::body::{Body, Bytes};
 use axum::extract::{Path, Query, State};
@@ -10,6 +11,7 @@ use serde::Deserialize;
 use tokio::io::AsyncWriteExt;
 
 use crate::error::{DockerApiError, Result};
+use crate::log_relay::{self, RelayLogs};
 use crate::state::AppState;
 use crate::stream::{decode_frame, encode_frame};
 
@@ -83,20 +85,51 @@ pub async fn container_logs(
     Query(query): Query<LogsQuery>,
 ) -> Result<impl IntoResponse> {
     let client = state.containerd_client().await?;
-    let raw = client.task_logs(&id).await?;
-    let output = if query.timestamps {
-        let mut with_ts = b"1970-01-01T00:00:00Z ".to_vec();
-        with_ts.extend_from_slice(&raw);
-        with_ts
-    } else {
-        raw
-    };
     let mut frames = Vec::new();
-    if query.stdout || !query.stderr {
-        frames.push(Bytes::from(encode_frame(1, &output)));
-    }
-    if query.stderr {
-        frames.push(Bytes::from(encode_frame(2, b"")));
+    if let Some(port) = state.guest.log_relay_vsock_port() {
+        let guest = Arc::clone(&state.guest);
+        let id_clone = id.clone();
+        let relay_logs = tokio::task::spawn_blocking(move || {
+            log_relay::read_logs(&guest, port, &id_clone)
+        })
+        .await
+        .map_err(|err| DockerApiError::Internal(format!("log relay read task failed: {err}")))?;
+        let relay_logs = match relay_logs {
+            Ok(logs) => logs,
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    container_id = %id,
+                    "log relay read failed — returning empty logs"
+                );
+                RelayLogs {
+                    stdout: Vec::new(),
+                    stderr: Vec::new(),
+                }
+            }
+        };
+
+        if query.stdout || !query.stderr {
+            let stdout = maybe_timestamp(relay_logs.stdout, query.timestamps);
+            if !stdout.is_empty() {
+                frames.push(Bytes::from(encode_frame(1, &stdout)));
+            }
+        }
+        if query.stderr {
+            let stderr = maybe_timestamp(relay_logs.stderr, query.timestamps);
+            if !stderr.is_empty() {
+                frames.push(Bytes::from(encode_frame(2, &stderr)));
+            }
+        }
+    } else {
+        let raw = client.task_logs(&id).await?;
+        let output = maybe_timestamp(raw, query.timestamps);
+        if query.stdout || !query.stderr {
+            frames.push(Bytes::from(encode_frame(1, &output)));
+        }
+        if query.stderr {
+            frames.push(Bytes::from(encode_frame(2, b"")));
+        }
     }
 
     if query.follow {
@@ -116,6 +149,16 @@ pub async fn container_logs(
             body,
         )
             .into_response())
+    }
+}
+
+fn maybe_timestamp(raw: Vec<u8>, timestamps: bool) -> Vec<u8> {
+    if timestamps && !raw.is_empty() {
+        let mut with_ts = b"1970-01-01T00:00:00Z ".to_vec();
+        with_ts.extend_from_slice(&raw);
+        with_ts
+    } else {
+        raw
     }
 }
 

@@ -12,6 +12,7 @@ pub mod buildkit;
 pub mod containerd_client;
 pub mod error;
 pub mod handlers;
+pub mod log_relay;
 pub mod middleware;
 pub mod registry_auth;
 pub mod router;

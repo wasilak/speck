@@ -11,6 +11,7 @@ use serde_json::{Value, json};
 
 use crate::containerd_client::{ContainerCreateSpec, ContainerInfo, TaskSpec, TaskStatus};
 use crate::error::{DockerApiError, Result};
+use crate::log_relay;
 use crate::state::AppState;
 
 #[derive(Debug, Deserialize)]
@@ -188,10 +189,30 @@ pub async fn start(State(state): State<AppState>, Path(id): Path<String>) -> Res
         .labels
         .get("speck.tty")
         .is_some_and(|value| value == "true");
+    let (stdout_fifo, stderr_fifo) = if let Some(port) = state.guest.log_relay_vsock_port() {
+        let stdout_path = format!("/tmp/speck-logs/{id}.stdout");
+        let stderr_path = format!("/tmp/speck-logs/{id}.stderr");
+        match log_relay::create(&state.guest, port, &id) {
+            Ok(()) => (Some(stdout_path), Some(stderr_path)),
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    container_id = %id,
+                    "log relay create failed — logs will be unavailable"
+                );
+                (None, None)
+            }
+        }
+    } else {
+        (None, None)
+    };
+
     client
         .task_create(TaskSpec {
             container_id: id.clone(),
             terminal,
+            stdout_fifo,
+            stderr_fifo,
         })
         .await?;
     client.task_start(&id).await?;
@@ -368,6 +389,9 @@ pub async fn remove(State(state): State<AppState>, Path(id): Path<String>) -> Re
     let client = state.containerd_client().await?;
     let _ = client.task_kill(&id, 15).await;
     let _ = client.task_delete(&id).await;
+    if let Some(port) = state.guest.log_relay_vsock_port() {
+        let _ = log_relay::close(&state.guest, port, &id);
+    }
     client.container_delete(&id).await?;
     crate::handlers::events::emit_event(
         &state,

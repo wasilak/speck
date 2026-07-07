@@ -28,6 +28,8 @@ pub struct TaskId(pub String);
 pub struct TaskSpec {
     pub container_id: String,
     pub terminal: bool,
+    pub stdout_fifo: Option<String>,
+    pub stderr_fifo: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,8 +103,8 @@ impl ContainerdClient {
                 container_id: spec.container_id.clone(),
                 rootfs: Vec::new(),
                 stdin: String::new(),
-                stdout: String::new(),
-                stderr: String::new(),
+                stdout: spec.stdout_fifo.unwrap_or_default(),
+                stderr: spec.stderr_fifo.unwrap_or_default(),
                 terminal: spec.terminal,
                 checkpoint: None,
                 options: None,
