@@ -18,7 +18,11 @@ class Speck < Formula
 
   def caveats
     <<~EOS
-      First-run note: macOS may quarantine the binary (ad-hoc signing). To clear:
+      Development-only Formula: this installs an ad-hoc signed,
+      non-notarized Speck binary. It is not a Developer ID or official
+      notarized distribution path.
+
+      First-run note: macOS may quarantine the binary. To clear for local development:
         xattr -dr com.apple.quarantine #{HOMEBREW_PREFIX}/bin/spk
 
       Set up shell integration (once):
