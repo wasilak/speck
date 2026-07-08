@@ -142,16 +142,14 @@ fn development_marker_path() -> &'static Path {
 }
 
 fn build_release_binary() -> Result<(), String> {
-    run_command(
-        Command::new("cargo").args([
-            "build",
-            "--release",
-            "--package",
-            "speck-cli",
-            "--target",
-            "aarch64-apple-darwin",
-        ]),
-    )
+    run_command(Command::new("cargo").args([
+        "build",
+        "--release",
+        "--package",
+        "speck-cli",
+        "--target",
+        "aarch64-apple-darwin",
+    ]))
 }
 
 fn build_codesign_args(binary: &Path) -> Vec<&str> {
@@ -248,7 +246,12 @@ fn build_development_archive(version: &str) -> Result<(), String> {
 
 fn signed_binary_has_virtualization_entitlement(binary: &Path) -> Result<(), String> {
     let output = Command::new("codesign")
-        .args(["-d", "--entitlements", "-", binary.to_str().ok_or("non-UTF-8 binary path")?])
+        .args([
+            "-d",
+            "--entitlements",
+            "-",
+            binary.to_str().ok_or("non-UTF-8 binary path")?,
+        ])
         .output()
         .map_err(|err| format!("failed to run codesign entitlement dump: {err}"))?;
 
@@ -441,16 +444,19 @@ mod tests {
     fn signing_command_uses_ad_hoc_identity_and_exact_entitlement_flags() {
         let command = build_codesign_args(release_binary_path());
 
-        assert_eq!(command, vec![
-            "--sign",
-            "-",
-            "--entitlements",
-            "speck.entitlements",
-            "--options",
-            "runtime",
-            "--force",
-            "target/aarch64-apple-darwin/release/spk",
-        ]);
+        assert_eq!(
+            command,
+            vec![
+                "--sign",
+                "-",
+                "--entitlements",
+                "speck.entitlements",
+                "--options",
+                "runtime",
+                "--force",
+                "target/aarch64-apple-darwin/release/spk",
+            ]
+        );
         assert!(!command.contains(&"SPECK_DEVELOPER_ID_APPLICATION"));
         assert!(!command.contains(&"--timestamp"));
     }
@@ -466,23 +472,29 @@ mod tests {
     #[test]
     fn package_stage_paths_install_to_usr_local_bin() {
         assert_eq!(pkg_payload_root(), Path::new("packaging/pkg-root"));
-        assert_eq!(staged_binary_path(), Path::new("packaging/pkg-root/usr/local/bin/spk"));
+        assert_eq!(
+            staged_binary_path(),
+            Path::new("packaging/pkg-root/usr/local/bin/spk")
+        );
     }
 
     #[test]
     fn productbuild_command_is_unsigned_development_package() {
         let args = build_productbuild_args("0.1.0");
 
-        assert_eq!(args, vec![
-            "--root",
-            "packaging/pkg-root",
-            "/",
-            "--identifier",
-            "io.speck.spk.dev",
-            "--version",
-            "0.1.0",
-            "dist/spk-development-non-notarized.pkg",
-        ]);
+        assert_eq!(
+            args,
+            vec![
+                "--root",
+                "packaging/pkg-root",
+                "/",
+                "--identifier",
+                "io.speck.spk.dev",
+                "--version",
+                "0.1.0",
+                "dist/spk-development-non-notarized.pkg",
+            ]
+        );
         assert!(!args.iter().any(|arg| arg == "--sign"));
         assert!(!args.iter().any(|arg| arg == "SPECK_DEVELOPER_ID_INSTALLER"));
     }
@@ -491,8 +503,18 @@ mod tests {
     fn archive_command_contains_non_notarized_package() {
         let args = build_archive_args("0.1.0");
 
-        assert!(args.iter().any(|arg| arg == "spk-development-non-notarized.pkg"));
-        assert!(args.iter().any(|arg| arg == "DEVELOPMENT-NON-NOTARIZED.txt"));
-        assert!(!args.iter().any(|arg| arg.contains("notarytool") || arg.contains("stapler")));
+        assert!(
+            args.iter()
+                .any(|arg| arg == "spk-development-non-notarized.pkg")
+        );
+        assert!(
+            args.iter()
+                .any(|arg| arg == "DEVELOPMENT-NON-NOTARIZED.txt")
+        );
+        assert!(
+            !args
+                .iter()
+                .any(|arg| arg.contains("notarytool") || arg.contains("stapler"))
+        );
     }
 }
