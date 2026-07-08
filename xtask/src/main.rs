@@ -1,3 +1,5 @@
+mod dist;
+
 use std::process::{Command, ExitCode};
 
 fn main() -> ExitCode {
@@ -6,6 +8,8 @@ fn main() -> ExitCode {
         eprintln!("Commands:");
         eprintln!("  ci            Run all CI checks locally");
         eprintln!("  sign          Codesign the release binary with virtualization entitlement");
+        eprintln!("  dist          Build Developer ID distribution artifacts");
+        eprintln!("  dist-check    Check Developer ID distribution prerequisites");
         eprintln!("  codesign-dev  Ad-hoc codesign debug binary with virtualization entitlement");
         eprintln!("  init          Download kernel + initrd for VM boot");
         return ExitCode::from(1);
@@ -14,11 +18,13 @@ fn main() -> ExitCode {
     match subcommand.as_str() {
         "ci" => task_ci(),
         "sign" => task_sign(),
+        "dist" => dist::task_dist(),
+        "dist-check" => dist::task_dist_check(),
         "codesign-dev" => task_codesign_dev(),
         "init" => task_init(),
         other => {
             eprintln!("Unknown command: {other}");
-            eprintln!("Usage: cargo xtask <ci|sign|codesign-dev|init>");
+            eprintln!("Usage: cargo xtask <ci|sign|dist|dist-check|codesign-dev|init>");
             ExitCode::from(1)
         }
     }
