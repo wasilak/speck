@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::RwLock;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Context as _;
 use indicatif::ProgressBar;
@@ -758,10 +758,23 @@ pub async fn run_up(
                         let cmd = std::str::from_utf8(&buf[..n]).unwrap_or("").trim();
                         match cmd {
                             "PREPARE_RESTART" => {
-                                *state.write().expect("VmState RwLock poisoned") =
-                                    VmState::Restarting;
-                                tracing::info!("VmState set to Restarting — 503 middleware active");
+                                let _restart_start;
+                                {
+                                    let mut v = state.write().expect("VmState RwLock poisoned");
+                                    *v = VmState::Restarting;
+                                    _restart_start = Instant::now();
+                                }
+                                tracing::info!("VmState set to Restarting — 503 middleware active, 60s lease");
                                 let _ = stream.write_all(b"OK\n").await;
+                                let state_clone = state.clone();
+                                tokio::spawn(async move {
+                                    tokio::time::sleep(Duration::from_secs(60)).await;
+                                    let mut v = state_clone.write().expect("VmState RwLock poisoned");
+                                    if *v == VmState::Restarting {
+                                        *v = VmState::Running;
+                                        tracing::warn!("Restarting lease expired (60s) — reset to Running");
+                                    }
+                                });
                             }
                             _ => {
                                 let _ = stream.write_all(b"PONG\n").await;
@@ -822,6 +835,7 @@ async fn shutdown_gracefully(
     }
     let _ = std::fs::remove_file(sock_path);
     let _ = std::fs::remove_file(speck_home.join("run/speck.pid"));
+    let _ = std::fs::remove_file(speck_home.join("run/control.sock"));
     Ok(())
 }
 
