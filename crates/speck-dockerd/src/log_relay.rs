@@ -53,7 +53,10 @@ fn write_all_to_socket(socket: &speck_vz::VzSocket, mut buf: &[u8]) -> io::Resul
     while !buf.is_empty() {
         let n = socket.write(buf)?;
         if n == 0 {
-            return Err(io::Error::new(io::ErrorKind::WriteZero, "write returned zero"));
+            return Err(io::Error::new(
+                io::ErrorKind::WriteZero,
+                "write returned zero",
+            ));
         }
         buf = &buf[n..];
     }

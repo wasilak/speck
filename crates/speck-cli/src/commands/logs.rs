@@ -11,7 +11,10 @@ pub struct LogsArgs {
 pub fn run_logs(speck_home: &Path, args: LogsArgs) -> anyhow::Result<()> {
     let log_path = speck_home.join("speck.log");
     if !log_path.exists() {
-        anyhow::bail!("no log file found at {} — start Speck first", log_path.display());
+        anyhow::bail!(
+            "no log file found at {} — start Speck first",
+            log_path.display()
+        );
     }
 
     if args.tail {

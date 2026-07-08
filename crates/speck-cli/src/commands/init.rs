@@ -429,7 +429,10 @@ mod tests {
                     .build()
                     .unwrap();
                 rt.block_on(run_init(
-                    InitArgs { set_docker_host: false, shell: Some("zsh".into()) },
+                    InitArgs {
+                        set_docker_host: false,
+                        shell: Some("zsh".into()),
+                    },
                     &speck_home,
                 ))
                 .unwrap();
@@ -437,15 +440,24 @@ mod tests {
                 let config = speck_home.join("config.yaml");
                 assert!(config.exists(), "config.yaml must be created by spk init");
                 let content = std::fs::read_to_string(&config).unwrap();
-                assert!(content.contains("version: 1"), "scaffold must include version: 1");
+                assert!(
+                    content.contains("version: 1"),
+                    "scaffold must include version: 1"
+                );
                 assert!(content.contains("vm:"), "scaffold must include vm: section");
                 assert!(content.contains("ca:"), "scaffold must include ca: section");
-                assert!(content.contains("extra_certs"), "scaffold must mention extra_certs");
+                assert!(
+                    content.contains("extra_certs"),
+                    "scaffold must mention extra_certs"
+                );
 
                 // Verify it's a valid config (parseable by load_config_file)
                 let (app_config, warnings) = crate::config::load_config_file(&speck_home).unwrap();
                 assert_eq!(app_config.version, Some(1));
-                assert!(warnings.is_empty(), "scaffold must produce no unknown-key warnings");
+                assert!(
+                    warnings.is_empty(),
+                    "scaffold must produce no unknown-key warnings"
+                );
             },
         );
     }
@@ -470,7 +482,10 @@ mod tests {
                     .build()
                     .unwrap();
                 rt.block_on(run_init(
-                    InitArgs { set_docker_host: false, shell: Some("zsh".into()) },
+                    InitArgs {
+                        set_docker_host: false,
+                        shell: Some("zsh".into()),
+                    },
                     &speck_home,
                 ))
                 .unwrap();

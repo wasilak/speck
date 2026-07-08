@@ -131,8 +131,12 @@ pub fn spawn_dns_proxy(
             tracing::debug!(domain = ?qname, "dns-proxy resolving");
             let current_table = resolver_rx.borrow_and_update().clone();
             let to_send = if let Some(domain) = qname {
-                let response =
-                    resolve_with_table(resolver.as_ref(), &current_table, &domain, &buf[..query_len]);
+                let response = resolve_with_table(
+                    resolver.as_ref(),
+                    &current_table,
+                    &domain,
+                    &buf[..query_len],
+                );
                 tracing::debug!(bytes = response.len(), "dns-proxy resolved ok");
                 response
             } else {
@@ -439,10 +443,7 @@ mod tests {
         let mut mock = MockResolver::new();
         let ns: std::net::IpAddr = "1.2.3.4".parse().unwrap();
         mock.expect_direct_query()
-            .with(
-                mockall::predicate::eq(ns),
-                mockall::predicate::always(),
-            )
+            .with(mockall::predicate::eq(ns), mockall::predicate::always())
             .returning(|_, _| Some(vec![0u8; 12]));
 
         let mut table = ResolverTable::default();
@@ -454,8 +455,7 @@ mod tests {
     #[test]
     fn resolve_with_table_falls_back_to_servfail_when_resolve_returns_none() {
         let mut mock = MockResolver::new();
-        mock.expect_resolve()
-            .returning(|_, _| None);
+        mock.expect_resolve().returning(|_, _| None);
 
         let table = ResolverTable::default();
         let result = resolve_with_table(&mock, &table, "example.com", b"\x00\x01");

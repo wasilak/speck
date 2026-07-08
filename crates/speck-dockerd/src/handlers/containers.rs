@@ -657,7 +657,18 @@ fn container_inspect_json(
     let ports: serde_json::Map<String, Value> = match port_bindings {
         Some(pb) => pb
             .into_iter()
-            .map(|(k, v)| (k, serde_json::to_value(v).unwrap_or(Value::Null)))
+            .map(|(k, v)| {
+                let bindings = v
+                    .into_iter()
+                    .map(|binding| {
+                        json!({
+                            "HostIp": binding.host_ip.unwrap_or_else(|| "0.0.0.0".to_string()),
+                            "HostPort": binding.host_port.unwrap_or_default(),
+                        })
+                    })
+                    .collect();
+                (k, Value::Array(bindings))
+            })
             .collect(),
         None => serde_json::Map::new(),
     };
@@ -679,6 +690,7 @@ fn container_inspect_json(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::containerd_client::TaskInfo;
 
     // ---- parse_docker_bind: success cases ----
 
@@ -845,5 +857,87 @@ mod tests {
             std::path::PathBuf::from("/data")
         );
         assert!(reparsed[1].read_only, "second bind must be read-only");
+    }
+
+    #[test]
+    fn test_inspect_ports_defaults_omitted_host_ip() {
+        let container = ContainerInfo {
+            id: "cid".into(),
+            image: "alpine".into(),
+            labels: HashMap::new(),
+            created_at_seconds: 0,
+        };
+        let mut port_bindings = HashMap::new();
+        port_bindings.insert(
+            "80/tcp".into(),
+            vec![PortBindingBody {
+                host_ip: None,
+                host_port: Some("18081".into()),
+            }],
+        );
+
+        let json = container_inspect_json(container, stopped_task("cid"), Some(port_bindings));
+
+        assert_eq!(
+            json["NetworkSettings"]["Ports"]["80/tcp"][0]["HostIp"],
+            Value::String("0.0.0.0".into())
+        );
+        assert_eq!(
+            json["NetworkSettings"]["Ports"]["80/tcp"][0]["HostPort"],
+            Value::String("18081".into())
+        );
+    }
+
+    #[test]
+    fn test_inspect_ports_preserves_explicit_host_ip() {
+        let container = ContainerInfo {
+            id: "cid".into(),
+            image: "alpine".into(),
+            labels: HashMap::new(),
+            created_at_seconds: 0,
+        };
+        let task = TaskInfo {
+            container_id: "cid".into(),
+            exec_id: String::new(),
+            pid: 0,
+            status: TaskStatus::Stopped,
+            exit_status: 0,
+        };
+        let mut port_bindings = HashMap::new();
+        port_bindings.insert(
+            "80/tcp".into(),
+            vec![PortBindingBody {
+                host_ip: Some("127.0.0.1".into()),
+                host_port: Some("18081".into()),
+            }],
+        );
+
+        let json = container_inspect_json(container, task, Some(port_bindings));
+
+        assert_eq!(
+            json["NetworkSettings"]["Ports"]["80/tcp"][0]["HostIp"],
+            Value::String("127.0.0.1".into())
+        );
+        assert_eq!(
+            json["NetworkSettings"]["Ports"]["80/tcp"][0]["HostPort"],
+            Value::String("18081".into())
+        );
+    }
+
+    #[test]
+    fn test_inspect_ports_empty_when_none() {
+        let container = ContainerInfo {
+            id: "cid".into(),
+            image: "alpine".into(),
+            labels: HashMap::new(),
+            created_at_seconds: 0,
+        };
+
+        let json = container_inspect_json(container, stopped_task("cid"), None);
+
+        assert_eq!(
+            json["NetworkSettings"]["Ports"],
+            Value::Object(serde_json::Map::new())
+        );
     }
 }

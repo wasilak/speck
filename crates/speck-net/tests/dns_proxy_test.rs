@@ -92,12 +92,7 @@ fn nxdomain_path_returns_rcode_3() {
     mock.expect_direct_query().never();
 
     let table = ResolverTable::default();
-    let result = speck_net::dns::resolve_with_table(
-        &mock,
-        &table,
-        "nxdomain-test.example",
-        &query,
-    );
+    let result = speck_net::dns::resolve_with_table(&mock, &table, "nxdomain-test.example", &query);
 
     // NXDOMAIN on the default path should be preserved (RCODE 3).
     assert_eq!(result[3] & 0x0f, 3, "expected NXDOMAIN (RCODE 3)");
@@ -118,12 +113,7 @@ fn servfail_path_returns_rcode_2_when_resolve_returns_none() {
     mock.expect_direct_query().never();
 
     let table = ResolverTable::default();
-    let result = speck_net::dns::resolve_with_table(
-        &mock,
-        &table,
-        "servfail-test.example",
-        &query,
-    );
+    let result = speck_net::dns::resolve_with_table(&mock, &table, "servfail-test.example", &query);
 
     // When resolve returns None the function builds a SERVFAIL (RCODE 2).
     assert_eq!(result[3] & 0x0f, 2, "expected SERVFAIL (RCODE 2)");
@@ -137,10 +127,7 @@ fn vpn_scoped_path_calls_direct_query_not_resolve() {
     let mut mock = MockProxyResolver::new();
     // direct_query MUST be called exactly once
     mock.expect_direct_query()
-        .with(
-            mockall::predicate::eq(vpn_ns),
-            mockall::predicate::always(),
-        )
+        .with(mockall::predicate::eq(vpn_ns), mockall::predicate::always())
         .times(1)
         .returning(|_, q| Some(q.to_vec()));
     // resolve MUST NOT be called
@@ -148,12 +135,7 @@ fn vpn_scoped_path_calls_direct_query_not_resolve() {
 
     let mut table = ResolverTable::default();
     table.add_entry("corp.example".to_string(), vec![vpn_ns]);
-    let _result = speck_net::dns::resolve_with_table(
-        &mock,
-        &table,
-        "host.corp.example",
-        &query,
-    );
+    let _result = speck_net::dns::resolve_with_table(&mock, &table, "host.corp.example", &query);
 
     // Expectations verified by mockall on drop — direct_query was called, resolve was not.
 }
@@ -173,12 +155,7 @@ fn default_path_calls_resolve_not_direct_query() {
     mock.expect_direct_query().never();
 
     let table = ResolverTable::default();
-    let _result = speck_net::dns::resolve_with_table(
-        &mock,
-        &table,
-        "example.com",
-        &query,
-    );
+    let _result = speck_net::dns::resolve_with_table(&mock, &table, "example.com", &query);
 
     // Expectations verified by mockall on drop.
 }

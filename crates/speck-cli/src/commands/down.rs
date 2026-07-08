@@ -83,8 +83,12 @@ pub async fn run_down(speck_home: &Path) -> anyhow::Result<()> {
 /// Used as a fallback when the daemon was started directly (not via launchd).
 fn kill_via_pid_file(speck_home: &Path) -> anyhow::Result<()> {
     let pid_path = speck_home.join("run/speck.pid");
-    let contents = std::fs::read_to_string(&pid_path)
-        .with_context(|| format!("pid file not found at {} — cannot stop daemon", pid_path.display()))?;
+    let contents = std::fs::read_to_string(&pid_path).with_context(|| {
+        format!(
+            "pid file not found at {} — cannot stop daemon",
+            pid_path.display()
+        )
+    })?;
     let pid = contents.trim().to_owned();
     pid.parse::<u32>()
         .with_context(|| format!("invalid pid in {}: {:?}", pid_path.display(), pid))?;
@@ -104,8 +108,7 @@ fn kill_via_pid_file(speck_home: &Path) -> anyhow::Result<()> {
     let stderr = String::from_utf8_lossy(&output.stderr);
     if stderr.contains("No such process") {
         tracing::info!("stale pid file detected — removing");
-        std::fs::remove_file(&pid_path)
-            .context("failed to remove stale pid file")?;
+        std::fs::remove_file(&pid_path).context("failed to remove stale pid file")?;
         return Ok(());
     }
     anyhow::ensure!(status.success(), "kill -TERM {pid} failed");

@@ -9,11 +9,11 @@
 //! mount functions without requiring root or a Linux host.
 
 use mockall::Sequence;
+use speck_guest::Syscalls;
 use speck_guest::mount::{
     chroot_into_rootfs, configure_sysctl_params, mount_disks, mount_early_filesystems,
     mount_rootfs_runtime_filesystems,
 };
-use speck_guest::Syscalls;
 
 // ---------------------------------------------------------------------------
 // Mock syscall implementation
@@ -136,9 +136,7 @@ fn mount_rootfs_runtime_mounts_proc_sys_dev_then_tmpfs_run() {
 
     // Expect tmpfs mount at /rootfs/run fifth
     mock.expect_mount()
-        .withf(|_, target, fstype, _| {
-            target == b"/rootfs/run\0" && fstype == b"tmpfs\0"
-        })
+        .withf(|_, target, fstype, _| target == b"/rootfs/run\0" && fstype == b"tmpfs\0")
         .times(1)
         .in_sequence(&mut seq)
         .returning(|_, _, _, _| 0);
@@ -216,9 +214,7 @@ fn mount_disks_mounts_vda_before_vdb_before_grow_before_dirs() {
 
     // Expect /dev/vda → /rootfs mount first
     mock.expect_mount()
-        .withf(|source, target, _, _| {
-            source == b"/dev/vda\0" && target == b"/rootfs\0"
-        })
+        .withf(|source, target, _, _| source == b"/dev/vda\0" && target == b"/rootfs\0")
         .times(1)
         .in_sequence(&mut seq)
         .returning(|_, _, _, _| 0);

@@ -65,8 +65,6 @@ impl RegistryAuth {
     }
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;

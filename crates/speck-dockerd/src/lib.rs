@@ -17,8 +17,8 @@ pub mod middleware;
 pub mod registry_auth;
 pub mod router;
 pub mod server;
-pub mod storage;
 pub mod state;
+pub mod storage;
 pub mod stream;
 
 pub use error::{DockerApiError, Result};
@@ -56,8 +56,7 @@ impl SpeckDockerd {
         }
 
         let state = state::AppState::with_storage(guest, containerd_proxy_path, storage);
-        let router = router::build_router(state)
-            .layer(RestartCheckLayer::new(vm_state));
+        let router = router::build_router(state).layer(RestartCheckLayer::new(vm_state));
         let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
         tokio::spawn(server::serve(router, sock_path.clone(), shutdown_rx));

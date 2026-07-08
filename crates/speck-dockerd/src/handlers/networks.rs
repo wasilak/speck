@@ -127,9 +127,10 @@ pub async fn network_connect(
     }
     if let Some(container_id) = &body.container {
         let client = state.containerd_client().await?;
-        client.container_get(container_id).await.map_err(|_| {
-            DockerApiError::NotFound(format!("container {container_id} not found"))
-        })?;
+        client
+            .container_get(container_id)
+            .await
+            .map_err(|_| DockerApiError::NotFound(format!("container {container_id} not found")))?;
     }
     Ok(StatusCode::OK)
 }
@@ -148,9 +149,10 @@ pub async fn network_disconnect(
     }
     if let Some(container_id) = &body.container {
         let client = state.containerd_client().await?;
-        client.container_get(container_id).await.map_err(|_| {
-            DockerApiError::NotFound(format!("container {container_id} not found"))
-        })?;
+        client
+            .container_get(container_id)
+            .await
+            .map_err(|_| DockerApiError::NotFound(format!("container {container_id} not found")))?;
     }
     Ok(StatusCode::OK)
 }

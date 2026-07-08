@@ -86,7 +86,8 @@ impl Storage {
 
         let mut map = HashMap::new();
         for row in rows {
-            let vol = row.map_err(|e| DockerApiError::Internal(format!("row load_volumes: {e}")))?;
+            let vol =
+                row.map_err(|e| DockerApiError::Internal(format!("row load_volumes: {e}")))?;
             map.insert(vol.name.clone(), vol);
         }
         Ok(map)
@@ -104,7 +105,10 @@ impl Storage {
 
     pub fn delete_volume(&self, name: &str) -> Result<()> {
         self.conn
-            .execute("DELETE FROM volumes WHERE name = ?1", rusqlite::params![name])
+            .execute(
+                "DELETE FROM volumes WHERE name = ?1",
+                rusqlite::params![name],
+            )
             .map_err(|e| DockerApiError::Internal(format!("delete_volume: {e}")))?;
         Ok(())
     }
@@ -129,7 +133,8 @@ impl Storage {
 
         let mut map = HashMap::new();
         for row in rows {
-            let net = row.map_err(|e| DockerApiError::Internal(format!("row load_networks: {e}")))?;
+            let net =
+                row.map_err(|e| DockerApiError::Internal(format!("row load_networks: {e}")))?;
             map.insert(net.id.clone(), net);
         }
         Ok(map)
@@ -237,19 +242,17 @@ impl Storage {
             .map_err(|e| DockerApiError::Internal(format!("prepare load_port_bindings: {e}")))?;
 
         let row: Option<Option<String>> = stmt
-            .query_row(rusqlite::params![id], |row| {
-                row.get::<_, Option<String>>(0)
-            })
+            .query_row(rusqlite::params![id], |row| row.get::<_, Option<String>>(0))
             .optional()
             .map_err(|e| DockerApiError::Internal(format!("query load_port_bindings: {e}")))?;
 
         match row {
             None | Some(None) => Ok(None),
             Some(Some(json)) => {
-                let bindings: HashMap<String, Vec<PortBindingBody>> =
-                    serde_json::from_str(&json).map_err(|e| {
-                        DockerApiError::Internal(format!("deserialize port_bindings: {e}"))
-                    })?;
+                let bindings: HashMap<String, Vec<PortBindingBody>> = serde_json::from_str(&json)
+                    .map_err(|e| {
+                    DockerApiError::Internal(format!("deserialize port_bindings: {e}"))
+                })?;
                 Ok(Some(bindings))
             }
         }

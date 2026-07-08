@@ -458,8 +458,7 @@ mod tests {
                 ..Default::default()
             };
 
-            let effective =
-                resolve_effective_config_with_physical_cores(file, &cli, 16).unwrap();
+            let effective = resolve_effective_config_with_physical_cores(file, &cli, 16).unwrap();
 
             assert_eq!(effective.vm.cpus, 8);
             assert_eq!(effective.vm.memory_mb, 2048);

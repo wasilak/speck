@@ -24,7 +24,9 @@ pub async fn run_restart(speck_home: &Path) -> anyhow::Result<()> {
     let n = cmd_stream.read(&mut resp_buf).await?;
     let response = std::str::from_utf8(&resp_buf[..n]).unwrap_or("");
     if !response.starts_with("OK") {
-        tracing::warn!("daemon did not acknowledge restart signal (response: {response:?}) — continuing anyway");
+        tracing::warn!(
+            "daemon did not acknowledge restart signal (response: {response:?}) — continuing anyway"
+        );
     }
     drop(cmd_stream);
 

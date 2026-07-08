@@ -3,19 +3,19 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Hardened Runtime
 status: completed
-last_updated: "2026-07-08T16:24:48.234Z"
+last_updated: "2026-07-08T16:47:44.996Z"
 last_activity: 2026-07-08 -- Phase 18.1 marked complete
 progress:
-  total_phases: 5
+  total_phases: 6
   completed_phases: 5
   total_plans: 27
   completed_plans: 27
-  percent: 100
+  percent: 83
 ---
 
 # State — Milestone v1.2 Hardened Runtime
 
-**Status:** Phase 18.1 complete
+**Status:** Complete
 
 ## Project Reference
 
@@ -26,14 +26,14 @@ See: .planning/PROJECT.md (updated 2026-07-06)
 
 ## Current Position
 
-Phase: 18.1 — COMPLETE
-Plan: 1 of 1
-Next: /gsd-plan-phase 18.1
-Status: Phase 18.1 complete
-Last activity: 2026-07-08 -- Phase 18.1 marked complete
+Phase: 17.1 — INSERTED (planned)
+Plan: — (not yet planned)
+Next: /gsd-discuss-phase 17.1
+Status: Phase 17.1 inserted for gap closure
+Last activity: 2026-07-08 -- Phase 17.1 inserted after Phase 17
 
 ```
-Progress: [████████████████████████████████--------] 80% (4/5 phases)
+Progress: [████████████████████████████████████████] 100% (5/5 phases)
 ```
 
 ## Milestone v1.2 Phase Overview
@@ -67,6 +67,7 @@ Progress: [███████████████████████
 ### Roadmap Evolution
 
 - Phase 18.1 inserted after Phase 18: Close gap: daemon stop/restart control socket reliability (URGENT)
+- Phase 17.1 inserted after Phase 17: Close testcontainers conformance gaps (follow-stream, HostIp default, network validation) (URGENT)
 
 ### Key Decisions (v1.2)
 

@@ -100,7 +100,9 @@ impl AppState {
             let mut nets = default_networks();
             match storage.load_networks() {
                 Ok(loaded) => nets.extend(loaded),
-                Err(e) => tracing::warn!(error = %e, "failed to load networks from storage; using defaults"),
+                Err(e) => {
+                    tracing::warn!(error = %e, "failed to load networks from storage; using defaults")
+                }
             }
             nets
         };

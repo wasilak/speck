@@ -1010,13 +1010,16 @@ impl VmThread {
                     std::thread::sleep(Duration::from_millis(200));
                 }
                 Err(Error::VsockTimeout) => {
-                    tracing::warn!(attempt = i + 1, port = ready_vsock_port, "vsock connect timed out");
+                    tracing::warn!(
+                        attempt = i + 1,
+                        port = ready_vsock_port,
+                        "vsock connect timed out"
+                    );
                 }
                 Err(e) => return Err(e),
             }
         }
-        let detail = last_connect_err
-            .unwrap_or_else(|| "all attempts timed out".into());
+        let detail = last_connect_err.unwrap_or_else(|| "all attempts timed out".into());
         Err(Error::GuestReadyTimeout(ready_vsock_port, detail))
     }
 

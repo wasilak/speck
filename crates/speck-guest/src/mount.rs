@@ -114,12 +114,7 @@ pub fn mount_rootfs_runtime_filesystems(syscalls: &dyn Syscalls) {
     // crun sees sysfs type at /sys/fs/cgroup and rejects it with
     // "invalid file system type". Mount cgroup2 directly on top.
     let _ = std::fs::create_dir_all("/rootfs/sys/fs/cgroup");
-    let ret = syscalls.mount(
-        b"cgroup2\0",
-        b"/rootfs/sys/fs/cgroup\0",
-        b"cgroup2\0",
-        0,
-    );
+    let ret = syscalls.mount(b"cgroup2\0", b"/rootfs/sys/fs/cgroup\0", b"cgroup2\0", 0);
     if ret < 0 {
         tracing::warn!(
             error = %io::Error::last_os_error(),

@@ -73,8 +73,7 @@ fn console_log_exists_with_kernel_messages_after_boot() {
         console_log.display()
     );
 
-    let content = std::fs::read_to_string(&console_log)
-        .expect("failed to read console.log");
+    let content = std::fs::read_to_string(&console_log).expect("failed to read console.log");
 
     assert!(
         content.len() > 0,
@@ -97,8 +96,7 @@ fn console_log_is_truncated_on_each_vm_start() {
     let console_log = home.join("console.log");
 
     // Write a sentinel that must NOT appear in the second boot's log.
-    std::fs::write(&console_log, b"STALE_SENTINEL_FROM_PREVIOUS_RUN\n")
-        .expect("write sentinel");
+    std::fs::write(&console_log, b"STALE_SENTINEL_FROM_PREVIOUS_RUN\n").expect("write sentinel");
 
     let config = make_console_test_config();
 
@@ -108,8 +106,8 @@ fn console_log_is_truncated_on_each_vm_start() {
     guest.wait_for_ready().expect("first VM ready");
     guest.stop().expect("first VM stop");
 
-    let after_first = std::fs::read_to_string(&console_log)
-        .expect("read console.log after first boot");
+    let after_first =
+        std::fs::read_to_string(&console_log).expect("read console.log after first boot");
     assert!(
         !after_first.contains("STALE_SENTINEL_FROM_PREVIOUS_RUN"),
         "console.log must be truncated at VM start — stale sentinel must not appear"
@@ -123,8 +121,8 @@ fn console_log_is_truncated_on_each_vm_start() {
     guest2.wait_for_ready().expect("second VM ready");
     guest2.stop().expect("second VM stop");
 
-    let after_second = std::fs::read_to_string(&console_log)
-        .expect("read console.log after second boot");
+    let after_second =
+        std::fs::read_to_string(&console_log).expect("read console.log after second boot");
 
     // The log should be approximately the same size as after the first boot (not doubled).
     assert!(

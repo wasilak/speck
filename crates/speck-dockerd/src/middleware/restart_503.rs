@@ -53,7 +53,11 @@ where
     }
 
     fn call(&mut self, req: Request<ReqBody>) -> Self::Future {
-        let state = self.vm_state.read().expect("VmState RwLock poisoned").clone();
+        let state = self
+            .vm_state
+            .read()
+            .expect("VmState RwLock poisoned")
+            .clone();
 
         if state == VmState::Restarting {
             let mut response = Response::new(ResBody::default());
@@ -79,8 +83,7 @@ mod tests {
         let production = &source[..test_start];
 
         assert!(
-            production.contains("StatusCode::SERVICE_UNAVAILABLE")
-                || production.contains("503"),
+            production.contains("StatusCode::SERVICE_UNAVAILABLE") || production.contains("503"),
             "production code must return 503 during Restarting state"
         );
         assert!(

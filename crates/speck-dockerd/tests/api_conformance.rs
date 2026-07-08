@@ -1,8 +1,8 @@
 use bollard::Docker;
 use bollard::exec::StartExecResults;
 use bollard::models::{
-    ContainerCreateBody, ExecConfig, HostConfig, NetworkCreateRequest, PortBinding,
-    VolumeCreateRequest,
+    ContainerCreateBody, ExecConfig, HostConfig, NetworkConnectRequest, NetworkCreateRequest,
+    NetworkDisconnectRequest, PortBinding, VolumeCreateRequest,
 };
 use bollard::query_parameters::CreateImageOptionsBuilder;
 use bollard::query_parameters::{
@@ -11,10 +11,10 @@ use bollard::query_parameters::{
 };
 use futures_util::StreamExt;
 use futures_util::TryStreamExt;
-use tokio::net::TcpStream;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
+use tokio::net::TcpStream;
 
 fn speck_sock() -> PathBuf {
     if let Ok(sock) = std::env::var("SPECK_SOCK") {
@@ -316,6 +316,13 @@ async fn test_inspect_shows_port_bindings() {
             ports.contains_key("80/tcp"),
             "Ports should contain '80/tcp', got: {ports:?}"
         );
+        let binding = ports
+            .get("80/tcp")
+            .and_then(|bindings| bindings.as_ref())
+            .and_then(|bindings| bindings.first())
+            .expect("80/tcp should have a port binding");
+        assert_eq!(binding.host_ip.as_deref(), Some("127.0.0.1"));
+        assert_eq!(binding.host_port.as_deref(), Some("18081"));
 
         docker
             .remove_container(
@@ -332,6 +339,266 @@ async fn test_inspect_shows_port_bindings() {
     assert!(
         result.is_ok(),
         "test_inspect_shows_port_bindings timed out after 30s"
+    );
+}
+
+#[tokio::test]
+async fn test_logs_follow_streams_delayed_output() {
+    if std::env::var("SPECK_TEST_INTEGRATION").is_err() {
+        eprintln!("skipping integration test: SPECK_TEST_INTEGRATION not set");
+        return;
+    }
+    let result = tokio::time::timeout(Duration::from_secs(30), async {
+        let docker = speck_docker();
+        let config = ContainerCreateBody {
+            image: Some("alpine".to_string()),
+            cmd: Some(vec![
+                "sh".to_string(),
+                "-c".to_string(),
+                "sleep 3; echo follow-me-speck".to_string(),
+            ]),
+            ..Default::default()
+        };
+        let options = CreateContainerOptionsBuilder::default()
+            .name("test-conformance-logs-follow")
+            .build();
+        let response = docker
+            .create_container(Some(options), config)
+            .await
+            .expect("create container");
+        let container_id = response.id;
+
+        docker
+            .start_container(&container_id, None::<StartContainerOptions>)
+            .await
+            .expect("start container");
+
+        let mut logs = docker.logs(
+            &container_id,
+            Some(LogsOptions {
+                follow: true,
+                stdout: true,
+                stderr: true,
+                ..Default::default()
+            }),
+        );
+        let output = tokio::time::timeout(Duration::from_secs(20), async {
+            let mut bytes = Vec::new();
+            while let Some(chunk) = logs.next().await {
+                let chunk = chunk.expect("read logs chunk");
+                bytes.extend_from_slice(chunk.as_ref());
+                if String::from_utf8_lossy(&bytes).contains("follow-me-speck") {
+                    break;
+                }
+            }
+            bytes
+        })
+        .await
+        .expect("follow stream should yield delayed output");
+        let output = String::from_utf8_lossy(&output);
+        assert!(
+            output.contains("follow-me-speck"),
+            "follow log output should contain delayed line, got: {output:?}"
+        );
+
+        docker
+            .remove_container(
+                &container_id,
+                Some(RemoveContainerOptions {
+                    force: true,
+                    ..Default::default()
+                }),
+            )
+            .await
+            .expect("remove container");
+    })
+    .await;
+    assert!(
+        result.is_ok(),
+        "test_logs_follow_streams_delayed_output timed out after 30s"
+    );
+}
+
+#[tokio::test]
+async fn test_inspect_default_host_ip() {
+    if std::env::var("SPECK_TEST_INTEGRATION").is_err() {
+        eprintln!("skipping integration test: SPECK_TEST_INTEGRATION not set");
+        return;
+    }
+    let result = tokio::time::timeout(Duration::from_secs(30), async {
+        let docker = speck_docker();
+        let mut port_bindings = HashMap::new();
+        port_bindings.insert(
+            "80/tcp".to_string(),
+            Some(vec![PortBinding {
+                host_ip: None,
+                host_port: Some("18082".to_string()),
+            }]),
+        );
+        let config = ContainerCreateBody {
+            image: Some("alpine".to_string()),
+            cmd: Some(vec![
+                "sh".to_string(),
+                "-c".to_string(),
+                "exit 0".to_string(),
+            ]),
+            host_config: Some(HostConfig {
+                port_bindings: Some(port_bindings),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let options = CreateContainerOptionsBuilder::default()
+            .name("test-conformance-default-host-ip")
+            .build();
+        let response = docker
+            .create_container(Some(options), config)
+            .await
+            .expect("create container");
+        let container_id = response.id;
+
+        let inspect = docker
+            .inspect_container(&container_id, None::<InspectContainerOptions>)
+            .await
+            .expect("inspect container");
+        let binding = inspect
+            .network_settings
+            .as_ref()
+            .and_then(|ns| ns.ports.as_ref())
+            .and_then(|ports| ports.get("80/tcp"))
+            .and_then(|bindings| bindings.as_ref())
+            .and_then(|bindings| bindings.first())
+            .expect("80/tcp should have a port binding");
+        assert_eq!(binding.host_ip.as_deref(), Some("0.0.0.0"));
+        assert_eq!(binding.host_port.as_deref(), Some("18082"));
+
+        docker
+            .remove_container(
+                &container_id,
+                Some(RemoveContainerOptions {
+                    force: true,
+                    ..Default::default()
+                }),
+            )
+            .await
+            .expect("remove container");
+    })
+    .await;
+    assert!(
+        result.is_ok(),
+        "test_inspect_default_host_ip timed out after 30s"
+    );
+}
+
+#[tokio::test]
+async fn test_network_connect_missing_network_404() {
+    if std::env::var("SPECK_TEST_INTEGRATION").is_err() {
+        eprintln!("skipping integration test: SPECK_TEST_INTEGRATION not set");
+        return;
+    }
+    let result = tokio::time::timeout(Duration::from_secs(30), async {
+        let docker = speck_docker();
+        let err = docker
+            .connect_network(
+                "speck-missing-net-conformance",
+                NetworkConnectRequest {
+                    container: "speck-missing-container".to_string(),
+                    endpoint_config: None,
+                },
+            )
+            .await
+            .expect_err("missing network should return 404");
+        assert!(matches!(
+            err,
+            bollard::errors::Error::DockerResponseServerError {
+                status_code: 404,
+                ..
+            }
+        ));
+    })
+    .await;
+    assert!(
+        result.is_ok(),
+        "test_network_connect_missing_network_404 timed out after 30s"
+    );
+}
+
+#[tokio::test]
+async fn test_network_disconnect_missing_network_404() {
+    if std::env::var("SPECK_TEST_INTEGRATION").is_err() {
+        eprintln!("skipping integration test: SPECK_TEST_INTEGRATION not set");
+        return;
+    }
+    let result = tokio::time::timeout(Duration::from_secs(30), async {
+        let docker = speck_docker();
+        let err = docker
+            .disconnect_network(
+                "speck-missing-net-conformance",
+                NetworkDisconnectRequest {
+                    container: "speck-missing-container".to_string(),
+                    force: Some(false),
+                },
+            )
+            .await
+            .expect_err("missing network should return 404");
+        assert!(matches!(
+            err,
+            bollard::errors::Error::DockerResponseServerError {
+                status_code: 404,
+                ..
+            }
+        ));
+    })
+    .await;
+    assert!(
+        result.is_ok(),
+        "test_network_disconnect_missing_network_404 timed out after 30s"
+    );
+}
+
+#[tokio::test]
+async fn test_network_connect_missing_container_404() {
+    if std::env::var("SPECK_TEST_INTEGRATION").is_err() {
+        eprintln!("skipping integration test: SPECK_TEST_INTEGRATION not set");
+        return;
+    }
+    let result = tokio::time::timeout(Duration::from_secs(30), async {
+        let docker = speck_docker();
+        let response = docker
+            .create_network(NetworkCreateRequest {
+                name: "test-net-conn-validate".to_string(),
+                ..Default::default()
+            })
+            .await
+            .expect("create network");
+
+        let err = docker
+            .connect_network(
+                &response.id,
+                NetworkConnectRequest {
+                    container: "speck-missing-container".to_string(),
+                    endpoint_config: None,
+                },
+            )
+            .await
+            .expect_err("missing container should return 404");
+        assert!(matches!(
+            err,
+            bollard::errors::Error::DockerResponseServerError {
+                status_code: 404,
+                ..
+            }
+        ));
+
+        docker
+            .remove_network(&response.id)
+            .await
+            .expect("remove network");
+    })
+    .await;
+    assert!(
+        result.is_ok(),
+        "test_network_connect_missing_container_404 timed out after 30s"
     );
 }
 

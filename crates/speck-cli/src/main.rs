@@ -430,8 +430,14 @@ mod tests {
             .find("commands::up::wait_for_socket")
             .expect("Commands::Up must call wait_for_socket when --wait is set");
 
-        assert!(daemonize < wait_guard, "daemonize must happen before wait guard check");
-        assert!(wait_guard < wait_for_socket, "wait guard must wrap wait_for_socket call");
+        assert!(
+            daemonize < wait_guard,
+            "daemonize must happen before wait guard check"
+        );
+        assert!(
+            wait_guard < wait_for_socket,
+            "wait guard must wrap wait_for_socket call"
+        );
     }
 
     #[test]
@@ -479,9 +485,7 @@ async fn main() -> anyhow::Result<()> {
                 commands::up::daemonize(&speck_home, &binary)?;
                 if args.wait {
                     let sock = speck_home.join("speck.sock");
-                    if let Err(e) =
-                        commands::up::wait_for_socket(&sock, args.timeout).await
-                    {
+                    if let Err(e) = commands::up::wait_for_socket(&sock, args.timeout).await {
                         eprintln!("error: {e}");
                         std::process::exit(1);
                     }

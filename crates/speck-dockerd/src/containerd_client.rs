@@ -397,10 +397,7 @@ impl ContainerdClient {
             .task_get(container_id)
             .await?
             .ok_or_else(|| DockerApiError::NotFound(format!("container {container_id}")))?;
-        Ok(
-            format!("container {} status {:?}\n", task.container_id, task.status)
-                .into_bytes(),
-        )
+        Ok(format!("container {} status {:?}\n", task.container_id, task.status).into_bytes())
     }
 }
 
