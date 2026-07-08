@@ -335,4 +335,31 @@ mod tests {
         assert_eq!(pkg_payload_root(), Path::new("packaging/pkg-root"));
         assert_eq!(staged_binary_path(), Path::new("packaging/pkg-root/usr/local/bin/spk"));
     }
+
+    #[test]
+    fn productbuild_command_is_unsigned_development_package() {
+        let args = build_productbuild_args("0.1.0");
+
+        assert_eq!(args, vec![
+            "--root",
+            "packaging/pkg-root",
+            "/",
+            "--identifier",
+            "io.speck.spk.dev",
+            "--version",
+            "0.1.0",
+            "dist/spk-development-non-notarized.pkg",
+        ]);
+        assert!(!args.contains(&"--sign"));
+        assert!(!args.contains(&"SPECK_DEVELOPER_ID_INSTALLER"));
+    }
+
+    #[test]
+    fn archive_command_contains_non_notarized_package() {
+        let args = build_archive_args("0.1.0");
+
+        assert!(args.contains(&"spk-development-non-notarized.pkg"));
+        assert!(args.contains(&"DEVELOPMENT-NON-NOTARIZED.txt"));
+        assert!(!args.iter().any(|arg| arg.contains("notarytool") || arg.contains("stapler")));
+    }
 }
