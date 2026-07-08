@@ -8,7 +8,7 @@ class Speck < Formula
   depends_on arch: :arm64
 
   on_arm do
-    url "https://github.com/wasilak/speck/releases/download/v#{version}/spk-#{version}-aarch64-apple-darwin.tar.gz"
+    url "https://github.com/wasilak/speck/releases/download/v#{version}/spk-#{version}-aarch64-apple-darwin-development-non-notarized-binary.tar.gz"
     sha256 "b2f16e8a3e6fa57b3ab4572c1e55c7e31262af2a88a4aab5caa8d5cfda73201f"
   end
 

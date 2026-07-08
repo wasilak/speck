@@ -57,10 +57,17 @@ pub(crate) fn task_dist() -> ExitCode {
         return ExitCode::from(1);
     }
 
+    println!("Creating Formula-compatible ad-hoc binary archive...");
+    if let Err(message) = build_development_binary_archive(version) {
+        eprintln!("binary archive creation FAILED: {message}");
+        return ExitCode::from(1);
+    }
+
     println!(
-        "dist OK: created non-notarized development artifacts: {} and {}",
+        "dist OK: created non-notarized development artifacts: {}, {}, and {}",
         development_pkg_path().display(),
-        archive_path(version).display()
+        archive_path(version).display(),
+        binary_archive_path(version).display()
     );
     ExitCode::from(0)
 }
@@ -130,6 +137,12 @@ fn staged_binary_path() -> &'static Path {
 fn archive_path(version: &str) -> PathBuf {
     PathBuf::from(format!(
         "dist/spk-{version}-aarch64-apple-darwin-development-non-notarized.tar.gz"
+    ))
+}
+
+fn binary_archive_path(version: &str) -> PathBuf {
+    PathBuf::from(format!(
+        "dist/spk-{version}-aarch64-apple-darwin-development-non-notarized-binary.tar.gz"
     ))
 }
 
@@ -209,6 +222,11 @@ fn build_productbuild_args(version: &str) -> Vec<String> {
 }
 
 fn build_development_package(version: &str) -> Result<(), String> {
+    let placeholder = Path::new("packaging/pkg-root/usr/local/bin/.gitkeep");
+    if placeholder.exists() {
+        std::fs::remove_file(placeholder)
+            .map_err(|err| format!("failed to remove {}: {err}", placeholder.display()))?;
+    }
     std::fs::create_dir_all("dist").map_err(|err| format!("failed to create dist: {err}"))?;
     let args = build_productbuild_args(version);
     run_command(Command::new("productbuild").args(args))
@@ -241,6 +259,25 @@ fn build_archive_args(version: &str) -> Vec<String> {
 
 fn build_development_archive(version: &str) -> Result<(), String> {
     let args = build_archive_args(version);
+    run_command(Command::new("tar").args(args))
+}
+
+fn build_binary_archive_args(version: &str) -> Vec<String> {
+    vec![
+        "-czf".to_string(),
+        binary_archive_path(version).display().to_string(),
+        "-C".to_string(),
+        release_binary_path()
+            .parent()
+            .expect("release binary path must have parent")
+            .display()
+            .to_string(),
+        "spk".to_string(),
+    ]
+}
+
+fn build_development_binary_archive(version: &str) -> Result<(), String> {
+    let args = build_binary_archive_args(version);
     run_command(Command::new("tar").args(args))
 }
 
@@ -285,7 +322,7 @@ fn run_command(command: &mut Command) -> Result<(), String> {
     }
 }
 
-fn entitlement_plist_has_virtualization_true(plist: &str) -> bool {
+pub(crate) fn entitlement_plist_has_virtualization_true(plist: &str) -> bool {
     if entitlement_text_dump_has_virtualization_true(plist) {
         return true;
     }
@@ -508,6 +545,12 @@ mod tests {
             archive_path("0.1.0"),
             Path::new("dist/spk-0.1.0-aarch64-apple-darwin-development-non-notarized.tar.gz")
         );
+        assert_eq!(
+            binary_archive_path("0.1.0"),
+            Path::new(
+                "dist/spk-0.1.0-aarch64-apple-darwin-development-non-notarized-binary.tar.gz"
+            )
+        );
     }
 
     #[test]
@@ -543,6 +586,7 @@ mod tests {
     #[test]
     fn archive_command_contains_non_notarized_package() {
         let args = build_archive_args("0.1.0");
+        let binary_args = build_binary_archive_args("0.1.0");
 
         assert!(
             args.iter()
@@ -557,5 +601,9 @@ mod tests {
                 .iter()
                 .any(|arg| arg.contains("notarytool") || arg.contains("stapler"))
         );
+        assert!(binary_args.iter().any(|arg| arg == "spk"));
+        assert!(binary_args.iter().any(|arg| {
+            arg == "dist/spk-0.1.0-aarch64-apple-darwin-development-non-notarized-binary.tar.gz"
+        }));
     }
 }

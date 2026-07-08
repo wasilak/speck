@@ -170,13 +170,17 @@ fn task_check_entitlement() -> ExitCode {
         return ExitCode::from(1);
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    if stdout.contains("com.apple.security.virtualization") {
-        println!("entitlement OK: com.apple.security.virtualization present");
+    let entitlement_dump = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    if dist::entitlement_plist_has_virtualization_true(&entitlement_dump) {
+        println!("entitlement OK: com.apple.security.virtualization is boolean true");
         ExitCode::from(0)
     } else {
-        eprintln!("entitlement MISSING: com.apple.security.virtualization not found in binary");
-        eprintln!("stdout: {stdout}");
+        eprintln!("entitlement invalid: com.apple.security.virtualization must be boolean true");
+        eprintln!("codesign output: {entitlement_dump}");
         ExitCode::from(1)
     }
 }
@@ -240,7 +244,6 @@ fn task_sign() -> ExitCode {
             "--force",
             "--options",
             "runtime",
-            "--timestamp",
             &binary_path,
         ])
         .status()
