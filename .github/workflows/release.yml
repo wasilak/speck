@@ -17,9 +17,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # Need full history + ability to push Formula update back to main
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -38,23 +36,16 @@ jobs:
       - name: Install protoc
         run: brew install protobuf
 
-      - name: Build release binary
-        run: cargo build --release --package speck-cli --target aarch64-apple-darwin
+      - name: Build ad-hoc development distribution artifacts
+        run: cargo xtask dist
 
-      - name: Codesign (ad-hoc, embeds virtualization entitlement)
-        run: |
-          codesign --sign - \
-            --entitlements speck.entitlements \
-            --force \
-            target/aarch64-apple-darwin/release/spk
-          codesign --verify --verbose target/aarch64-apple-darwin/release/spk
-
-      - name: Create release archive
+      - name: List release artifacts
         run: |
           VERSION="${{ github.ref_name }}"
           VERSION="${VERSION#v}"
-          tar -czf "spk-${VERSION}-aarch64-apple-darwin.tar.gz" \
-            -C target/aarch64-apple-darwin/release spk
+          test -f "dist/spk-development-non-notarized.pkg"
+          test -f "dist/spk-${VERSION}-aarch64-apple-darwin-development-non-notarized.tar.gz"
+          ls -la dist/
 
       - name: Create GitHub Release
         env:
@@ -63,24 +54,6 @@ jobs:
           VERSION="${{ github.ref_name }}"
           VERSION="${VERSION#v}"
           gh release create "v${VERSION}" --generate-notes \
-            "spk-${VERSION}-aarch64-apple-darwin.tar.gz"
-
-      - name: Update Formula SHA256
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          VERSION="${{ github.ref_name }}"
-          VERSION="${VERSION#v}"
-          SHA=$(shasum -a 256 "spk-${VERSION}-aarch64-apple-darwin.tar.gz" | awk '{print $1}')
-          echo "SHA256: ${SHA}"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git config user.name "github-actions[bot]"
-          git fetch origin main
-          git checkout main
-          sed -i '' \
-            -e "s|sha256 \".*\"|sha256 \"${SHA}\"|" \
-            -e "s|version \".*\"|version \"${VERSION}\"|" \
-            Formula/speck.rb
-          git add Formula/speck.rb
-          git diff --staged --quiet || git commit -m "chore: update Formula to v${VERSION}"
-          git push origin main
+            "dist/spk-development-non-notarized.pkg" \
+            "dist/spk-${VERSION}-aarch64-apple-darwin-development-non-notarized.tar.gz" \
+            "dist/DEVELOPMENT-NON-NOTARIZED.txt"
