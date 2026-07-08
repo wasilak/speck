@@ -1417,4 +1417,112 @@ mod tests {
             "control socket handler must set VmState::Restarting on PREPARE_RESTART"
         );
     }
+
+    #[test]
+    fn control_socket_does_not_break_on_accept_error() {
+        let source = include_str!("up.rs");
+        let tests_start = source.find("#[cfg(test)]").unwrap_or(source.len());
+        let production = &source[..tests_start];
+
+        // Find the accept loop: look for listener.accept() in production code
+        let accept_start = production.rfind("listener.accept()")
+            .expect("production code must have a control socket accept loop");
+        let accept_section = &production[accept_start..];
+
+        // The accept loop must NOT break on error
+        // Find the accept error handler by looking for the unique "accept error" message
+        let accept_err_msg = accept_section.find("accept error")
+            .expect("accept loop must have an error handler with accept error message");
+        // Walk back from the message to find the Err(e) line
+        let err_stanza = &accept_section[..accept_err_msg];
+        let err_start = err_stanza.rfind("Err(e)")
+            .expect("accept loop must have an Err(e) handler");
+        let err_handler = &accept_section[err_start..][..200];
+
+        assert!(
+            !err_handler.contains("break;"),
+            "control socket accept loop must NOT break on error: found break in {err_handler:?}"
+        );
+        assert!(
+            err_handler.contains("continue;"),
+            "control socket accept loop must continue on error: missing continue in {err_handler:?}"
+        );
+        assert!(
+            err_handler.contains("sleep"),
+            "control socket accept loop must have backoff sleep on error: missing sleep in {err_handler:?}"
+        );
+    }
+
+    #[test]
+    fn control_socket_read_errors_are_logged() {
+        let source = include_str!("up.rs");
+        let tests_start = source.find("#[cfg(test)]").unwrap_or(source.len());
+        let production = &source[..tests_start];
+
+        let read_start = production.rfind("stream.read(&mut buf)")
+            .expect("production code must read from control socket");
+        let read_section = &production[read_start..][..15];
+
+        assert!(
+            !read_section.contains("unwrap_or(0)"),
+            "control socket read must not silently swallow errors with unwrap_or(0)"
+        );
+        assert!(
+            production.contains("tracing::warn!(\"control socket read error"),
+            "control socket read errors must be logged via tracing::warn!"
+        );
+    }
+
+    #[test]
+    fn shutdown_gracefully_removes_control_sock() {
+        let source = include_str!("up.rs");
+        let tests_start = source.find("#[cfg(test)]").unwrap_or(source.len());
+        let production = &source[..tests_start];
+
+        let shutdown_start = production.rfind("async fn shutdown_gracefully")
+            .expect("production code must define shutdown_gracefully");
+        let shutdown_section = &production[shutdown_start..];
+
+        assert!(
+            shutdown_section.contains("remove_file(sock_path)"),
+            "shutdown_gracefully must remove the Docker API sock_path"
+        );
+        assert!(
+            shutdown_section.contains("run/speck.pid"),
+            "shutdown_gracefully must remove the PID file"
+        );
+        assert!(
+            shutdown_section.contains("run/control.sock"),
+            "shutdown_gracefully must remove the control socket at run/control.sock"
+        );
+    }
+
+    #[test]
+    fn restarting_state_has_timeout_lease() {
+        let source = include_str!("up.rs");
+        let tests_start = source.find("#[cfg(test)]").unwrap_or(source.len());
+        let production = &source[..tests_start];
+
+        let prepare_start = production.rfind("PREPARE_RESTART")
+            .expect("production code must handle PREPARE_RESTART command");
+        let prepare_section = &production[prepare_start..][..800];
+
+        assert!(
+            prepare_section.contains("Instant::now()")
+            || prepare_section.contains("Instant::now"),
+            "PREPARE_RESTART handler must record lease start time with Instant::now"
+        );
+        assert!(
+            prepare_section.contains("tokio::spawn"),
+            "PREPARE_RESTART handler must spawn a background lease timeout task"
+        );
+        assert!(
+            prepare_section.contains("Duration::from_secs(60)") || prepare_section.contains("Duration::from_secs"),
+            "lease timeout must be Duration::from_secs(60)"
+        );
+        assert!(
+            prepare_section.contains("Restarting"),
+            "lease timeout reset check must reference Restarting state"
+        );
+    }
 }
