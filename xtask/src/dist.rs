@@ -185,4 +185,36 @@ mod tests {
                 && failure.contains("install it")
         }));
     }
+
+    #[test]
+    fn signing_command_uses_ad_hoc_identity_and_exact_entitlement_flags() {
+        let command = build_codesign_args(release_binary_path());
+
+        assert_eq!(command, vec![
+            "--sign",
+            "-",
+            "--entitlements",
+            "speck.entitlements",
+            "--options",
+            "runtime",
+            "--force",
+            "target/aarch64-apple-darwin/release/spk",
+        ]);
+        assert!(!command.contains(&"SPECK_DEVELOPER_ID_APPLICATION"));
+        assert!(!command.contains(&"--timestamp"));
+    }
+
+    #[test]
+    fn development_archive_name_is_explicitly_non_notarized() {
+        assert_eq!(
+            archive_path("0.1.0"),
+            Path::new("dist/spk-0.1.0-aarch64-apple-darwin-development-non-notarized.tar.gz")
+        );
+    }
+
+    #[test]
+    fn package_stage_paths_install_to_usr_local_bin() {
+        assert_eq!(pkg_payload_root(), Path::new("packaging/pkg-root"));
+        assert_eq!(staged_binary_path(), Path::new("packaging/pkg-root/usr/local/bin/spk"));
+    }
 }
