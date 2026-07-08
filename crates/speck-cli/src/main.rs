@@ -480,6 +480,8 @@ async fn main() -> anyhow::Result<()> {
 
     match cli.command {
         Commands::Up(args) => {
+            let sock_path = speck_home.join("speck.sock");
+            unsafe { std::env::set_var("SPECK_SOCK", sock_path.to_string_lossy().to_string()) };
             if !args.foreground && std::env::var("SPECK_DAEMONIZED").is_err() {
                 let binary = std::env::current_exe().context("cannot find own binary")?;
                 commands::up::daemonize(&speck_home, &binary)?;

@@ -20,8 +20,14 @@ fn speck_sock() -> PathBuf {
     if let Ok(sock) = std::env::var("SPECK_SOCK") {
         return PathBuf::from(sock);
     }
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
-    PathBuf::from(home).join(".local/share/speck/speck.sock")
+    let home = std::env::var("SPECK_HOME")
+        .ok()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+            PathBuf::from(home).join(".speck")
+        });
+    home.join("speck.sock")
 }
 
 fn speck_docker() -> Docker {
