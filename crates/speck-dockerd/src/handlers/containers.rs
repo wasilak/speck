@@ -207,15 +207,35 @@ pub async fn start(State(state): State<AppState>, Path(id): Path<String>) -> Res
         (None, None)
     };
 
-    client
-        .task_create(TaskSpec {
-            container_id: id.clone(),
-            terminal,
-            stdout_fifo,
-            stderr_fifo,
-        })
-        .await?;
-    client.task_start(&id).await?;
+    let relay_created = stdout_fifo.is_some();
+
+    let task_result = async {
+        client
+            .task_create(TaskSpec {
+                container_id: id.clone(),
+                terminal,
+                stdout_fifo,
+                stderr_fifo,
+            })
+            .await?;
+        client.task_start(&id).await
+    }
+    .await;
+    if let Err(err) = task_result {
+        // Relay state was created before task_create — close it so stale
+        // guest FIFOs/readers do not leak into a retried start (CR-02).
+        if relay_created
+            && let Some(port) = state.guest.log_relay_vsock_port()
+            && let Err(close_err) = log_relay::close(&state.guest, port, &id)
+        {
+            tracing::warn!(
+                error = %close_err,
+                container_id = %id,
+                "log relay close failed after task start failure"
+            );
+        }
+        return Err(err);
+    }
 
     // Apply port bindings from the speck.port_bindings label stored during create().
     // Malformed or missing labels are silently skipped — port map failures must not
