@@ -10,6 +10,7 @@ use hyper_util::rt::TokioIo;
 use serde::Deserialize;
 use tokio::io::AsyncWriteExt;
 
+use crate::containerd_client::TaskStatus;
 use crate::error::{DockerApiError, Result};
 use crate::log_relay::{self, RelayLogs};
 use crate::state::AppState;
@@ -87,6 +88,93 @@ pub async fn container_logs(
     let client = state.containerd_client().await?;
     let mut frames = Vec::new();
     if let Some(port) = state.guest.log_relay_vsock_port() {
+        if query.follow {
+            // Live follow: keep the response open and deliver bytes appended
+            // after the request started, until container exit or client
+            // disconnect (CONF-05).
+            let guest = Arc::clone(&state.guest);
+            let stdout_selected = query.stdout || !query.stderr;
+            let stderr_selected = query.stderr;
+            let timestamps = query.timestamps;
+            let (tx, rx) =
+                tokio::sync::mpsc::channel::<std::result::Result<Bytes, Infallible>>(32);
+            tokio::spawn(async move {
+                let mut stdout_offset = 0usize;
+                let mut stderr_offset = 0usize;
+                loop {
+                    // Sample task status BEFORE the relay read: when the task
+                    // is observed not-running, the read below still drains any
+                    // bytes written before exit, so no final output is lost.
+                    let running = matches!(
+                        client.task_get(&id).await,
+                        Ok(Some(task)) if task.status == TaskStatus::Running
+                    );
+
+                    let read_guest = Arc::clone(&guest);
+                    let read_id = id.clone();
+                    let deltas = tokio::task::spawn_blocking(move || {
+                        log_relay::read_logs_from(
+                            &read_guest,
+                            port,
+                            &read_id,
+                            stdout_offset,
+                            stderr_offset,
+                        )
+                    })
+                    .await;
+                    let deltas = match deltas {
+                        Ok(Ok(logs)) => logs,
+                        Ok(Err(err)) => {
+                            tracing::warn!(
+                                error = %err,
+                                container_id = %id,
+                                "log relay follow read failed — closing log stream"
+                            );
+                            break;
+                        }
+                        Err(err) => {
+                            tracing::warn!(
+                                error = %err,
+                                container_id = %id,
+                                "log relay follow read task failed — closing log stream"
+                            );
+                            break;
+                        }
+                    };
+
+                    stdout_offset += deltas.stdout.len();
+                    stderr_offset += deltas.stderr.len();
+
+                    if stdout_selected && !deltas.stdout.is_empty() {
+                        let stdout = maybe_timestamp(deltas.stdout, timestamps);
+                        let frame = Bytes::from(encode_frame(1, &stdout));
+                        if tx.send(Ok(frame)).await.is_err() {
+                            // Client disconnected.
+                            break;
+                        }
+                    }
+                    if stderr_selected && !deltas.stderr.is_empty() {
+                        let stderr = maybe_timestamp(deltas.stderr, timestamps);
+                        let frame = Bytes::from(encode_frame(2, &stderr));
+                        if tx.send(Ok(frame)).await.is_err() {
+                            // Client disconnected.
+                            break;
+                        }
+                    }
+
+                    if !running {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                }
+            });
+            return Ok((
+                [(header::CONTENT_TYPE, "application/vnd.docker.raw-stream")],
+                Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx)),
+            )
+                .into_response());
+        }
+
         let guest = Arc::clone(&state.guest);
         let id_clone = id.clone();
         let relay_logs =

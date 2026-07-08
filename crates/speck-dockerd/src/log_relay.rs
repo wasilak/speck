@@ -1,5 +1,11 @@
 use std::io;
 
+/// Maximum bytes accepted from a single relay read response.
+///
+/// Rejecting oversized length prefixes before allocation prevents a
+/// misbehaving guest from making the host allocate unbounded memory (WR-03).
+pub const MAX_RELAY_LOG_READ: usize = 16 * 1024 * 1024;
+
 pub struct RelayLogs {
     pub stdout: Vec<u8>,
     pub stderr: Vec<u8>,
@@ -12,8 +18,19 @@ pub fn create(guest: &speck_vz::Guest, port: u32, container_id: &str) -> io::Res
 }
 
 pub fn read_logs(guest: &speck_vz::Guest, port: u32, container_id: &str) -> io::Result<RelayLogs> {
-    let stdout = read_stream(guest, port, "stdout", container_id)?;
-    let stderr = read_stream(guest, port, "stderr", container_id)?;
+    read_logs_from(guest, port, container_id, 0, 0)
+}
+
+/// Read log bytes appended after the given per-stream offsets.
+pub fn read_logs_from(
+    guest: &speck_vz::Guest,
+    port: u32,
+    container_id: &str,
+    stdout_offset: usize,
+    stderr_offset: usize,
+) -> io::Result<RelayLogs> {
+    let stdout = read_stream(guest, port, "stdout", container_id, stdout_offset)?;
+    let stderr = read_stream(guest, port, "stderr", container_id, stderr_offset)?;
     Ok(RelayLogs { stdout, stderr })
 }
 
@@ -28,16 +45,23 @@ fn read_stream(
     port: u32,
     stream: &str,
     container_id: &str,
+    offset: usize,
 ) -> io::Result<Vec<u8>> {
     let socket = connect(guest, port)?;
     write_all_to_socket(
         &socket,
-        format!("READ:{stream}:{container_id}\n").as_bytes(),
+        format!("READ:{stream}:{container_id}:{offset}\n").as_bytes(),
     )?;
 
     let mut len_buf = [0u8; 4];
     read_exact_from_socket(&socket, &mut len_buf)?;
     let len = u32::from_be_bytes(len_buf) as usize;
+    if len > MAX_RELAY_LOG_READ {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "log relay response too large",
+        ));
+    }
     let mut bytes = vec![0u8; len];
     read_exact_from_socket(&socket, &mut bytes)?;
     Ok(bytes)
