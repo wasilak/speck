@@ -1,9 +1,13 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
 const VIRTUALIZATION_ENTITLEMENT: &str = "com.apple.security.virtualization";
 
 pub(crate) fn task_dist() -> ExitCode {
+    if std::env::args().nth(2).as_deref() == Some("--sign-only") {
+        return task_sign_only();
+    }
+
     println!("Checking ad-hoc development signing prerequisites before building artifacts...");
     match run_preflight() {
         Ok(()) => {
@@ -15,6 +19,39 @@ pub(crate) fn task_dist() -> ExitCode {
         }
         Err(failures) => {
             print_preflight_failures(&failures);
+            ExitCode::from(1)
+        }
+    }
+}
+
+fn task_sign_only() -> ExitCode {
+    if let Err(failures) = run_preflight() {
+        print_preflight_failures(&failures);
+        return ExitCode::from(1);
+    }
+
+    println!("Building Apple Silicon release binary...");
+    if let Err(message) = build_release_binary() {
+        eprintln!("release build FAILED: {message}");
+        return ExitCode::from(1);
+    }
+
+    println!("Signing release binary with ad-hoc development identity...");
+    if let Err(message) = sign_release_binary() {
+        eprintln!("codesign FAILED: {message}");
+        return ExitCode::from(1);
+    }
+
+    match signed_binary_has_virtualization_entitlement(release_binary_path()) {
+        Ok(()) => {
+            println!(
+                "dist sign-only OK: {} is ad-hoc signed with boolean virtualization entitlement",
+                release_binary_path().display()
+            );
+            ExitCode::from(0)
+        }
+        Err(message) => {
+            eprintln!("entitlement validation FAILED: {message}");
             ExitCode::from(1)
         }
     }
@@ -35,6 +72,87 @@ pub(crate) fn task_dist_check() -> ExitCode {
 
 fn release_binary_path() -> &'static Path {
     Path::new("target/aarch64-apple-darwin/release/spk")
+}
+
+fn entitlements_path() -> &'static Path {
+    Path::new("speck.entitlements")
+}
+
+fn pkg_payload_root() -> &'static Path {
+    Path::new("packaging/pkg-root")
+}
+
+fn staged_binary_path() -> &'static Path {
+    Path::new("packaging/pkg-root/usr/local/bin/spk")
+}
+
+fn archive_path(version: &str) -> PathBuf {
+    PathBuf::from(format!(
+        "dist/spk-{version}-aarch64-apple-darwin-development-non-notarized.tar.gz"
+    ))
+}
+
+fn build_release_binary() -> Result<(), String> {
+    run_command(
+        Command::new("cargo").args([
+            "build",
+            "--release",
+            "--package",
+            "speck-cli",
+            "--target",
+            "aarch64-apple-darwin",
+        ]),
+    )
+}
+
+fn build_codesign_args(binary: &Path) -> Vec<&str> {
+    vec![
+        "--sign",
+        "-",
+        "--entitlements",
+        "speck.entitlements",
+        "--options",
+        "runtime",
+        "--force",
+        binary.to_str().expect("release binary path must be UTF-8"),
+    ]
+}
+
+fn sign_release_binary() -> Result<(), String> {
+    let args = build_codesign_args(release_binary_path());
+    run_command(Command::new("codesign").args(args))
+}
+
+fn signed_binary_has_virtualization_entitlement(binary: &Path) -> Result<(), String> {
+    let output = Command::new("codesign")
+        .args(["-d", "--entitlements", "-", binary.to_str().ok_or("non-UTF-8 binary path")?])
+        .output()
+        .map_err(|err| format!("failed to run codesign entitlement dump: {err}"))?;
+
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).into_owned());
+    }
+
+    let plist = String::from_utf8_lossy(&output.stdout);
+    if entitlement_plist_has_virtualization_true(&plist) {
+        Ok(())
+    } else {
+        Err(format!(
+            "{VIRTUALIZATION_ENTITLEMENT} must be present as boolean <true/> in signed artifact"
+        ))
+    }
+}
+
+fn run_command(command: &mut Command) -> Result<(), String> {
+    let program = command.get_program().to_string_lossy().into_owned();
+    let status = command
+        .status()
+        .map_err(|err| format!("failed to run {program}: {err}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("{program} exited with {status}"))
+    }
 }
 
 fn entitlement_plist_has_virtualization_true(plist: &str) -> bool {
@@ -81,7 +199,7 @@ fn run_preflight() -> Result<(), Vec<String>> {
         "Install Xcode Command Line Tools: xcode-select --install",
     );
 
-    let entitlements = Path::new("speck.entitlements");
+    let entitlements = entitlements_path();
     match std::fs::read_to_string(entitlements) {
         Ok(contents) if entitlement_plist_has_virtualization_true(&contents) => {}
         Ok(_) => failures.push(format!(
