@@ -4,11 +4,11 @@ use std::process::{Command, ExitCode};
 const VIRTUALIZATION_ENTITLEMENT: &str = "com.apple.security.virtualization";
 
 pub(crate) fn task_dist() -> ExitCode {
-    println!("Checking distribution prerequisites before building artifacts...");
+    println!("Checking ad-hoc development signing prerequisites before building artifacts...");
     match run_preflight() {
         Ok(()) => {
             eprintln!(
-                "cargo xtask dist artifact creation for {} is handled by the next Phase 18 plan",
+                "cargo xtask dist ad-hoc artifact creation for {} is handled by the next Phase 18 plan",
                 release_binary_path().display()
             );
             ExitCode::from(1)
@@ -23,7 +23,7 @@ pub(crate) fn task_dist() -> ExitCode {
 pub(crate) fn task_dist_check() -> ExitCode {
     match run_preflight() {
         Ok(()) => {
-            println!("dist-check OK: Developer ID and notarization prerequisites are available");
+            println!("dist-check OK: ad-hoc development signing prerequisites are available");
             ExitCode::from(0)
         }
         Err(failures) => {
@@ -80,48 +80,17 @@ fn run_preflight() -> Result<(), Vec<String>> {
         "codesign",
         "Install Xcode Command Line Tools: xcode-select --install",
     );
-    check_command(
-        &mut failures,
-        "productbuild",
-        "Install Xcode Command Line Tools: xcode-select --install",
-    );
-    check_command(
-        &mut failures,
-        "spctl",
-        "Install macOS security tooling with Xcode Command Line Tools",
-    );
-    check_xcrun_tool(&mut failures, "notarytool");
-    check_xcrun_tool(&mut failures, "stapler");
 
     let entitlements = Path::new("speck.entitlements");
     match std::fs::read_to_string(entitlements) {
         Ok(contents) if entitlement_plist_has_virtualization_true(&contents) => {}
         Ok(_) => failures.push(format!(
-            "speck.entitlements must contain {VIRTUALIZATION_ENTITLEMENT} as boolean <true/>; fix speck.entitlements before release"
+            "speck.entitlements must contain {VIRTUALIZATION_ENTITLEMENT} as boolean <true/>; fix speck.entitlements before signing"
         )),
         Err(_) => failures.push(
-            "speck.entitlements is missing; restore the entitlement file before release".to_string(),
+            "speck.entitlements is missing; restore the entitlement file before signing".to_string(),
         ),
     }
-
-    let app_identity = std::env::var("SPECK_DEVELOPER_ID_APPLICATION")
-        .unwrap_or_else(|_| "Developer ID Application".to_string());
-    let installer_identity = std::env::var("SPECK_DEVELOPER_ID_INSTALLER")
-        .unwrap_or_else(|_| "Developer ID Installer".to_string());
-    check_codesigning_identity(
-        &mut failures,
-        "SPECK_DEVELOPER_ID_APPLICATION",
-        &app_identity,
-    );
-    check_codesigning_identity(
-        &mut failures,
-        "SPECK_DEVELOPER_ID_INSTALLER",
-        &installer_identity,
-    );
-
-    let notary_profile =
-        std::env::var("SPECK_NOTARY_PROFILE").unwrap_or_else(|_| "speck-notary".to_string());
-    check_notary_profile(&mut failures, &notary_profile);
 
     if failures.is_empty() {
         Ok(())
@@ -139,49 +108,8 @@ fn check_command(failures: &mut Vec<String>, cmd: &str, next_step: &str) {
     }
 }
 
-fn check_xcrun_tool(failures: &mut Vec<String>, tool: &str) {
-    match Command::new("xcrun").args(["--find", tool]).output() {
-        Ok(output) if output.status.success() => {}
-        _ => failures.push(format!(
-            "missing Apple tool `xcrun {tool}`; next step: install full Xcode or Xcode Command Line Tools"
-        )),
-    }
-}
-
-fn check_codesigning_identity(failures: &mut Vec<String>, env_var: &str, identity: &str) {
-    let output = Command::new("security")
-        .args(["find-identity", "-v", "-p", "codesigning"])
-        .output();
-    let Ok(output) = output else {
-        failures.push(format!(
-            "cannot query keychain identities; next step: import Developer ID certificates and run `security find-identity -v -p codesigning`"
-        ));
-        return;
-    };
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    if !output.status.success() || !stdout.contains(identity) {
-        failures.push(format!(
-            "missing {env_var} identity `{identity}`; next step: import the certificate and export {env_var} with its exact Common Name"
-        ));
-    }
-}
-
-fn check_notary_profile(failures: &mut Vec<String>, profile: &str) {
-    let output = Command::new("xcrun")
-        .args(["notarytool", "history", "--keychain-profile", profile])
-        .output();
-
-    match output {
-        Ok(output) if output.status.success() => {}
-        _ => failures.push(format!(
-            "missing or unusable SPECK_NOTARY_PROFILE `{profile}`; next step: run `xcrun notarytool store-credentials {profile} --key <AuthKey.p8> --key-id $APPLE_API_KEY_ID --issuer $APPLE_API_ISSUER_ID`"
-        )),
-    }
-}
-
 fn print_preflight_failures(failures: &[String]) {
-    eprintln!("dist-check FAILED: Developer ID distribution prerequisites are incomplete");
+    eprintln!("dist-check FAILED: ad-hoc development signing prerequisites are incomplete");
     for failure in failures {
         eprintln!("- {failure}");
     }
@@ -249,16 +177,12 @@ mod tests {
     #[test]
     fn dist_preflight_failure_text_is_actionable() {
         let mut failures = Vec::new();
-        check_codesigning_identity(
-            &mut failures,
-            "SPECK_DEVELOPER_ID_APPLICATION",
-            "Developer ID Application: Missing Example (TEAMID)",
-        );
+        check_command(&mut failures, "definitely-missing-speck-tool", "install it");
 
         assert!(failures.iter().any(|failure| {
-            failure.contains("SPECK_DEVELOPER_ID_APPLICATION")
-                && failure.contains("Developer ID Application")
+            failure.contains("definitely-missing-speck-tool")
                 && failure.contains("next step")
+                && failure.contains("install it")
         }));
     }
 }
