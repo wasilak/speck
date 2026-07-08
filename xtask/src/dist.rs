@@ -2,26 +2,67 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
 const VIRTUALIZATION_ENTITLEMENT: &str = "com.apple.security.virtualization";
+const DEVELOPMENT_PKG: &str = "spk-development-non-notarized.pkg";
+const DEVELOPMENT_MARKER: &str = "DEVELOPMENT-NON-NOTARIZED.txt";
 
 pub(crate) fn task_dist() -> ExitCode {
     if std::env::args().nth(2).as_deref() == Some("--sign-only") {
         return task_sign_only();
     }
 
-    println!("Checking ad-hoc development signing prerequisites before building artifacts...");
-    match run_preflight() {
-        Ok(()) => {
-            eprintln!(
-                "cargo xtask dist ad-hoc artifact creation for {} is handled by the next Phase 18 plan",
-                release_binary_path().display()
-            );
-            ExitCode::from(1)
-        }
-        Err(failures) => {
-            print_preflight_failures(&failures);
-            ExitCode::from(1)
-        }
+    if let Err(failures) = run_preflight() {
+        print_preflight_failures(&failures);
+        return ExitCode::from(1);
     }
+
+    println!("Building Apple Silicon release binary...");
+    if let Err(message) = build_release_binary() {
+        eprintln!("release build FAILED: {message}");
+        return ExitCode::from(1);
+    }
+
+    println!("Signing release binary with ad-hoc development identity...");
+    if let Err(message) = sign_release_binary() {
+        eprintln!("codesign FAILED: {message}");
+        return ExitCode::from(1);
+    }
+
+    if let Err(message) = signed_binary_has_virtualization_entitlement(release_binary_path()) {
+        eprintln!("entitlement validation FAILED: {message}");
+        return ExitCode::from(1);
+    }
+
+    println!("Staging package payload under packaging/pkg-root/usr/local/bin...");
+    if let Err(message) = stage_signed_binary() {
+        eprintln!("payload staging FAILED: {message}");
+        return ExitCode::from(1);
+    }
+
+    let version = env!("CARGO_PKG_VERSION");
+    println!("Building unsigned non-notarized development package...");
+    if let Err(message) = build_development_package(version) {
+        eprintln!("productbuild FAILED: {message}");
+        return ExitCode::from(1);
+    }
+
+    println!("Writing non-notarized artifact marker...");
+    if let Err(message) = write_development_marker() {
+        eprintln!("marker write FAILED: {message}");
+        return ExitCode::from(1);
+    }
+
+    println!("Creating non-notarized development archive...");
+    if let Err(message) = build_development_archive(version) {
+        eprintln!("archive creation FAILED: {message}");
+        return ExitCode::from(1);
+    }
+
+    println!(
+        "dist OK: created non-notarized development artifacts: {} and {}",
+        development_pkg_path().display(),
+        archive_path(version).display()
+    );
+    ExitCode::from(0)
 }
 
 fn task_sign_only() -> ExitCode {
@@ -92,6 +133,14 @@ fn archive_path(version: &str) -> PathBuf {
     ))
 }
 
+fn development_pkg_path() -> &'static Path {
+    Path::new("dist/spk-development-non-notarized.pkg")
+}
+
+fn development_marker_path() -> &'static Path {
+    Path::new("dist/DEVELOPMENT-NON-NOTARIZED.txt")
+}
+
 fn build_release_binary() -> Result<(), String> {
     run_command(
         Command::new("cargo").args([
@@ -121,6 +170,80 @@ fn build_codesign_args(binary: &Path) -> Vec<&str> {
 fn sign_release_binary() -> Result<(), String> {
     let args = build_codesign_args(release_binary_path());
     run_command(Command::new("codesign").args(args))
+}
+
+fn stage_signed_binary() -> Result<(), String> {
+    let install_dir = staged_binary_path()
+        .parent()
+        .ok_or("staged binary path has no parent directory")?;
+    std::fs::create_dir_all(install_dir)
+        .map_err(|err| format!("failed to create {}: {err}", install_dir.display()))?;
+
+    let tmp_path = staged_binary_path().with_extension("spk.tmp");
+    std::fs::copy(release_binary_path(), &tmp_path).map_err(|err| {
+        format!(
+            "failed to copy {} to {}: {err}",
+            release_binary_path().display(),
+            tmp_path.display()
+        )
+    })?;
+    std::fs::rename(&tmp_path, staged_binary_path()).map_err(|err| {
+        format!(
+            "failed to atomically rename {} to {}: {err}",
+            tmp_path.display(),
+            staged_binary_path().display()
+        )
+    })?;
+    Ok(())
+}
+
+fn build_productbuild_args(version: &str) -> Vec<String> {
+    vec![
+        "--root".to_string(),
+        pkg_payload_root().display().to_string(),
+        "/".to_string(),
+        "--identifier".to_string(),
+        "io.speck.spk.dev".to_string(),
+        "--version".to_string(),
+        version.to_string(),
+        development_pkg_path().display().to_string(),
+    ]
+}
+
+fn build_development_package(version: &str) -> Result<(), String> {
+    std::fs::create_dir_all("dist").map_err(|err| format!("failed to create dist: {err}"))?;
+    let args = build_productbuild_args(version);
+    run_command(Command::new("productbuild").args(args))
+}
+
+fn write_development_marker() -> Result<(), String> {
+    std::fs::create_dir_all("dist").map_err(|err| format!("failed to create dist: {err}"))?;
+    std::fs::write(
+        development_marker_path(),
+        "Speck development artifact. This package is ad-hoc signed, non-notarized, and not an official Developer ID distribution.\n",
+    )
+    .map_err(|err| {
+        format!(
+            "failed to write {}: {err}",
+            development_marker_path().display()
+        )
+    })
+}
+
+fn build_archive_args(version: &str) -> Vec<String> {
+    vec![
+        "-czf".to_string(),
+        archive_path(version).display().to_string(),
+        "-C".to_string(),
+        "dist".to_string(),
+        DEVELOPMENT_PKG.to_string(),
+        DEVELOPMENT_MARKER.to_string(),
+    ]
+}
+
+fn build_development_archive(version: &str) -> Result<(), String> {
+    let args = build_archive_args(version);
+    run_command(Command::new("tar").args(args))
 }
 
 fn signed_binary_has_virtualization_entitlement(binary: &Path) -> Result<(), String> {
@@ -197,6 +320,16 @@ fn run_preflight() -> Result<(), Vec<String>> {
         &mut failures,
         "codesign",
         "Install Xcode Command Line Tools: xcode-select --install",
+    );
+    check_command(
+        &mut failures,
+        "productbuild",
+        "Install Xcode Command Line Tools: xcode-select --install",
+    );
+    check_command(
+        &mut failures,
+        "tar",
+        "Install the standard macOS command line tools",
     );
 
     let entitlements = entitlements_path();
@@ -350,16 +483,16 @@ mod tests {
             "0.1.0",
             "dist/spk-development-non-notarized.pkg",
         ]);
-        assert!(!args.contains(&"--sign"));
-        assert!(!args.contains(&"SPECK_DEVELOPER_ID_INSTALLER"));
+        assert!(!args.iter().any(|arg| arg == "--sign"));
+        assert!(!args.iter().any(|arg| arg == "SPECK_DEVELOPER_ID_INSTALLER"));
     }
 
     #[test]
     fn archive_command_contains_non_notarized_package() {
         let args = build_archive_args("0.1.0");
 
-        assert!(args.contains(&"spk-development-non-notarized.pkg"));
-        assert!(args.contains(&"DEVELOPMENT-NON-NOTARIZED.txt"));
+        assert!(args.iter().any(|arg| arg == "spk-development-non-notarized.pkg"));
+        assert!(args.iter().any(|arg| arg == "DEVELOPMENT-NON-NOTARIZED.txt"));
         assert!(!args.iter().any(|arg| arg.contains("notarytool") || arg.contains("stapler")));
     }
 }

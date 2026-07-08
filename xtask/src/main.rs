@@ -8,8 +8,8 @@ fn main() -> ExitCode {
         eprintln!("Commands:");
         eprintln!("  ci            Run all CI checks locally");
         eprintln!("  sign          Codesign the release binary with virtualization entitlement");
-        eprintln!("  dist          Build Developer ID distribution artifacts");
-        eprintln!("  dist-check    Check Developer ID distribution prerequisites");
+        eprintln!("  dist          Build ad-hoc non-notarized development artifacts");
+        eprintln!("  dist-check    Check ad-hoc development distribution prerequisites");
         eprintln!("  codesign-dev  Ad-hoc codesign debug binary with virtualization entitlement");
         eprintln!("  init          Download kernel + initrd for VM boot");
         return ExitCode::from(1);
