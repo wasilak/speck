@@ -113,17 +113,24 @@ fn handle_command(conn_fd: libc::c_int, buffers: &LogBuffers, command: &str) -> 
         validate_container_id(container_id)?;
         create_fifos(conn_fd, buffers, container_id)
     } else if let Some(rest) = command.strip_prefix("READ:") {
-        let mut parts = rest.splitn(2, ':');
+        let mut parts = rest.splitn(3, ':');
         let stream = parts.next().unwrap_or_default();
         let container_id = parts.next().unwrap_or_default();
+        let offset = match parts.next() {
+            Some(raw) => raw.parse::<usize>().map_err(|_| {
+                io::Error::new(io::ErrorKind::InvalidInput, "invalid read offset")
+            })?,
+            None => 0,
+        };
         validate_container_id(container_id)?;
-        read_stream(conn_fd, buffers, stream, container_id)
+        read_stream(conn_fd, buffers, stream, container_id, offset)
     } else if let Some(container_id) = command.strip_prefix("CLOSE:") {
         validate_container_id(container_id)?;
         buffers
             .lock()
             .expect("log buffers mutex poisoned")
             .remove(container_id);
+        remove_fifos(container_id);
         write_all_fd(conn_fd, b"OK\n")
     } else {
         Err(io::Error::new(
@@ -219,11 +226,28 @@ fn reader_thread(fifo_path: String, buffer: Arc<Mutex<Vec<u8>>>) {
     unsafe { libc::close(fd) };
 }
 
+/// Remove a container's FIFO files so a retried CREATE mints fresh inodes.
+///
+/// Without unlinking, a second CREATE for the same container ID hits `mkfifo`
+/// EEXIST, spawns a second reader pair on the same FIFO inode, and the old
+/// blocked reader steals bytes from the new one.
+fn remove_fifos(container_id: &str) {
+    for suffix in ["stdout", "stderr"] {
+        let path = format!("/rootfs/tmp/speck-logs/{container_id}.{suffix}");
+        if let Err(err) = std::fs::remove_file(&path)
+            && err.kind() != io::ErrorKind::NotFound
+        {
+            eprintln!("log_relay: FIFO unlink failed for {path}: {err}");
+        }
+    }
+}
+
 fn read_stream(
     conn_fd: libc::c_int,
     buffers: &LogBuffers,
     stream: &str,
     container_id: &str,
+    offset: usize,
 ) -> io::Result<()> {
     let stream_buffer = {
         let guard = buffers.lock().expect("log buffers mutex poisoned");
@@ -246,7 +270,7 @@ fn read_stream(
         .lock()
         .expect("log buffer mutex poisoned")
         .clone();
-    write_length_prefixed(conn_fd, &bytes)
+    write_length_prefixed(conn_fd, &bytes[offset.min(bytes.len())..])
 }
 
 fn write_length_prefixed(conn_fd: libc::c_int, bytes: &[u8]) -> io::Result<()> {
