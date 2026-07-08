@@ -259,7 +259,11 @@ fn signed_binary_has_virtualization_entitlement(binary: &Path) -> Result<(), Str
         return Err(String::from_utf8_lossy(&output.stderr).into_owned());
     }
 
-    let plist = String::from_utf8_lossy(&output.stdout);
+    let plist = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
     if entitlement_plist_has_virtualization_true(&plist) {
         Ok(())
     } else {
@@ -411,6 +415,17 @@ mod tests {
         assert!(!entitlement_plist_has_virtualization_true(string_true));
         assert!(!entitlement_plist_has_virtualization_true(missing));
         assert!(!entitlement_plist_has_virtualization_true(malformed));
+    }
+
+    #[test]
+    fn dist_entitlement_parser_accepts_codesign_d_diagnostics_prefix() {
+        let dump = r#"Executable=/tmp/spk
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict><key>com.apple.security.virtualization</key><true/></dict>
+</plist>"#;
+
+        assert!(entitlement_plist_has_virtualization_true(dump));
     }
 
     #[test]
