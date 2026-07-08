@@ -286,6 +286,10 @@ fn run_command(command: &mut Command) -> Result<(), String> {
 }
 
 fn entitlement_plist_has_virtualization_true(plist: &str) -> bool {
+    if entitlement_text_dump_has_virtualization_true(plist) {
+        return true;
+    }
+
     if !plist.contains("<plist") || !plist.contains("</plist>") || !plist.contains("<dict>") {
         return false;
     }
@@ -297,6 +301,17 @@ fn entitlement_plist_has_virtualization_true(plist: &str) -> bool {
     let trimmed = after_key.trim_start();
 
     trimmed.starts_with("<true/>") || trimmed.starts_with("<true />")
+}
+
+fn entitlement_text_dump_has_virtualization_true(dump: &str) -> bool {
+    let Some(key_start) = dump.find(&format!("[Key] {VIRTUALIZATION_ENTITLEMENT}")) else {
+        return false;
+    };
+
+    dump[key_start..]
+        .lines()
+        .take(4)
+        .any(|line| line.trim() == "[Bool] true")
 }
 
 #[allow(dead_code)]
@@ -424,6 +439,17 @@ mod tests {
 <plist version="1.0">
 <dict><key>com.apple.security.virtualization</key><true/></dict>
 </plist>"#;
+
+        assert!(entitlement_plist_has_virtualization_true(dump));
+    }
+
+    #[test]
+    fn dist_entitlement_parser_accepts_codesign_text_bool_true() {
+        let dump = r#"[Dict]
+	[Key] com.apple.security.virtualization
+	[Value]
+		[Bool] true
+"#;
 
         assert!(entitlement_plist_has_virtualization_true(dump));
     }
