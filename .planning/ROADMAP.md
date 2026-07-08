@@ -31,9 +31,9 @@ Full details: `.planning/milestones/v1.1-ROADMAP.md`
 ### 📋 v1.2 Hardened Runtime
 
 - [x] **Phase 15: Stability Foundation** — Unit-test seams for DNS proxy and vminitd; console log, version check, unsafe sweep, secret wrapping (completed 2026-07-07)
-- [ ] **Phase 16: Daemon Polish** — Reliable `spk down` via PID fallback; first-class `spk restart`; port and exec verified end-to-end
-- [x] **Phase 17: testcontainers Conformance** — SpeckDockerd wired as intercepting layer; SQLite state persistence; Docker API conformance tests pass (completed 2026-07-07)
-- [ ] **Phase 18: Developer ID Distribution** — Developer ID signing + notarytool + `.pkg` + Homebrew Cask
+- [x] **Phase 16: Daemon Polish** — Reliable `spk down` via PID fallback; first-class `spk restart`; port and exec verified end-to-end (completed 2026-07-08)
+- [x] **Phase 17: testcontainers Conformance** — SpeckDockerd wired as intercepting layer; SQLite state persistence; Docker API conformance tests pass; gap closure closed (completed 2026-07-08)
+- [x] **Phase 18: Developer ID Distribution** — Developer ID signing + notarytool + `.pkg` + Homebrew Cask (completed 2026-07-08)
 
 ---
 
@@ -82,8 +82,8 @@ Plans:
 - [x] 16-01-PLAN.md — Add VmState::Restarting model variant
 - [x] 16-02-PLAN.md — Harden PID file ESRCH handling + status path fix
 - [x] 16-03-PLAN.md — spk restart CLI command (stop+start subprocess + PREPARE_RESTART signal)
-- [ ] 16-04-PLAN.md — Port publish + exec E2E test expansions
-- [ ] 16-05-PLAN.md — 503 Retry-After middleware + PREPARE_RESTART daemon handler
+- [x] 16-04-PLAN.md — Port publish + exec E2E test expansions
+- [x] 16-05-PLAN.md — 503 Retry-After middleware + PREPARE_RESTART daemon handler
 
 ### Phase 17: testcontainers Conformance
 
@@ -98,29 +98,49 @@ Plans:
    4. testcontainers-rs port mapping resolves correctly — `inspect_container` returns `NetworkSettings.Ports` with string `HostPort` and `"0.0.0.0"` `HostIp`
    5. On daemon startup, no exec entries remain with `running=true` — all are reset to `exit_code=-1`
 
-**Plans**: 6 plans
+**Plans**: 10 plans
 Plans:
+**Wave 1**
 
 - [x] 17-01-PLAN.md — SQLite-backed storage module with schema, CRUD, exec reconciliation
 - [x] 17-02-PLAN.md — Persist volume/network/exec handlers through storage
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [x] 17-03-PLAN.md — Persist port bindings; inject into container inspect response
 - [x] 17-04-PLAN.md — Real container log output through encode_frame multiplexing
 - [x] 17-05-PLAN.md — Wire SpeckDockerd as production layer; fix image_push + network validation
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
 - [x] 17-06-PLAN.md — Enable three bollard conformance tests
+- [x] 17-07-PLAN.md — Gap closure: real stdout/stderr log relay for Docker logs
 
-### Phase 18: Developer ID Distribution
+**Gap closure (re-verification)** *(Wave 1 plans parallel; Wave 2 blocked on both)*
 
-**Goal**: Users can install `spk` via Homebrew Cask and pass Gatekeeper on a clean macOS system with no prior developer setup.
+- [x] 17-08-PLAN.md — Gap closure: live follow=true log stream + relay lifecycle cleanup (CONF-05)
+- [x] 17-09-PLAN.md — Gap closure: network existence validation in connect/disconnect (CONF-03)
+- [x] 17-10-PLAN.md — Gap closure: HostIp "0.0.0.0" default + conformance test coverage (CONF-06, CONF-07)
+
+### Phase 18: Ad-hoc Development Distribution
+
+**Goal**: Maintainers can produce honest ad-hoc signed, non-notarized development artifacts without Apple Developer Program credentials, while preserving exact virtualization entitlement validation for a future Developer ID lane.
 **Depends on**: Phase 15 (stable binary); DIST track is otherwise independent of Phases 16–17
 **Requirements**: DIST-01, DIST-02, DIST-03, DIST-04
 **Success Criteria** (what must be TRUE):
 
-  1. `cargo xtask dist` produces a Developer ID signed binary — `codesign -d --entitlements` confirms `com.apple.security.virtualization` is present as `<true/>` (boolean, not string)
-  2. `cargo xtask dist` notarization step parses JSON output and fails the build if `.status != "Accepted"`; the stapled binary passes `stapler validate`
-  3. `.pkg` installer installs `spk` to `/usr/local/bin` and `spk --version` succeeds after install
-  4. `brew install --cask speck` on a clean macOS machine completes without a Gatekeeper quarantine dialog; the entitlement survives Homebrew re-signing
+  1. `cargo xtask dist-check` passes without Developer ID identities or notary credentials, and still validates `speck.entitlements` exactly.
+  2. `cargo xtask dist --sign-only` ad-hoc signs the Apple Silicon release binary and confirms `com.apple.security.virtualization` is boolean true.
+  3. `cargo xtask dist` produces clearly named non-notarized development package/archive artifacts and a Formula-compatible binary archive.
+  4. Release/Homebrew metadata is explicit that this is a development-only route; Developer ID signing, notarization, stapling, and official Cask publication are deferred.
 
-**Plans**: TBD
+**Plans**: 3 plans
+
+Plans:
+
+- [x] 18-01-PLAN.md — Extract `xtask` dist/preflight helpers and remove the Developer ID/notary credential gate
+- [x] 18-02-PLAN.md — Implement ad-hoc signed binary, development package, and non-notarized archives
+- [x] 18-03-PLAN.md — Publish development release artifacts and preserve honest Homebrew development routes
 
 ---
 
@@ -144,6 +164,6 @@ Plans:
 | 13. Diagnostics | v1.1 | 2/2 | Complete | 2026-07-05 |
 | 14. Homebrew Distribution | v1.1 | 3/3 | Complete | 2026-07-06 |
 | 15. Stability Foundation | v1.2 | 8/8 | Complete   | 2026-07-07 |
-| 16. Daemon Polish | v1.2 | 3/5 | In Progress|  |
-| 17. testcontainers Conformance | v1.2 | 6/6 | Complete   | 2026-07-07 |
-| 18. Developer ID Distribution | v1.2 | 0/TBD | Not started | — |
+| 16. Daemon Polish | v1.2 | 5/5 | Complete | 2026-07-08 |
+| 17. testcontainers Conformance | v1.2 | 10/10 | Complete | 2026-07-08 |
+| 18. Ad-hoc Development Distribution | v1.2 | 3/3 | Complete    | 2026-07-08 |

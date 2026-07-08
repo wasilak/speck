@@ -2,37 +2,38 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Hardened Runtime
-status: executing
-last_updated: "2026-07-07T13:58:00.713Z"
-last_activity: 2026-07-07 -- Phase 17 execution resumed (wave continue)
+status: completed
+last_updated: "2026-07-08T14:13:29.231Z"
+last_activity: 2026-07-08
 progress:
   total_phases: 4
-  completed_phases: 2
-  total_plans: 19
-  completed_plans: 13
-  percent: 50
+  completed_phases: 4
+  total_plans: 26
+  completed_plans: 26
+  percent: 100
 ---
 
 # State — Milestone v1.2 Hardened Runtime
 
-**Status:** Executing Phase 17
+**Status:** Milestone complete
 
 ## Project Reference
 
 See: .planning/PROJECT.md (updated 2026-07-06)
 
 **Core value:** A container runtime on Apple Silicon that never loses the network — micro-VMs inherit the host's routing/DNS live, surviving corporate VPNs and Cloudflare WARP where Docker Desktop fails.
-**Current focus:** Phase 17 — testcontainers-conformance
+**Current focus:** Phase 18 — ad-hoc-development-distribution
 
 ## Current Position
 
-Phase: 17 (testcontainers-conformance) — EXECUTING
-Plan: 1 of 6
-Status: Executing Phase 17
-Last activity: 2026-07-07 -- Phase 17 execution resumed (wave continue)
+Phase: 18
+Plan: 3 of 3 complete
+Next: Milestone complete
+Status: Phase verified — milestone complete
+Last activity: 2026-07-08
 
 ```
-Progress: [████████████████████████████████████████] 50% (2/4 phases)
+Progress: [████████████████████████████████████████] 100% (4/4 phases)
 ```
 
 ## Milestone v1.2 Phase Overview
@@ -41,8 +42,8 @@ Progress: [███████████████████████
 |-------|------|--------------|--------|
 | 15 | Stability Foundation | TEST-01..07 | Complete ✅ |
 | 16 | Daemon Polish | DAEMON-01..04 | Complete ✅ |
-| 17 | testcontainers Conformance | CONF-01..07 | Not started |
-| 18 | Developer ID Distribution | DIST-01..04 | Not started |
+| 17 | testcontainers Conformance | CONF-01..07 | Complete ✅ |
+| 18 | Ad-hoc Development Distribution | DIST-01..04 | Complete ✅ |
 
 ## Performance Metrics
 
@@ -58,6 +59,7 @@ Progress: [███████████████████████
 | Phase 16-daemon-polish P02 | 12min | 2 tasks | 2 files |
 | Phase 16-daemon-polish P03 | 12min | 2 tasks | 3 files |
 | Phase 16-daemon-polish P05 | 8min | 3 tasks | 4 files |
+| Phase 18-developer-id-distribution P03 | 3min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -86,7 +88,7 @@ Progress: [███████████████████████
 
 ## Session Continuity
 
-**To resume:** Run `/gsd-discuss-phase 17` to begin testcontainers Conformance planning.
+**To resume:** Milestone v1.2 is complete. Start the next milestone or plan the future Developer ID/notarization lane when Apple Developer Program credentials are available.
 
 ## Decisions
 
@@ -96,3 +98,6 @@ Progress: [███████████████████████
 - [Phase 15-08]: Added source-inspection safety guard tests per file (no_unsafe_env_mutation) to enforce no raw env mutation in test code
 - [Phase 16-03]: spk restart uses external process sequencing (subprocess stop + start) with exit code guards — prevents double-VM on failed stop; PREPARE_RESTART signal sent over control socket for daemon 503 middleware
 - [Phase 16-05]: Used std::sync::RwLock instead of parking_lot for middleware VmState (parking_lot not in any crate's dep tree); did not modify guest::docker_api_unix_proxy signature — it's a raw byte proxy, middleware wiring belongs in SpeckDockerd axum layer
+- [Phase 18-03]: Active release distribution remains ad-hoc development-only; Developer ID, notarization, stapling, and official Homebrew Cask publication are deferred.
+- [Phase 18-03]: GitHub Releases upload `cargo xtask dist` non-notarized development artifacts instead of mutating the legacy Formula.
+- [Phase 18-03]: Legacy Formula is preserved as a clearly development-only install route until an equivalent official path exists.
