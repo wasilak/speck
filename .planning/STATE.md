@@ -3,37 +3,37 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Hardened Runtime
 status: completed
-last_updated: "2026-07-08T14:13:29.231Z"
-last_activity: 2026-07-08
+last_updated: "2026-07-08T16:24:48.234Z"
+last_activity: 2026-07-08 -- Phase 18.1 marked complete
 progress:
-  total_phases: 4
-  completed_phases: 4
-  total_plans: 26
-  completed_plans: 26
+  total_phases: 5
+  completed_phases: 5
+  total_plans: 27
+  completed_plans: 27
   percent: 100
 ---
 
 # State — Milestone v1.2 Hardened Runtime
 
-**Status:** Milestone complete
+**Status:** Phase 18.1 complete
 
 ## Project Reference
 
 See: .planning/PROJECT.md (updated 2026-07-06)
 
 **Core value:** A container runtime on Apple Silicon that never loses the network — micro-VMs inherit the host's routing/DNS live, surviving corporate VPNs and Cloudflare WARP where Docker Desktop fails.
-**Current focus:** Phase 18 — ad-hoc-development-distribution
+**Current focus:** Phase 18.1 — close-gap-daemon-stop-restart-control-socket-reliability
 
 ## Current Position
 
-Phase: 18
-Plan: 3 of 3 complete
-Next: Milestone complete
-Status: Phase verified — milestone complete
-Last activity: 2026-07-08
+Phase: 18.1 — COMPLETE
+Plan: 1 of 1
+Next: /gsd-plan-phase 18.1
+Status: Phase 18.1 complete
+Last activity: 2026-07-08 -- Phase 18.1 marked complete
 
 ```
-Progress: [████████████████████████████████████████] 100% (4/4 phases)
+Progress: [████████████████████████████████--------] 80% (4/5 phases)
 ```
 
 ## Milestone v1.2 Phase Overview
@@ -60,8 +60,13 @@ Progress: [███████████████████████
 | Phase 16-daemon-polish P03 | 12min | 2 tasks | 3 files |
 | Phase 16-daemon-polish P05 | 8min | 3 tasks | 4 files |
 | Phase 18-developer-id-distribution P03 | 3min | 2 tasks | 3 files |
+| Phase 18.1-close-gap-daemon-stop-restart-control-socket-reliability P01 | 14min | 3 tasks | 1 files |
 
 ## Accumulated Context
+
+### Roadmap Evolution
+
+- Phase 18.1 inserted after Phase 18: Close gap: daemon stop/restart control socket reliability (URGENT)
 
 ### Key Decisions (v1.2)
 
@@ -101,3 +106,5 @@ Progress: [███████████████████████
 - [Phase 18-03]: Active release distribution remains ad-hoc development-only; Developer ID, notarization, stapling, and official Homebrew Cask publication are deferred.
 - [Phase 18-03]: GitHub Releases upload `cargo xtask dist` non-notarized development artifacts instead of mutating the legacy Formula.
 - [Phase 18-03]: Legacy Formula is preserved as a clearly development-only install route until an equivalent official path exists.
+- [Phase ?]: Block-scoped RwLock write guard in PREPARE_RESTART to avoid non-Send guard across .await
+- [Phase ?]: Source-inspection tests locate error handlers via unique log message strings rather than Err(e) position

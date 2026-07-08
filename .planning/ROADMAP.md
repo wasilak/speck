@@ -167,3 +167,14 @@ Plans:
 | 16. Daemon Polish | v1.2 | 5/5 | Complete | 2026-07-08 |
 | 17. testcontainers Conformance | v1.2 | 10/10 | Complete | 2026-07-08 |
 | 18. Ad-hoc Development Distribution | v1.2 | 3/3 | Complete    | 2026-07-08 |
+| 18.1 Close Gap: Daemon Reliability | v1.2 | 1/1 | Complete   | 2026-07-08 |
+
+### Phase 18.1: Close gap: daemon stop/restart control socket reliability (INSERTED)
+
+**Goal:** The daemon's control socket survives transient accept errors; VmState::Restarting auto-recovers after 60s; control.sock is cleaned up on graceful shutdown.
+**Requirements**: RELIABILITY-01, RELIABILITY-02, RELIABILITY-03, RELIABILITY-04
+**Depends on:** Phase 18
+**Plans:** 1/1 plans complete
+Plans:
+
+- [x] 18.1-01-PLAN.md — Fix accept loop (continue+backoff), add VmState lease timeout, clean up control.sock, add source-inspection tests (completed 2026-07-08)
