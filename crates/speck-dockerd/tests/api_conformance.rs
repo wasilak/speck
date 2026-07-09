@@ -497,6 +497,88 @@ async fn test_inspect_default_host_ip() {
 }
 
 #[tokio::test]
+async fn test_inspect_empty_string_host_ip_defaults() {
+    if std::env::var("SPECK_TEST_INTEGRATION").is_err() {
+        eprintln!("skipping integration test: SPECK_TEST_INTEGRATION not set");
+        return;
+    }
+    let result = tokio::time::timeout(Duration::from_secs(30), async {
+        let docker = speck_docker();
+        let mut port_bindings = HashMap::new();
+        port_bindings.insert(
+            "80/tcp".to_string(),
+            Some(vec![PortBinding {
+                host_ip: Some("".to_string()),
+                host_port: Some("18083".to_string()),
+            }]),
+        );
+        let config = ContainerCreateBody {
+            image: Some("alpine".to_string()),
+            cmd: Some(vec![
+                "sh".to_string(),
+                "-c".to_string(),
+                "exit 0".to_string(),
+            ]),
+            host_config: Some(HostConfig {
+                port_bindings: Some(port_bindings),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let options = CreateContainerOptionsBuilder::default()
+            .name("test-conformance-empty-host-ip")
+            .build();
+        let response = docker
+            .create_container(Some(options), config)
+            .await
+            .expect("create container");
+        let container_id = response.id;
+
+        docker
+            .start_container(&container_id, None::<StartContainerOptions>)
+            .await
+            .expect("start container");
+
+        let wait = docker
+            .wait_container(&container_id, None::<WaitContainerOptions>)
+            .try_collect::<Vec<_>>()
+            .await
+            .expect("wait container");
+
+        let inspect = docker
+            .inspect_container(&container_id, None::<InspectContainerOptions>)
+            .await
+            .expect("inspect container");
+        let binding = inspect
+            .network_settings
+            .as_ref()
+            .and_then(|ns| ns.ports.as_ref())
+            .and_then(|ports| ports.get("80/tcp"))
+            .and_then(|bindings| bindings.as_ref())
+            .and_then(|bindings| bindings.first())
+            .expect("80/tcp should have a port binding");
+        assert_eq!(binding.host_ip.as_deref(), Some("0.0.0.0"));
+        assert_eq!(binding.host_port.as_deref(), Some("18083"));
+
+        docker
+            .remove_container(
+                &container_id,
+                Some(RemoveContainerOptions {
+                    force: true,
+                    ..Default::default()
+                }),
+            )
+            .await
+            .expect("remove container");
+    })
+    .await;
+    assert!(
+        result.is_ok(),
+        "test_inspect_empty_string_host_ip_defaults timed out after 30s"
+    );
+}
+
+#[tokio::test]
 async fn test_network_connect_missing_network_404() {
     if std::env::var("SPECK_TEST_INTEGRATION").is_err() {
         eprintln!("skipping integration test: SPECK_TEST_INTEGRATION not set");
