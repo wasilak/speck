@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOTFS_VERSION="${1:-0.1.0}"
+ROOTFS_VERSION="${1:-1.3.0}"
 BACKEND="${2:-moby}"
 SPECK_HOME="${SPECK_HOME:-$HOME/.local/share/speck}"
 ROOTFS_DEST="${SPECK_HOME}"  # CR-02: match spk up defaults

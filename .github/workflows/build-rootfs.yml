@@ -6,7 +6,7 @@ on:
       version:
         description: Rootfs version (e.g. 0.1.0)
         required: true
-        default: "0.1.0"
+        default: "1.3.0"
       backend:
         description: Runtime backend to install in rootfs
         required: false
