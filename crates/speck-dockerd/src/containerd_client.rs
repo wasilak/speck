@@ -2,10 +2,10 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use containerd_client::services::v1::{
-    Container, CreateContainerRequest, CreateTaskRequest, DeleteContainerRequest,
-    DeleteImageRequest, DeleteTaskRequest, ExecProcessRequest, GetContainerRequest,
-    GetImageRequest, GetRequest, KillRequest, ListContainersRequest, ListImagesRequest,
-    ListTasksRequest, StartRequest, WaitRequest,
+    container::Runtime as ContainerRuntime, Container, CreateContainerRequest,
+    CreateTaskRequest, DeleteContainerRequest, DeleteImageRequest, DeleteTaskRequest,
+    ExecProcessRequest, GetContainerRequest, GetImageRequest, GetRequest, KillRequest,
+    ListContainersRequest, ListImagesRequest, ListTasksRequest, StartRequest, WaitRequest,
 };
 use containerd_client::tonic;
 use containerd_client::types::v1::{Process, Status};
@@ -223,7 +223,10 @@ impl ContainerdClient {
             id: spec.id.clone(),
             labels,
             image: spec.image,
-            runtime: None,
+            runtime: Some(ContainerRuntime {
+                name: "io.containerd.runc.v2".to_string(),
+                options: None,
+            }),
             spec: None,
             snapshotter: "overlayfs".into(),
             snapshot_key: spec.id.clone(),
