@@ -4,18 +4,22 @@ Ultra-fast, minimalist container runtime for Apple Silicon macOS. Runs container
 
 **Core value:** A container runtime on Apple Silicon that never loses the network — micro-VMs inherit the host's routing/DNS live, surviving corporate VPNs and Cloudflare WARP where Docker Desktop fails.
 
-## Current Milestone: v1.2 Hardened Runtime
+## Current State
 
-**Goal:** Close test coverage gaps protecting the core DNS/networking value proposition, achieve testcontainers compatibility, land Developer ID distribution, and polish the daemon lifecycle.
+**Shipped v1.2 Hardened Runtime** (2026-07-07 → 2026-07-09): 7 phases, 32 plans, 55 tasks, ~50 commits.
 
-**Target features:**
-- Unit tests for DNS proxy and vminitd (zero tests today on both)
-- Serial console capture + guest version check at startup
-- `unsafe set_var` sweep (Rust 2024 correctness)
-- dockerd state persistence to disk (containers, networks, volumes)
-- Docker API conformance suite (bollard-based, fills TODO stubs)
-- Developer ID signing + notarytool + Cask
-- `spk restart`, reliable `spk down`, port/exec e2e verification
+v1.2 delivered hardened test coverage for the core DNS/networking stack (DNS proxy unit tests, vminitd mount simulation, unsafe env mutation sweep), Docker API conformance (9/9 tests passing with live container lifecycle: pull → create → start → exit), daemon lifecycle polish (reliable stop/restart, port/exec e2e), ad-hoc signed development distribution artifacts, and a FIFO-backed container stdout/stderr log relay with live follow-mode streaming.
+
+**Known deferred:** Developer ID signing + notarization + Cask (requires Apple Developer Program). Verification gaps from Phase 17 acknowledged as resolved by subsequent gap-closure phases.
+
+## Next Milestone Goals
+
+Open for definition. Candidate areas:
+- Developer ID distribution (BREW-DEVID)
+- Production DNS/VPN verification (DNS-01/03/05)
+- First-class `spk restart` command
+- Full testcontainers CI integration
+- K3s/CRI integration prototype
 
 ## Constraints
 
@@ -65,31 +69,21 @@ Ultra-fast, minimalist container runtime for Apple Silicon macOS. Runs container
 - ✓ CERT-01–04: CA cert injection into guest trust bundle + containerd hosts.toml; fail-fast PEM validation — v1.1
 - ✓ DOCTOR-01–03: `spk doctor` 8-check health suite; `spk doctor dns <hostname>` trace — v1.1
 - ✓ BREW-01–03: Homebrew Formula (ad-hoc signed tarball) installs working `spk` with entitlement preserved — v1.1
+- ✓ DNS-TEST-01: Unit tests for DNS proxy — v1.2
+- ✓ VMINIT-TEST-01: Unit tests for vminitd mount/sysctl via Syscalls trait — v1.2
+- ✓ CONSOLE-01: Wire serial console capture to `$SPECK_HOME/console.log` — v1.2
+- ✓ VERSION-01: Guest version check at startup — v1.2
+- ✓ UNSAFE-01: Replace unsafe `set_var`/`remove_var` with `temp-env` — v1.2
+- ✓ STATE-01/02: Persist dockerd container/exec/network/volume state to disk — v1.2
+- ✓ CONFORM-01: Docker API conformance tests (bollard-based) — v1.2
+- ✓ DAEMON-RESTART: First-class `spk restart` subcommand — v1.2
+- ✓ DAEMON-DOWN: `spk down` reliable outside launchd — v1.2
+- ✓ PORT-E2E: Port publishing verified end-to-end — v1.2
+- ✓ EXEC-E2E: `spk exec` verified end-to-end — v1.2
 
-### Active (v1.2)
+### Active
 
-**Stability & Testing**
-- [ ] **DNS-TEST-01**: Unit tests for `speck-net/src/dns.rs` DNS proxy (449 lines, zero tests — core VPN-DNS feature)
-- [ ] **VMINIT-TEST-01**: Unit tests for `vminitd.rs` (1541 lines, 10+ unsafe libc calls, zero tests)
-- [ ] **CONSOLE-01**: Wire serial console capture (`VZVirtioConsoleDeviceConfiguration` → `$SPECK_HOME/console.log`)
-- [ ] **VERSION-01**: Guest version check at startup — validate rootfs/initrd versions match host binary expectations
-- [ ] **UNSAFE-01**: Replace `unsafe set_var`/`remove_var` in `init.rs` (12 blocks) and `shell.rs` (9 blocks) with safe alternatives
-
-**testcontainers Conformance**
-- [ ] **STATE-01**: Persist dockerd container/exec state to disk (`$SPECK_HOME`) — survive daemon restarts
-- [ ] **STATE-02**: Persist network and volume metadata across daemon restarts
-- [ ] **CONFORM-01**: Fill Docker API conformance TODOs — bollard-based container lifecycle and compose workflow tests
-
-**Developer ID Distribution**
-- [ ] **BREW-DEVID-01**: Developer ID signing + notarytool + stapler (requires Apple Developer Program)
-- [ ] **BREW-DEVID-02**: `.pkg` installer
-- [ ] **BREW-DEVID-03**: Homebrew Cask (replace ad-hoc signed Formula)
-
-**Daemon Polish**
-- [ ] **DAEMON-RESTART**: First-class `spk restart` subcommand (currently: `spk down && spk up`)
-- [ ] **DAEMON-DOWN**: `spk down` reliable outside launchd (fix PID file fallback)
-- [ ] **PORT-E2E**: Port publishing verified end-to-end through smoltcp stack
-- [ ] **EXEC-E2E**: `spk exec` verified end-to-end through vsock to containerd
+*(None — next milestone not yet defined.)*
 
 ### Out of Scope
 
@@ -102,13 +96,14 @@ Ultra-fast, minimalist container runtime for Apple Silicon macOS. Runs container
 - **Synthetic subnets** — NET-06 constraint, never
 - **QEMU / emulation** — defeats millisecond-start brand promise
 
-## Context (after v1.1)
+## Context
 
-**Shipped v1.1** (2026-07-01 → 2026-07-06): 8 phases, 26 plans, ~50 commits, 54 files changed, 7,736 insertions.  
-**Codebase:** 17,048 lines of Rust across `speck-vz`, `speck-net`, `speck-cli`, `speck-core`, `speck-guest`.  
-**State:** `spk up` starts a background daemon; containers run; Docker socket works; DNS survives VPN toggles.  
-**Known limitations:** `spk down` fails to stop processes not registered with launchd (boot via `cargo run` directly). First-class `spk restart` not yet implemented.  
-**Next:** v1.2 in progress — Hardened Runtime (stability, testcontainers, Developer ID, daemon polish).
+**Shipped v1.1** (2026-07-01 → 2026-07-06): 8 phases, 26 plans, ~50 commits, 54 files changed, 7,736 insertions.
+**Shipped v1.2** (2026-07-07 → 2026-07-09): 7 phases, 32 plans, 55 tasks, ~50 commits.
+**Codebase:** ~17,000 lines of Rust across `speck-vz`, `speck-net`, `speck-cli`, `speck-core`, `speck-guest`.
+**State:** `spk up` starts a background daemon; containers run end-to-end with Docker-compatible API; DNS survives VPN toggles; 9/9 conformance tests pass; daemon start/stop/restart works; development distribution via ad-hoc signed artifacts.
+**Known limitations:** Developer ID signing + notarization + Homebrew Cask not yet delivered (requires Apple Developer Program). `spk restart` is stop+start subprocess, not in-process VM restart.
+**Next:** Planning v1.3.
 
 ## Decisions
 
@@ -128,6 +123,12 @@ Ultra-fast, minimalist container runtime for Apple Silicon macOS. Runs container
 | D-12 | Duplicate CA certs: silent SHA256 dedup (no warning) | — Pending feedback | v1.1 |
 | D-13 | `update-ca-certificates` called without timeout; failure is non-fatal | — Revisit if slow bundles reported | v1.1 |
 | D-14 | `spk doctor dns` uses host `getaddrinfo` (same path as vsock proxy) — no container lifecycle needed | ✓ Good — simpler, equally correct | v1.1 |
+| D-15 | `mockall` 0.15.0 approved for test-only deps via supply-chain audit | ✓ Good — enables mock-based unit tests without network/root | v1.2 |
+| D-16 | `secrecy::SecretString` for registry password (zeroize-on-drop, base64-preserving Debug) | ✓ Good — no credential leakage in logs | v1.2 |
+| D-17 | `Syscalls` trait in vminitd for testable mount/chroot/sysctl orchestration | ✓ Good — 12 tests pass on macOS without root | v1.2 |
+| D-18 | Phase 17.1/19 gap-closure inserted phases (decimal numbering) for follow-stream/HostIp/network validation | ✓ Good — clear insertion semantics without renumbering | v1.2 |
+| D-19 | Containerd transfer service for image pull (with unpack) — works | ✓ Good — container lifecycle works end-to-end | v1.2 |
+| D-20 | Ad-hoc release distribution only; Developer ID deferred | ✓ Good — ships dev artifact pipeline; DEVID requires Apple Program | v1.2 |
 
 ## Evolution
 
@@ -147,4 +148,5 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-07-06 after v1.1 milestone*
+
+*Last updated: 2026-07-09 after v1.2 milestone*

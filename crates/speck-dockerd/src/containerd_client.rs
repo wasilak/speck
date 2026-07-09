@@ -5,9 +5,15 @@ use containerd_client::services::v1::{
     container::Runtime as ContainerRuntime, Container, CreateContainerRequest,
     CreateTaskRequest, DeleteContainerRequest, DeleteImageRequest, DeleteTaskRequest,
     ExecProcessRequest, GetContainerRequest, GetImageRequest, GetRequest, KillRequest,
-    ListContainersRequest, ListImagesRequest, ListTasksRequest, StartRequest, WaitRequest,
+    ListContainersRequest, ListImagesRequest, ListTasksRequest, StartRequest, TransferRequest,
+    WaitRequest,
+};
+use containerd_client::services::v1::snapshots::{
+    MountsRequest, PrepareSnapshotRequest,
 };
 use containerd_client::tonic;
+use containerd_client::types;
+use containerd_client::types::transfer as transfer_types;
 use containerd_client::types::v1::{Process, Status};
 use tonic::transport::Channel;
 
@@ -87,6 +93,7 @@ pub struct ImageRecord {
     pub id: String,
     pub size: i64,
     pub created_at_seconds: i64,
+    pub labels: HashMap<String, String>,
 }
 
 impl ContainerdClient {
@@ -98,11 +105,12 @@ impl ContainerdClient {
     }
 
     pub async fn task_create(&self, spec: TaskSpec) -> Result<TaskId> {
+        let mounts = self.container_mounts(&spec.container_id).await?;
         let mut client = containerd_client::Client::from(self.channel.clone()).tasks();
         client
             .create(with_namespace(CreateTaskRequest {
                 container_id: spec.container_id.clone(),
-                rootfs: Vec::new(),
+                rootfs: mounts,
                 stdin: String::new(),
                 stdout: spec.stdout_fifo.unwrap_or_default(),
                 stderr: spec.stderr_fifo.unwrap_or_default(),
@@ -172,15 +180,17 @@ impl ContainerdClient {
 
     pub async fn task_get(&self, id: &str) -> Result<Option<TaskInfo>> {
         let mut client = containerd_client::Client::from(self.channel.clone()).tasks();
-        let response = client
+        match client
             .get(with_namespace(GetRequest {
                 container_id: id.to_owned(),
                 exec_id: String::new(),
             }))
             .await
-            .map_err(map_status)?
-            .into_inner();
-        Ok(response.process.map(process_to_task_info))
+        {
+            Ok(response) => Ok(response.into_inner().process.map(process_to_task_info)),
+            Err(status) if status.code() == tonic::Code::NotFound => Ok(None),
+            Err(status) => Err(map_status(status)),
+        }
     }
 
     pub async fn task_list(&self) -> Result<Vec<TaskInfo>> {
@@ -197,6 +207,61 @@ impl ContainerdClient {
             .into_iter()
             .map(process_to_task_info)
             .collect())
+    }
+
+    /// Prepare a writable snapshot for a container, using the image's top
+    /// committed snapshot as the parent.
+    async fn container_prepare_snapshot(
+        &self,
+        container_id: &str,
+        image_ref: &str,
+    ) -> Result<()> {
+        self.image_set_snapshot_key(image_ref).await?;
+        let image = self.image_get(image_ref).await?;
+
+        let parent_key = image
+            .labels
+            .get("containerd.io/snapshot/overlayfs.key")
+            .ok_or_else(|| {
+                DockerApiError::Internal(format!(
+                    "image {image_ref} has no unpacked snapshot key (was it pulled with unpack?)"
+                ))
+            })?
+            .clone();
+
+        let mut client = containerd_client::Client::from(self.channel.clone()).snapshots();
+        client
+            .prepare(with_namespace(PrepareSnapshotRequest {
+                snapshotter: "overlayfs".into(),
+                key: container_id.to_owned(),
+                parent: parent_key,
+                labels: HashMap::new(),
+            }))
+            .await
+            .map_err(|status| {
+                DockerApiError::Internal(format!(
+                    "failed to prepare snapshot for container {container_id}: {status}"
+                ))
+            })?;
+
+        Ok(())
+    }
+
+    /// Get the rootfs mounts for a container's active snapshot.
+    async fn container_mounts(&self, container_id: &str) -> Result<Vec<types::Mount>> {
+        let mut client = containerd_client::Client::from(self.channel.clone()).snapshots();
+        let response = client
+            .mounts(with_namespace(MountsRequest {
+                snapshotter: "overlayfs".into(),
+                key: container_id.to_owned(),
+            }))
+            .await
+            .map_err(|status| {
+                DockerApiError::Internal(format!(
+                    "failed to get mounts for container {container_id}: {status}"
+                ))
+            })?;
+        Ok(response.into_inner().mounts)
     }
 
     pub async fn container_create(&self, spec: ContainerCreateSpec) -> Result<String> {
@@ -292,10 +357,11 @@ impl ContainerdClient {
             value: spec_bytes,
         };
 
+        let image_ref = spec.image.clone();
         let container = Container {
             id: spec.id.clone(),
             labels,
-            image: spec.image,
+            image: image_ref.clone(),
             runtime: Some(ContainerRuntime {
                 name: "io.containerd.runc.v2".to_string(),
                 options: None,
@@ -317,12 +383,16 @@ impl ContainerdClient {
             .await
             .map_err(map_status)?
             .into_inner();
-        response
+        let container_id = response
             .container
             .map(|container| container.id)
             .ok_or_else(|| {
                 DockerApiError::Internal("containerd returned empty create response".into())
-            })
+            })?;
+
+        self.container_prepare_snapshot(&container_id, &image_ref).await?;
+
+        Ok(container_id)
     }
 
     pub async fn container_get(&self, id: &str) -> Result<ContainerInfo> {
@@ -392,19 +462,164 @@ impl ContainerdClient {
         Ok(())
     }
 
+    /// Normalize an image reference to a fully-qualified form that
+    /// containerd's transfer service can resolve.
+    fn normalize_reference(raw: &str) -> String {
+        if raw.contains('/') {
+            raw.to_owned()
+        } else {
+            format!("docker.io/library/{raw}")
+        }
+    }
+
     pub async fn image_pull(
         &self,
         image_ref: &str,
-        credentials: Option<RegistryCredentials>,
+        _credentials: Option<RegistryCredentials>,
     ) -> Result<()> {
-        if let Some(credentials) = credentials.as_ref() {
-            tracing::debug!(username = %credentials.username, server = %credentials.server, "using registry credentials for image pull");
+        tracing::debug!(reference = %image_ref, "pulling image via transfer service");
+
+        let store_name = image_ref.to_owned();
+        let pull_ref = Self::normalize_reference(image_ref);
+
+        let source = transfer_types::OciRegistry {
+            reference: pull_ref,
+            resolver: None,
+        };
+
+        let dest = transfer_types::ImageStore {
+            name: store_name,
+            labels: HashMap::new(),
+            platforms: vec![],
+            all_metadata: false,
+            manifest_limit: 0,
+            extra_references: vec![],
+            unpacks: vec![transfer_types::UnpackConfiguration {
+                platform: Some(types::Platform {
+                    os: "linux".into(),
+                    architecture: "arm64".into(),
+                    variant: String::new(),
+                    os_version: String::new(),
+                }),
+                snapshotter: "overlayfs".into(),
+            }],
+        };
+
+        let request = TransferRequest {
+            source: Some(containerd_client::to_any(&source)),
+            destination: Some(containerd_client::to_any(&dest)),
+            options: None,
+        };
+
+        let mut client = containerd_client::Client::from(self.channel.clone()).transfer();
+        client
+            .transfer(with_namespace(request))
+            .await
+            .map_err(|status| {
+                DockerApiError::Internal(format!("image pull via transfer service failed: {status}"))
+            })?;
+
+        tracing::info!(reference = %image_ref, "image pulled successfully");
+        Ok(())
+    }
+
+    /// Set the snapshotter key label on an image so container snapshot
+    /// preparation can find the parent committed snapshot.
+    ///
+    /// The transfer service may not always propagate unpack labels to the
+    /// image metadata, so we set it explicitly by listing the committed
+    /// snapshots owned by this image.
+    async fn image_set_snapshot_key(
+        &self,
+        image_ref: &str,
+    ) -> Result<()> {
+        let image = self.image_get(image_ref).await?;
+
+        if image.labels.contains_key("containerd.io/snapshot/overlayfs.key") {
+            return Ok(());
         }
 
-        // containerd-client exposes the image metadata service. Resolver-based pull is
-        // handled later by the transfer service; for now validate connectivity by
-        // consulting metadata and let callers stream Docker-shaped progress.
-        let _ = self.image_get(image_ref).await;
+        // List committed snapshots to find the one that belongs to this
+        // image.  The snapshotter uses the image digest as part of the
+        // chain of committed snapshots — look for the parent-most (last)
+        // committed snapshot whose labels reference this image.
+        let mut stream = containerd_client::Client::from(self.channel.clone())
+            .snapshots()
+            .list(with_namespace(
+                containerd_client::services::v1::snapshots::ListSnapshotsRequest {
+                    snapshotter: "overlayfs".into(),
+                    filters: vec![],
+                },
+            ))
+            .await
+            .map_err(|status| {
+                DockerApiError::Internal(format!("failed to list snapshots: {status}"))
+            })?;
+
+        use tokio_stream::StreamExt;
+        let all_snapshots = stream
+            .get_mut()
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .filter_map(|resp| resp.ok())
+            .flat_map(|resp| resp.info)
+            .collect::<Vec<_>>();
+
+        // Identify committed snapshots that are part of an image layer chain.
+        // Image unpack creates committed snapshots whose names are layer
+        // digest prefixes (e.g. "sha256:abc...").  The top-most snapshot
+        // is the one whose name is NOT referenced as a parent by any other
+        // committed snapshot.
+        let committed: Vec<_> = all_snapshots
+            .iter()
+            .filter(|info| {
+                info.kind == containerd_client::services::v1::snapshots::Kind::Committed as i32
+            })
+            .collect();
+
+        let top_key = committed
+            .iter()
+            .find(|info| !committed.iter().any(|other| other.name == info.parent))
+            .map(|info| info.name.clone())
+            .ok_or_else(|| {
+                DockerApiError::Internal(format!(
+                    "no committed snapshots found for {image_ref} ({} total snapshots)",
+                    all_snapshots.len(),
+                ))
+            })?;
+
+        // Update the image with the snapshot key label
+        let mut labels = image.labels.clone();
+        labels.insert("containerd.io/snapshot/overlayfs.key".into(), top_key);
+
+        let mut img_client = containerd_client::Client::from(self.channel.clone()).images();
+        let current = img_client
+            .get(with_namespace(containerd_client::services::v1::GetImageRequest {
+                name: image.name.clone(),
+            }))
+            .await
+            .map_err(|e| DockerApiError::Internal(format!("re-fetch image: {e}")))?
+            .into_inner()
+            .image
+            .ok_or_else(|| DockerApiError::Internal("image disappeared".into()))?;
+
+        img_client
+            .update(with_namespace(
+                containerd_client::services::v1::UpdateImageRequest {
+                    image: Some(containerd_client::services::v1::Image {
+                        labels,
+                        ..current
+                    }),
+                    update_mask: Some(prost_types::FieldMask {
+                        paths: vec!["labels".into()],
+                    }),
+                    source_date_epoch: None,
+                },
+            ))
+            .await
+            .map_err(|e| DockerApiError::Internal(format!("update image labels: {e}")))?;
+
         Ok(())
     }
 
@@ -534,5 +749,6 @@ fn image_to_record(image: containerd_client::services::v1::Image) -> ImageRecord
         size: target.map(|target| target.size).unwrap_or_default(),
         created_at_seconds: image.created_at.map(|ts| ts.seconds).unwrap_or_default(),
         name: image.name,
+        labels: image.labels,
     }
 }

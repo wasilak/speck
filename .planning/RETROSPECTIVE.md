@@ -53,6 +53,72 @@
 
 ---
 
+## Milestone: v1.2 — Hardened Runtime
+
+**Shipped:** 2026-07-09
+**Phases:** 7 | **Plans:** 32 | **Timeline:** 3 days (2026-07-07 → 2026-07-09)
+
+### What Was Built
+
+- Unit tests for DNS proxy (NXDOMAIN, SERVFAIL, VPN-scoped paths) and vminitd mount/sysctl orchestration — all pass without network or root
+- Serial console capture and guest version mismatch detection at startup
+- Unsafe `set_var`/`remove_var` sweep replaced with temp-env crate
+- Docker API conformance: 9/9 tests passing (pull → create → start → exit → logs)
+- SQLite-backed state persistence for containers, execs, networks, volumes
+- Port publishing end-to-end through smoltcp stack
+- `spk exec` through vsock to containerd
+- Reliable `spk down` outside launchd (PID fallback + ESRCH detection)
+- First-class `spk restart` (stop+start subprocess with 503 Retry-After middleware)
+- Ad-hoc signed development release pipeline (pkg, tar, metadata)
+- Control socket reliability fixes (accept loop resilience, VmState lease timeout)
+- Container stdout/stderr log relay over vsock with live follow-mode streaming
+
+### What Worked
+
+- **Inserted phases (decimal numbering):** 17.1, 18.1, 19 were added mid-milestone without renumbering. The decimal convention made it clear they were gap closures
+- **Gap-closure pattern:** Phase 17's verification revealed 3 blockers. Rather than reopen Phase 17, inserted phases (17.1, 19) handled them in order — clean separation, clear ownership
+- **Conformance test suite:** bollard-based Docker API conformance tests provided real feedback. Passing them was a genuine product milestone
+- **Goal-backward verification:** The verification pass on Phase 17 found gaps the original plans missed (HostIp default, network existence validation) — caught before they shipped
+
+### What Was Inefficient
+
+- **Multi-plan wave dependencies:** Phase 17's Wave 2/3 blocking on Wave 1 created idle time. The plans were large enough that splitting into smaller vertical slices would have reduced wait
+- **Mid-milestone ROADMAP.md drift:** Phase 19 was marked "in progress" when the ROADMAP was updated but Phase 17.1 wasn't flagged as complete — required reconciliation at milestone close
+- **Verification docs not re-run:** Phase 17 gaps were closed by 17.1 and 19, but VERIFICATION.md was never updated — led to open-artifact audit warnings at milestone close
+
+### Patterns Established
+
+- **Log relay pattern:** vsock-based FIFO relay with offset-aware reads. Host pins two FIFOs per container (stdout/stderr), guest relay thread reads and serves via simple READ:stdout/READ:stderr protocol
+- **Initrd rebuild loop:** `cargo xtask build-in-guest` → rebuild initrd → scp into VM → daemon restart. Fast iteration without full VM boot cycle
+- **Decimal phase insertion:** `N.N` numbering for urgent gap closures without reindexing existing phases
+
+### Key Lessons
+
+- Transfer service image pull (containerd v1.7) doesn't set `containerd.io/snapshot/overlayfs.key` label — committed snapshots must be discovered by listing + parent-chain analysis instead
+- Snapshot key discovery by parent-chain (find the committed snapshot no other committed snapshot references as parent) is more reliable than filtering by label
+- HostIp normalization needs to handle both `null` and `""` — different Docker client versions produce different representations
+- Docker's `follow=true` log streaming cannot be implemented as a finite snapshot — requires mpsc channel + offset-based relay reads that stay open until container exit or client disconnect
+
+### Cost Observations
+
+- Sessions: ~6 sessions across 3 days
+- Model mix: balanced profile
+- Notable: Gap-closure phases were the most efficient (tightly scoped, clear goal)
+- Phase 17 was the largest (10 plans) — could benefit from being split into smaller vertical slices next time
+
 ## Cross-Milestone Trends
 
-*(Populated when v1.2 closes)*
+### Phase/Plan Velocity
+
+| Milestone | Phases | Plans | Duration | Plans/Day |
+|-----------|--------|-------|----------|-----------|
+| v1.1 | 8 | 26 | 5 days | 5.2 |
+| v1.2 | 7 | 32 | 3 days | 10.7 |
+
+### Efficiency Gain
+
+v1.2 achieved double the plans/day (10.7 vs 5.2) compared to v1.1. Likely factors:
+- Less platform/architecture work (networking, daemon, CA injection in v1.1)
+- More focused work on dockerd layer (single crate)
+- Gap-closure phases were tightly scoped and efficient
+- Pattern reuse from v1.1 (wave-based execution, source-assertion tests)

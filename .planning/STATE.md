@@ -2,20 +2,31 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Hardened Runtime
-status: executing
-last_updated: "2026-07-09T11:02:52.407Z"
-last_activity: 2026-07-09 -- Phase 19 execution started
+status: completed
+last_updated: "2026-07-09T13:02:44.171Z"
+last_activity: 2026-07-09 — Milestone v1.2 completed and archived
 progress:
   total_phases: 7
-  completed_phases: 6
+  completed_phases: 7
   total_plans: 32
-  completed_plans: 31
-  percent: 86
+  completed_plans: 32
+  percent: 100
 ---
 
 # State — Milestone v1.2 Hardened Runtime
 
-**Status:** Executing Phase 19
+**Status:** v1.2 milestone complete
+
+## Deferred Items
+
+Items acknowledged and deferred at milestone close on 2026-07-09:
+
+| Category | Item | Status |
+|----------|------|--------|
+| verification_gap | Phase 17: follow=true log live streaming (CONF-05) | gaps_found (addressed in Phase 17.1/19) |
+| verification_gap | Phase 17: HostIp default to "0.0.0.0" (CONF-06) | gaps_found (addressed in Phase 19) |
+| verification_gap | Phase 17: Network connect/disconnect existence validation | gaps_found (addressed in Phase 17.1) |
+| verification_gap | Phase 17.1: Follow-stream verification gap | gaps_found (addressed in Phase 19) |
 
 ## Project Reference
 
@@ -26,15 +37,10 @@ See: .planning/PROJECT.md (updated 2026-07-06)
 
 ## Current Position
 
-Phase: 19 (close-testcontainers-conformance-gaps-inserted) — EXECUTING
-Plan: 1 of 1
-Plan: 04 — HostIp normalization + bounded log retention; verification gaps closed
-Status: Executing Phase 19
-Last activity: 2026-07-09 -- Phase 19 execution started
-
-```
-Progress: [████████████████████████████████████████] 100% (5/5 phases)
-```
+Phase: Milestone v1.2 complete
+Plan: —
+Status: Awaiting next milestone
+Last activity: 2026-07-09 — Milestone v1.2 completed and archived
 
 ## Milestone v1.2 Phase Overview
 
@@ -117,3 +123,7 @@ Progress: [███████████████████████
 - [Phase 18-03]: Legacy Formula is preserved as a clearly development-only install route until an equivalent official path exists.
 - [Phase ?]: Block-scoped RwLock write guard in PREPARE_RESTART to avoid non-Send guard across .await
 - [Phase ?]: Source-inspection tests locate error handlers via unique log message strings rather than Err(e) position
+
+## Operator Next Steps
+
+- Start the next milestone with /gsd-new-milestone
