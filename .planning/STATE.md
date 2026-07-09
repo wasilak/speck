@@ -2,35 +2,35 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Hardened Runtime
-status: completed
-last_updated: "2026-07-09T12:20:00.000Z"
-last_activity: 2026-07-09 -- Phase 17.1 all gap-closure plans complete
+status: executing
+last_updated: "2026-07-09T11:02:52.407Z"
+last_activity: 2026-07-09 -- Phase 19 execution started
 progress:
-  total_phases: 6
+  total_phases: 7
   completed_phases: 6
-  total_plans: 31
+  total_plans: 32
   completed_plans: 31
-  percent: 100
+  percent: 86
 ---
 
 # State — Milestone v1.2 Hardened Runtime
 
-**Status:** Complete
+**Status:** Executing Phase 19
 
 ## Project Reference
 
 See: .planning/PROJECT.md (updated 2026-07-06)
 
 **Core value:** A container runtime on Apple Silicon that never loses the network — micro-VMs inherit the host's routing/DNS live, surviving corporate VPNs and Cloudflare WARP where Docker Desktop fails.
-**Current focus:** Phase 17.1 — close-testcontainers-conformance-gaps-follow-stream-hostip-d
+**Current focus:** Phase 19 — close-testcontainers-conformance-gaps-inserted
 
 ## Current Position
 
-Phase: 17.1 (close-testcontainers-conformance-gaps-follow-stream-hostip-d) — COMPLETE
-Plan: 4 of 4
+Phase: 19 (close-testcontainers-conformance-gaps-inserted) — EXECUTING
+Plan: 1 of 1
 Plan: 04 — HostIp normalization + bounded log retention; verification gaps closed
-Status: Complete
-Last activity: 2026-07-09 -- Phase 17.1 all gap-closure plans complete
+Status: Executing Phase 19
+Last activity: 2026-07-09 -- Phase 19 execution started
 
 ```
 Progress: [████████████████████████████████████████] 100% (5/5 phases)

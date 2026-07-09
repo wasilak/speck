@@ -147,6 +147,7 @@ pub async fn create(
             restart_maximum_retry_count: restart.maximum_retry_count,
             memory: host_config.memory,
             cpu_shares: host_config.cpu_shares,
+            tty: body.tty.unwrap_or(false),
         })
         .await?;
 

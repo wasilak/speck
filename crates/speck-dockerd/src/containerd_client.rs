@@ -61,6 +61,7 @@ pub struct ContainerCreateSpec {
     pub restart_maximum_retry_count: Option<i64>,
     pub memory: Option<i64>,
     pub cpu_shares: Option<i64>,
+    pub tty: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -219,6 +220,78 @@ impl ContainerdClient {
             labels.insert("speck.cpu_shares".into(), cpu_shares.to_string());
         }
 
+        let mut env = spec.env.clone();
+        if !env.iter().any(|e| e.starts_with("PATH=")) {
+            env.insert(0, "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin".into());
+        }
+
+        let caps = [
+            "CAP_CHOWN", "CAP_DAC_OVERRIDE", "CAP_FSETID", "CAP_FOWNER",
+            "CAP_MKNOD", "CAP_NET_RAW", "CAP_SETGID", "CAP_SETUID",
+            "CAP_SETFCAP", "CAP_SETPCAP", "CAP_NET_BIND_SERVICE",
+            "CAP_SYS_CHROOT", "CAP_KILL", "CAP_AUDIT_WRITE",
+        ];
+
+        let spec_json = serde_json::json!({
+            "ociVersion": "1.0.0",
+            "process": {
+                "terminal": spec.tty,
+                "user": { "uid": 0, "gid": 0 },
+                "args": spec.cmd,
+                "env": env,
+                "cwd": "/",
+                "capabilities": {
+                    "bounding": caps,
+                    "effective": caps,
+                    "permitted": caps,
+                },
+                "rlimits": [{ "type": "RLIMIT_NOFILE", "hard": 1024, "soft": 1024 }],
+                "noNewPrivileges": true,
+            },
+            "root": {
+                "path": "rootfs",
+                "readonly": false,
+            },
+            "mounts": [
+                { "destination": "/proc", "type": "proc", "source": "proc", "options": ["nosuid", "noexec", "nodev"] },
+                { "destination": "/dev", "type": "tmpfs", "source": "tmpfs", "options": ["nosuid", "strictatime", "mode=755", "size=65536k"] },
+                { "destination": "/dev/pts", "type": "devpts", "source": "devpts", "options": ["nosuid", "noexec", "newinstance", "ptmxmode=0666", "mode=0620", "gid=5"] },
+                { "destination": "/dev/shm", "type": "tmpfs", "source": "shm", "options": ["nosuid", "noexec", "nodev", "mode=1777", "size=65536k"] },
+                { "destination": "/dev/mqueue", "type": "mqueue", "source": "mqueue", "options": ["nosuid", "noexec", "nodev"] },
+                { "destination": "/sys", "type": "sysfs", "source": "sysfs", "options": ["nosuid", "noexec", "nodev", "ro"] },
+                { "destination": "/run", "type": "tmpfs", "source": "tmpfs", "options": ["nosuid", "strictatime", "mode=755", "size=65536k"] },
+            ],
+            "linux": {
+                "resources": {
+                    "devices": [{ "allow": false, "access": "rwm" }],
+                },
+                "namespaces": [
+                    { "type": "pid" },
+                    { "type": "ipc" },
+                    { "type": "uts" },
+                    { "type": "mount" },
+                    { "type": "cgroup" },
+                    { "type": "network" },
+                ],
+                "maskedPaths": [
+                    "/proc/acpi", "/proc/asound", "/proc/kcore", "/proc/keys",
+                    "/proc/latency_stats", "/proc/timer_list", "/proc/timer_stats",
+                    "/proc/sched_debug", "/sys/firmware", "/proc/scsi",
+                ],
+                "readonlyPaths": [
+                    "/proc/bus", "/proc/fs", "/proc/irq", "/proc/sys", "/proc/sysrq-trigger",
+                ],
+            },
+        });
+
+        let spec_bytes = serde_json::to_vec(&spec_json)
+            .map_err(|e| DockerApiError::Internal(format!("failed to serialize OCI spec: {e}")))?;
+
+        let spec_any = prost_types::Any {
+            type_url: "types.containerd.io/opencontainers/runtime-spec/1/Spec".into(),
+            value: spec_bytes,
+        };
+
         let container = Container {
             id: spec.id.clone(),
             labels,
@@ -227,7 +300,7 @@ impl ContainerdClient {
                 name: "io.containerd.runc.v2".to_string(),
                 options: None,
             }),
-            spec: None,
+            spec: Some(spec_any),
             snapshotter: "overlayfs".into(),
             snapshot_key: spec.id.clone(),
             created_at: None,
