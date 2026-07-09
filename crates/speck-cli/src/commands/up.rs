@@ -25,7 +25,7 @@ use crate::docker_client::DockerClient;
 use crate::shell::{self, EnvShell};
 use crate::theme::{NEON_CYAN, RESET};
 
-const ROOTFS_VERSION: &str = "0.2.0";
+const ROOTFS_VERSION: &str = "1.3.0";
 const ROOTFS_BACKEND: &str = "moby";
 const KATA_VERSION: &str = "3.32.0";
 const KATA_KERNEL_FILE: &str = "vmlinux-6.18.35-197";
