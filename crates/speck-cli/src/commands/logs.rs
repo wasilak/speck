@@ -22,7 +22,7 @@ pub fn run_logs(speck_home: &Path, args: LogsArgs) -> anyhow::Result<()> {
         let f = std::fs::File::open(&log_path)
             .with_context(|| format!("cannot open {}", log_path.display()))?;
         let reader = BufReader::new(f);
-        let lines: Vec<String> = reader.lines().filter_map(|l| l.ok()).collect();
+        let lines: Vec<String> = reader.lines().map_while(Result::ok).collect();
         let start = lines.len().saturating_sub(20);
         for line in &lines[start..] {
             println!("{line}");

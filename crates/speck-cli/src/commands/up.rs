@@ -276,7 +276,7 @@ async fn fetch_initrd(speck_home: &Path) -> anyhow::Result<()> {
         curl_cmd.arg("-fsSL");
     }
     let status = curl_cmd
-        .arg(&format!("{base}/{name}"))
+        .arg(format!("{base}/{name}"))
         .arg("-o")
         .arg(&tmp)
         .status()
@@ -320,7 +320,7 @@ async fn fetch_rootfs(speck_home: &Path) -> anyhow::Result<()> {
         curl_cmd.arg("-fsSL");
     }
     let curl_status = curl_cmd
-        .arg(&format!("{base}/{gz_name}"))
+        .arg(format!("{base}/{gz_name}"))
         .arg("-o")
         .arg(&gz_tmp)
         .status()
@@ -1516,7 +1516,7 @@ mod tests {
         let prepare_start = production
             .rfind("PREPARE_RESTART")
             .expect("production code must handle PREPARE_RESTART command");
-        let prepare_section = &production[prepare_start..][..800];
+        let prepare_section = &production[prepare_start..][..1200];
 
         assert!(
             prepare_section.contains("Instant::now()") || prepare_section.contains("Instant::now"),

@@ -76,7 +76,7 @@ fn make_nxdomain_response(query: &[u8]) -> Vec<u8> {
 #[test]
 fn nxdomain_path_returns_rcode_3() {
     let query = make_query("nxdomain-test.example");
-    let nx_resp = make_nxdomain_response(&query);
+    let _nx_resp = make_nxdomain_response(&query);
 
     let mut mock = MockProxyResolver::new();
     mock.expect_resolve()

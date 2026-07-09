@@ -129,7 +129,10 @@ impl SpeckNet {
                 // Process inbound packets (data arrives on fd)
                 net.poll(timestamp);
 
-                // Handle new TCP connections from the guest and bridge data
+                // Handle new TCP connections from the guest and bridge data.
+                // poll_pending must run before handle_new_connections so completed
+                // async connects are promoted before we scan for new sockets.
+                reorigin.poll_pending(net.sockets_mut());
                 reorigin.handle_new_connections(net.sockets_mut());
                 reorigin.poll_bridges(net.sockets_mut());
 

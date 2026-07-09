@@ -5,11 +5,15 @@ use std::net::{Shutdown, TcpStream};
 use smoltcp::iface::{SocketHandle, SocketSet};
 use smoltcp::socket::tcp;
 use smoltcp::wire::{IpAddress, IpEndpoint};
+use tokio::sync::oneshot;
 
 use crate::mtu;
 
 pub(crate) struct ReoriginBridge {
     bridges: HashMap<SocketHandle, TcpStream>,
+    /// Async connects in flight: spawned with tokio::net::TcpStream::connect so the
+    /// poll loop is never blocked. Each entry resolves to a std TcpStream (or error).
+    pending: HashMap<SocketHandle, oneshot::Receiver<std::io::Result<TcpStream>>>,
     max_bridges: usize,
     mtu: u16,
 }
@@ -18,8 +22,45 @@ impl ReoriginBridge {
     pub fn new(mtu: u16) -> Self {
         Self {
             bridges: HashMap::new(),
+            pending: HashMap::new(),
             max_bridges: 256,
             mtu,
+        }
+    }
+
+    /// Check in-flight async connects. Promotes completed ones to `bridges`; closes
+    /// the smoltcp socket on failure.
+    pub fn poll_pending(&mut self, sockets: &mut SocketSet) {
+        let handles: Vec<SocketHandle> = self.pending.keys().copied().collect();
+        for handle in handles {
+            let rx = self.pending.get_mut(&handle).unwrap();
+            match rx.try_recv() {
+                Ok(Ok(stream)) => {
+                    self.pending.remove(&handle);
+                    // Socket may have closed while the connect was in flight.
+                    let socket = sockets.get_mut::<tcp::Socket>(handle);
+                    if socket.is_open() {
+                        self.bridges.insert(handle, stream);
+                    } else {
+                        let _ = stream.shutdown(Shutdown::Both);
+                        socket.close();
+                    }
+                }
+                Ok(Err(_)) => {
+                    self.pending.remove(&handle);
+                    let socket = sockets.get_mut::<tcp::Socket>(handle);
+                    socket.close();
+                }
+                Err(oneshot::error::TryRecvError::Empty) => {
+                    // Still connecting — check again next cycle.
+                }
+                Err(oneshot::error::TryRecvError::Closed) => {
+                    // The spawned task died unexpectedly.
+                    self.pending.remove(&handle);
+                    let socket = sockets.get_mut::<tcp::Socket>(handle);
+                    socket.close();
+                }
+            }
         }
     }
 
@@ -97,14 +138,14 @@ impl ReoriginBridge {
     }
 
     pub fn handle_new_connections(&mut self, sockets: &mut SocketSet) {
-        if self.bridges.len() >= self.max_bridges {
+        if self.bridges.len() + self.pending.len() >= self.max_bridges {
             return;
         }
 
         let new_connections: Vec<(SocketHandle, IpEndpoint)> = sockets
             .iter()
             .filter_map(|(handle, socket)| {
-                if self.bridges.contains_key(&handle) {
+                if self.bridges.contains_key(&handle) || self.pending.contains_key(&handle) {
                     return None;
                 }
                 match socket {
@@ -137,16 +178,21 @@ impl ReoriginBridge {
 
         for (handle, endpoint) in new_connections {
             let addr = format!("{}:{}", endpoint.addr, endpoint.port);
-            match TcpStream::connect(&addr) {
-                Ok(stream) => {
-                    let _ = stream.set_nonblocking(true);
-                    self.bridges.insert(handle, stream);
+            let (tx, rx) = oneshot::channel();
+
+            tokio::spawn(async move {
+                let result = async {
+                    let stream = tokio::net::TcpStream::connect(&addr).await?;
+                    let std_stream = stream.into_std()?;
+                    std_stream.set_nonblocking(true)?;
+                    Ok(std_stream)
                 }
-                Err(_) => {
-                    let s = sockets.get_mut::<tcp::Socket>(handle);
-                    s.close();
-                }
-            }
+                .await;
+                // Ignore send error — receiver dropped means the socket already closed.
+                let _ = tx.send(result);
+            });
+
+            self.pending.insert(handle, rx);
         }
     }
 

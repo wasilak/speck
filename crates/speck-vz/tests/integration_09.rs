@@ -76,7 +76,7 @@ fn console_log_exists_with_kernel_messages_after_boot() {
     let content = std::fs::read_to_string(&console_log).expect("failed to read console.log");
 
     assert!(
-        content.len() > 0,
+        !content.is_empty(),
         "console.log must not be empty after a successful boot"
     );
     assert!(
@@ -166,7 +166,7 @@ fn console_log_exists_on_failed_boot() {
 
     let content = std::fs::read_to_string(&console_log).expect("read console.log");
     assert!(
-        content.len() > 0,
+        !content.is_empty(),
         "console.log must contain kernel output even on a failed boot"
     );
 

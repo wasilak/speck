@@ -23,10 +23,10 @@ pub async fn run_status(speck_home: &Path) -> anyhow::Result<()> {
     println!("Speck daemon: {}", theme::format_status(status));
 
     let pid_path = speck_home.join("run/speck.pid");
-    if let Ok(pid_str) = std::fs::read_to_string(&pid_path) {
-        if let Ok(pid) = pid_str.trim().parse::<u32>() {
-            println!("  PID: {pid}");
-        }
+    if let Ok(pid_str) = std::fs::read_to_string(&pid_path)
+        && let Ok(pid) = pid_str.trim().parse::<u32>()
+    {
+        println!("  PID: {pid}");
     }
 
     let resources = crate::commands::up::read_vm_resource_snapshot(speck_home)?;

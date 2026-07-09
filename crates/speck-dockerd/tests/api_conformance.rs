@@ -539,7 +539,7 @@ async fn test_inspect_empty_string_host_ip_defaults() {
             .await
             .expect("start container");
 
-        let wait = docker
+        let _wait = docker
             .wait_container(&container_id, None::<WaitContainerOptions>)
             .try_collect::<Vec<_>>()
             .await

@@ -8,6 +8,8 @@ use hyper_util::server::conn::auto::Builder;
 use tokio::net::UnixListener;
 use tower::ServiceExt;
 
+use crate::middleware::strip_api_version::{rewrite_uri, strip_version_prefix};
+
 pub async fn serve(
     router: Router,
     sock_path: PathBuf,
@@ -37,7 +39,15 @@ pub async fn serve(
                     Ok((stream, _addr)) => {
                         let router = router.clone();
                         tokio::spawn(async move {
-                            let service = service_fn(move |request| {
+                            let service = service_fn(move |mut request| {
+                                // Strip /v{N}/ prefix before axum routing so
+                                // versioned Docker CLI requests match unversioned routes.
+                                let path = request.uri().path().to_owned();
+                                if let Some(stripped) = strip_version_prefix(&path)
+                                    && let Some(rewritten) = rewrite_uri(request.uri(), stripped)
+                                {
+                                    *request.uri_mut() = rewritten;
+                                }
                                 let router = router.clone();
                                 async move { router.oneshot(request).await }
                             });
