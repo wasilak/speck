@@ -12,12 +12,84 @@ use std::ffi::CString;
 use std::io;
 use std::sync::{Arc, Mutex};
 
+/// Maximum bytes retained per log stream inside the guest.
+///
+/// When a stream exceeds this ceiling the oldest bytes are dropped and
+/// `base_offset` advances, so absolute offset-based reads from the host
+/// stay correct: the host asks for offset X and gets `bytes[X - base_offset..]`,
+/// or the full retained buffer if X has been trimmed away.
+const MAX_LOG_STREAM_BYTES: usize = 32 * 1024 * 1024; // 32 MiB
+
 type LogBuffers = Arc<Mutex<HashMap<String, ContainerLogBuffers>>>;
 
 #[derive(Clone)]
 struct ContainerLogBuffers {
-    stdout: Arc<Mutex<Vec<u8>>>,
-    stderr: Arc<Mutex<Vec<u8>>>,
+    stdout: Arc<Mutex<RetainedLogBuffer>>,
+    stderr: Arc<Mutex<RetainedLogBuffer>>,
+}
+
+/// A bounded byte buffer that tracks the absolute offset of its first byte.
+///
+/// When `bytes` exceeds `max_bytes` the oldest bytes are dropped and
+/// `base_offset` is advanced accordingly.  Reads with an absolute offset
+/// older than the current `base_offset` return the full current buffer;
+/// reads with a future offset return empty.
+#[derive(Clone)]
+struct RetainedLogBuffer {
+    /// Absolute offset of `bytes[0]` — the byte position in the
+    /// cumulative stream where this buffer starts.
+    base_offset: usize,
+    /// Retained bytes (at most `max_bytes`).
+    bytes: Vec<u8>,
+    /// Hard ceiling after which trimming kicks in.
+    max_bytes: usize,
+}
+
+impl RetainedLogBuffer {
+    fn new(max_bytes: usize) -> Self {
+        Self {
+            base_offset: 0,
+            bytes: Vec::new(),
+            max_bytes,
+        }
+    }
+
+    /// Append new data and trim if above the ceiling.
+    fn append(&mut self, data: &[u8]) {
+        if data.is_empty() {
+            return;
+        }
+        self.bytes.extend_from_slice(data);
+        self.trim();
+    }
+
+    /// Return bytes starting at `absolute_offset`.
+    ///
+    /// If the requested offset falls before `base_offset`, the entire
+    /// retained buffer is returned (that's the best we can do).  If the
+    /// requested offset is past the end of the retained bytes, an empty
+    /// slice is returned.
+    fn read_from(&self, absolute_offset: usize) -> &[u8] {
+        if absolute_offset < self.base_offset {
+            // Requested data has been trimmed — return whatever we have.
+            return &self.bytes;
+        }
+        let local_offset = absolute_offset - self.base_offset;
+        if local_offset >= self.bytes.len() {
+            return &[];
+        }
+        &self.bytes[local_offset..]
+    }
+
+    /// Drop oldest bytes until `self.bytes.len() <= self.max_bytes`.
+    fn trim(&mut self) {
+        if self.bytes.len() <= self.max_bytes {
+            return;
+        }
+        let excess = self.bytes.len() - self.max_bytes;
+        self.bytes.drain(..excess);
+        self.base_offset += excess;
+    }
 }
 
 /// Run the log relay on `vsock_port` until the VM shuts down.
@@ -162,8 +234,8 @@ fn create_fifos(conn_fd: libc::c_int, buffers: &LogBuffers, container_id: &str) 
     mkfifo_if_needed(&stderr_path)?;
 
     let container_buffers = ContainerLogBuffers {
-        stdout: Arc::new(Mutex::new(Vec::new())),
-        stderr: Arc::new(Mutex::new(Vec::new())),
+        stdout: Arc::new(Mutex::new(RetainedLogBuffer::new(MAX_LOG_STREAM_BYTES))),
+        stderr: Arc::new(Mutex::new(RetainedLogBuffer::new(MAX_LOG_STREAM_BYTES))),
     };
     let stdout_buffer = Arc::clone(&container_buffers.stdout);
     let stderr_buffer = Arc::clone(&container_buffers.stderr);
@@ -191,7 +263,7 @@ fn mkfifo_if_needed(path: &str) -> io::Result<()> {
     Ok(())
 }
 
-fn reader_thread(fifo_path: String, buffer: Arc<Mutex<Vec<u8>>>) {
+fn reader_thread(fifo_path: String, buffer: Arc<Mutex<RetainedLogBuffer>>) {
     let path_cstr = match CString::new(fifo_path) {
         Ok(path) => path,
         Err(_) => return,
@@ -220,7 +292,7 @@ fn reader_thread(fifo_path: String, buffer: Arc<Mutex<Vec<u8>>>) {
         buffer
             .lock()
             .expect("log buffer mutex poisoned")
-            .extend_from_slice(&read_buf[..n as usize]);
+            .append(&read_buf[..n as usize]);
     }
 
     unsafe { libc::close(fd) };
@@ -249,7 +321,7 @@ fn read_stream(
     container_id: &str,
     offset: usize,
 ) -> io::Result<()> {
-    let stream_buffer = {
+    let buffer_arc = {
         let guard = buffers.lock().expect("log buffers mutex poisoned");
         let Some(container_buffers) = guard.get(container_id) else {
             return write_length_prefixed(conn_fd, &[]);
@@ -266,11 +338,12 @@ fn read_stream(
         }
     };
 
-    let bytes = stream_buffer
-        .lock()
-        .expect("log buffer mutex poisoned")
-        .clone();
-    write_length_prefixed(conn_fd, &bytes[offset.min(bytes.len())..])
+    let guard = buffer_arc.lock().expect("log buffer mutex poisoned");
+    let slice = guard.read_from(offset);
+    // Clone the slice so we drop the lock before writing to the socket.
+    let bytes = slice.to_vec();
+    drop(guard);
+    write_length_prefixed(conn_fd, &bytes)
 }
 
 fn write_length_prefixed(conn_fd: libc::c_int, bytes: &[u8]) -> io::Result<()> {
@@ -318,4 +391,66 @@ fn write_all_fd(fd: libc::c_int, mut buf: &[u8]) -> io::Result<()> {
         buf = &buf[n as usize..];
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_retained_buffer_appends_and_trim() {
+        let mut buf = RetainedLogBuffer::new(16);
+        assert_eq!(buf.base_offset, 0);
+        assert!(buf.bytes.is_empty());
+
+        buf.append(b"hello ");
+        assert_eq!(buf.read_from(0), b"hello ");
+        assert_eq!(buf.base_offset, 0);
+
+        buf.append(b"world");
+        assert_eq!(buf.read_from(0), b"hello world");
+    }
+
+    #[test]
+    fn test_retained_buffer_trim_drops_oldest() {
+        let mut buf = RetainedLogBuffer::new(10);
+        buf.append(b"0123456789ABCDEF");
+        // 16 bytes written, max is 10.
+        assert_eq!(buf.bytes.len(), 10, "should be trimmed to max_bytes");
+        assert_eq!(buf.base_offset, 6, "excess 6 bytes trimmed");
+        assert_eq!(buf.read_from(6), b"6789ABCDEF", "read from new base");
+    }
+
+    #[test]
+    fn test_retained_buffer_read_before_base_returns_all() {
+        let mut buf = RetainedLogBuffer::new(5);
+        buf.append(b"abcdefghij");
+        assert_eq!(buf.base_offset, 5, "5 bytes trimmed");
+        // Reading from offset 0 returns whatever we have (best effort).
+        assert_eq!(buf.read_from(0), b"fghij");
+    }
+
+    #[test]
+    fn test_retained_buffer_read_past_end_returns_empty() {
+        let mut buf = RetainedLogBuffer::new(100);
+        buf.append(b"hello");
+        assert!(buf.read_from(100).is_empty());
+    }
+
+    #[test]
+    fn test_retained_buffer_offset_semantics() {
+        let mut buf = RetainedLogBuffer::new(20);
+        // Append chunks that cross the boundary.
+        buf.append(b"AAAA" );
+        buf.append(b"BBBB" );
+        buf.append(b"CCCC" );
+        buf.append(b"DDDD" );
+        buf.append(b"EEEE" );
+        buf.append(b"FFFF" );
+        // 24 bytes total, max is 20, so 4 trimmed.
+        assert_eq!(buf.base_offset, 4);
+        assert_eq!(buf.read_from(4), b"BBBBCCCCDDDDEEEEFFFF");
+        assert_eq!(buf.read_from(8), b"CCCCDDDDEEEEFFFF");
+        assert_eq!(buf.read_from(24), b"");
+    }
 }

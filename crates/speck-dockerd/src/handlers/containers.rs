@@ -662,7 +662,7 @@ fn container_inspect_json(
                     .into_iter()
                     .map(|binding| {
                         json!({
-                            "HostIp": binding.host_ip.unwrap_or_else(|| "0.0.0.0".to_string()),
+                            "HostIp": binding.host_ip.filter(|ip| !ip.is_empty()).unwrap_or_else(|| "0.0.0.0".to_string()),
                             "HostPort": binding.host_port.unwrap_or_default(),
                         })
                     })
@@ -872,6 +872,35 @@ mod tests {
             "80/tcp".into(),
             vec![PortBindingBody {
                 host_ip: None,
+                host_port: Some("18081".into()),
+            }],
+        );
+
+        let json = container_inspect_json(container, stopped_task("cid"), Some(port_bindings));
+
+        assert_eq!(
+            json["NetworkSettings"]["Ports"]["80/tcp"][0]["HostIp"],
+            Value::String("0.0.0.0".into())
+        );
+        assert_eq!(
+            json["NetworkSettings"]["Ports"]["80/tcp"][0]["HostPort"],
+            Value::String("18081".into())
+        );
+    }
+
+    #[test]
+    fn test_inspect_ports_defaults_empty_host_ip() {
+        let container = ContainerInfo {
+            id: "cid".into(),
+            image: "alpine".into(),
+            labels: HashMap::new(),
+            created_at_seconds: 0,
+        };
+        let mut port_bindings = HashMap::new();
+        port_bindings.insert(
+            "80/tcp".into(),
+            vec![PortBindingBody {
+                host_ip: Some("".into()),
                 host_port: Some("18081".into()),
             }],
         );

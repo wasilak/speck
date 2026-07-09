@@ -177,12 +177,13 @@ pub async fn container_logs(
 
         let guest = Arc::clone(&state.guest);
         let id_clone = id.clone();
-        let relay_logs =
-            tokio::task::spawn_blocking(move || log_relay::read_logs(&guest, port, &id_clone))
-                .await
-                .map_err(|err| {
-                    DockerApiError::Internal(format!("log relay read task failed: {err}"))
-                })?;
+        let relay_logs = tokio::task::spawn_blocking(move || {
+            log_relay::read_logs_windowed(&guest, port, &id_clone)
+        })
+        .await
+        .map_err(|err| {
+            DockerApiError::Internal(format!("log relay read task failed: {err}"))
+        })?;
         let relay_logs = match relay_logs {
             Ok(logs) => logs,
             Err(e) => {
