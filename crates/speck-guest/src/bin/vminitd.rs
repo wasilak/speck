@@ -1211,7 +1211,7 @@ mod tests {
             "Provisioning script must provision all exact required guest tool paths"
         );
         assert!(
-            provision_source.contains("kata-alpine-3.22.initrd.pre-resize-tools.bak"),
+            provision_source.contains(".pre-resize-tools.bak"),
             "Provisioning must preserve a pre-resize-tools initrd backup"
         );
     }

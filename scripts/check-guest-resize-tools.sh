@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SPECK_HOME="${SPECK_HOME:-$HOME/.local/share/speck}"
-INITRD="${SPECK_HOME}/initrd/kata-alpine-3.22.initrd"
+SPECK_HOME="${SPECK_HOME:-$HOME/.speck}"
+INITRD="${SPECK_HOME}/initrd/initrd.cpio.gz"
 REQUIRED_TOOLS=("/sbin/resize2fs" "/sbin/mke2fs" "/sbin/blkid")
 
 echo "==> Speck: checking guest resize tools in ${INITRD}"
