@@ -33,7 +33,7 @@ Full details: `.planning/milestones/v1.1-ROADMAP.md`
 - [x] **Phase 15: Stability Foundation** — Unit-test seams for DNS proxy and vminitd; console log, version check, unsafe sweep, secret wrapping (completed 2026-07-07)
 - [x] **Phase 16: Daemon Polish** — Reliable `spk down` via PID fallback; first-class `spk restart`; port and exec verified end-to-end (completed 2026-07-08)
 - [x] **Phase 17: testcontainers Conformance** — SpeckDockerd wired as intercepting layer; SQLite state persistence; Docker API conformance tests pass; gap closure closed (completed 2026-07-08)
-- [ ] **Phase 17.1: Close testcontainers conformance gaps (INSERTED)** — follow-stream log relay, HostIp default, network existence validation
+- [ ] **Phase 17.1: Close testcontainers conformance gaps (INSERTED)** — follow-stream log relay, HostIp default, network existence validation (2/4 plans executed; 2 gap-closure plans pending after verification gaps — see 17.1-VERIFICATION.md)
 - [x] **Phase 18: Developer ID Distribution** — Developer ID signing + notarytool + `.pkg` + Homebrew Cask (completed 2026-07-08)
 - [x] **Phase 18.1: Close gap: daemon reliability (INSERTED)** — Control socket recovery, VmState lease timeout, control.sock cleanup (completed 2026-07-08)
 
@@ -129,15 +129,23 @@ Plans:
 **Goal:** `logs --follow` yields a live streaming response that delivers bytes appended after the client subscribed; omitted `HostIp` in port bindings defaults to `"0.0.0.0"` instead of `null`; all remaining conformance integration tests pass and verify the three gaps.
 **Requirements**: CONF-05, CONF-06, CONF-03, CONF-07
 **Depends on:** Phase 17
-**Plans:** 2 plans
+**Plans:** 3/4 plans executed
 
 **Wave 1**
 
-- [ ] 17.1-01-PLAN.md — Follow-stream live log relay + HostIp default (cherry-pick from orphaned branch + working tree)
+- [x] 17.1-01-PLAN.md — Follow-stream live log relay + HostIp default (cherry-pick from orphaned branch + working tree)
 
 **Wave 2** *(blocked on Wave 1 — same file conflict on containers.rs)*
 
-- [ ] 17.1-02-PLAN.md — Conformance integration tests + SPECK_SOCK fix + full suite verification
+- [x] 17.1-02-PLAN.md — Conformance integration tests + SPECK_SOCK fix + daemon/socket smoke verification
+
+**Wave 3** *(17.1-03 blocked on 17.1-01 and 17.1-02 — it reuses the committed conformance tests/socket alignment and restores the guest/runtime path before any final suite claims)*
+
+- [x] 17.1-03-PLAN.md — Restore guest containerd 9001 path, BusyBox blank-disk detection, and current-initrd rebuild/install workflow
+
+**Wave 4** *(blocked on 17.1-03 — closes empty-string HostIp + bounded/chunked log-read defects and owns the only rebuilt-initrd full-suite gate)*
+
+- [ ] 17.1-04-PLAN.md — Fix empty-string HostIp + bounded/chunked log relay behavior and rerun full conformance suite
 
 ### Phase 18: Ad-hoc Development Distribution
 
@@ -183,7 +191,7 @@ Plans:
 | 15. Stability Foundation | v1.2 | 8/8 | Complete   | 2026-07-07 |
 | 16. Daemon Polish | v1.2 | 5/5 | Complete | 2026-07-08 |
 | 17. testcontainers Conformance | v1.2 | 10/10 | Complete | 2026-07-08 |
-| 17.1 Close testcontainers gaps | v1.2 | 0/2 | Not started | — |
+| 17.1 Close testcontainers gaps | v1.2 | 3/4 | In Progress|  |
 | 18. Ad-hoc Development Distribution | v1.2 | 3/3 | Complete    | 2026-07-08 |
 | 18.1 Close Gap: Daemon Reliability | v1.2 | 1/1 | Complete   | 2026-07-08 |
 

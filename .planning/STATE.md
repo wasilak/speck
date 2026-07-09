@@ -2,35 +2,35 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Hardened Runtime
-status: completed
-last_updated: "2026-07-08T16:47:44.996Z"
-last_activity: 2026-07-08 -- Phase 18.1 marked complete
+status: executing
+last_updated: "2026-07-09T10:01:16.676Z"
+last_activity: 2026-07-09 -- Phase 17.1 Plan 03 completed
 progress:
   total_phases: 6
   completed_phases: 5
-  total_plans: 27
-  completed_plans: 27
+  total_plans: 31
+  completed_plans: 30
   percent: 83
 ---
 
 # State — Milestone v1.2 Hardened Runtime
 
-**Status:** Complete
+**Status:** Ready to execute
 
 ## Project Reference
 
 See: .planning/PROJECT.md (updated 2026-07-06)
 
 **Core value:** A container runtime on Apple Silicon that never loses the network — micro-VMs inherit the host's routing/DNS live, surviving corporate VPNs and Cloudflare WARP where Docker Desktop fails.
-**Current focus:** Phase 18.1 — close-gap-daemon-stop-restart-control-socket-reliability
+**Current focus:** Phase 17.1 — close-testcontainers-conformance-gaps-follow-stream-hostip-d
 
 ## Current Position
 
-Phase: 17.1 — INSERTED (planned)
-Plan: — (not yet planned)
-Next: /gsd-discuss-phase 17.1
-Status: Phase 17.1 inserted for gap closure
-Last activity: 2026-07-08 -- Phase 17.1 inserted after Phase 17
+Phase: 17.1 (close-testcontainers-conformance-gaps-follow-stream-hostip-d) — EXECUTING
+Plan: 3 of 4
+Plan: 03 — Guest/runtime transport blocker removed; ready for 17.1-04 full rerun
+Status: Ready to execute
+Last activity: 2026-07-09 -- Phase 17.1 Plan 03 completed
 
 ```
 Progress: [████████████████████████████████████████] 100% (5/5 phases)
@@ -61,6 +61,8 @@ Progress: [███████████████████████
 | Phase 16-daemon-polish P05 | 8min | 3 tasks | 4 files |
 | Phase 18-developer-id-distribution P03 | 3min | 2 tasks | 3 files |
 | Phase 18.1-close-gap-daemon-stop-restart-control-socket-reliability P01 | 14min | 3 tasks | 1 files |
+| Phase 17.1-close-testcontainers-conformance-gaps-follow-stream-hostip-d P01 | 1min | 3 tasks | 4 files |
+| Phase 17.1-close-testcontainers-conformance-gaps-follow-stream-hostip-d P03 | 94min | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -70,6 +72,10 @@ Progress: [███████████████████████
 - Phase 17.1 inserted after Phase 17: Close testcontainers conformance gaps (follow-stream, HostIp default, network validation) (URGENT)
 
 ### Key Decisions (v1.2)
+
+- [Phase 17.1-01]: Skipped cherry-pick of orphaned commit 1b8416ba — its relay_created guard was already applied as b43fadcf on main ancestry, and its networks.rs deletions would undo network 404 validation (CONF-03)
+- [Phase 17.1-03]: Use the dockerd-managed containerd socket path under `/rootfs/run/docker/containerd/containerd.sock` when the standalone `/rootfs/run/containerd/containerd.sock` path is absent.
+- [Phase 17.1-03]: Keep resize-tool provisioning working without Docker Desktop by falling back to `skopeo` + Alpine APK extraction.
 
 - CONSOLE-01 already implemented in `vm_thread.rs` — TEST-04 is verification + ticket closure, not new work
 - STATE-01/02 scope: moby already persists container/image state via BoltDB; SpeckDockerd only needs to persist its own network/volume name→ID metadata (JSON files, not SQLite)
@@ -94,7 +100,7 @@ Progress: [███████████████████████
 
 ## Session Continuity
 
-**To resume:** Milestone v1.2 is complete. Start the next milestone or plan the future Developer ID/notarization lane when Apple Developer Program credentials are available.
+**To resume:** Phase 17.1 Plan 03 complete. Ready for Phase 17.1 Plan 04 (empty-string HostIp + bounded/chunked log relay fixes, then full conformance rerun).
 
 ## Decisions
 
