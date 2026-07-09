@@ -189,9 +189,9 @@ fn handle_command(conn_fd: libc::c_int, buffers: &LogBuffers, command: &str) -> 
         let stream = parts.next().unwrap_or_default();
         let container_id = parts.next().unwrap_or_default();
         let offset = match parts.next() {
-            Some(raw) => raw.parse::<usize>().map_err(|_| {
-                io::Error::new(io::ErrorKind::InvalidInput, "invalid read offset")
-            })?,
+            Some(raw) => raw
+                .parse::<usize>()
+                .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid read offset"))?,
             None => 0,
         };
         validate_container_id(container_id)?;
@@ -441,12 +441,12 @@ mod tests {
     fn test_retained_buffer_offset_semantics() {
         let mut buf = RetainedLogBuffer::new(20);
         // Append chunks that cross the boundary.
-        buf.append(b"AAAA" );
-        buf.append(b"BBBB" );
-        buf.append(b"CCCC" );
-        buf.append(b"DDDD" );
-        buf.append(b"EEEE" );
-        buf.append(b"FFFF" );
+        buf.append(b"AAAA");
+        buf.append(b"BBBB");
+        buf.append(b"CCCC");
+        buf.append(b"DDDD");
+        buf.append(b"EEEE");
+        buf.append(b"FFFF");
         // 24 bytes total, max is 20, so 4 trimmed.
         assert_eq!(buf.base_offset, 4);
         assert_eq!(buf.read_from(4), b"BBBBCCCCDDDDEEEEFFFF");

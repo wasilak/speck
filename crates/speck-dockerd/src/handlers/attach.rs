@@ -96,8 +96,7 @@ pub async fn container_logs(
             let stdout_selected = query.stdout || !query.stderr;
             let stderr_selected = query.stderr;
             let timestamps = query.timestamps;
-            let (tx, rx) =
-                tokio::sync::mpsc::channel::<std::result::Result<Bytes, Infallible>>(32);
+            let (tx, rx) = tokio::sync::mpsc::channel::<std::result::Result<Bytes, Infallible>>(32);
             tokio::spawn(async move {
                 let mut stdout_offset = 0usize;
                 let mut stderr_offset = 0usize;
@@ -181,9 +180,7 @@ pub async fn container_logs(
             log_relay::read_logs_windowed(&guest, port, &id_clone)
         })
         .await
-        .map_err(|err| {
-            DockerApiError::Internal(format!("log relay read task failed: {err}"))
-        })?;
+        .map_err(|err| DockerApiError::Internal(format!("log relay read task failed: {err}")))?;
         let relay_logs = match relay_logs {
             Ok(logs) => logs,
             Err(e) => {

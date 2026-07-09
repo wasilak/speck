@@ -764,15 +764,20 @@ pub async fn run_up(
                                     *v = VmState::Restarting;
                                     _restart_start = Instant::now();
                                 }
-                                tracing::info!("VmState set to Restarting — 503 middleware active, 60s lease");
+                                tracing::info!(
+                                    "VmState set to Restarting — 503 middleware active, 60s lease"
+                                );
                                 let _ = stream.write_all(b"OK\n").await;
                                 let state_clone = state.clone();
                                 tokio::spawn(async move {
                                     tokio::time::sleep(Duration::from_secs(60)).await;
-                                    let mut v = state_clone.write().expect("VmState RwLock poisoned");
+                                    let mut v =
+                                        state_clone.write().expect("VmState RwLock poisoned");
                                     if *v == VmState::Restarting {
                                         *v = VmState::Running;
-                                        tracing::warn!("Restarting lease expired (60s) — reset to Running");
+                                        tracing::warn!(
+                                            "Restarting lease expired (60s) — reset to Running"
+                                        );
                                     }
                                 });
                             }
@@ -1425,17 +1430,20 @@ mod tests {
         let production = &source[..tests_start];
 
         // Find the accept loop: look for listener.accept() in production code
-        let accept_start = production.rfind("listener.accept()")
+        let accept_start = production
+            .rfind("listener.accept()")
             .expect("production code must have a control socket accept loop");
         let accept_section = &production[accept_start..];
 
         // The accept loop must NOT break on error
         // Find the accept error handler by looking for the unique "accept error" message
-        let accept_err_msg = accept_section.find("accept error")
+        let accept_err_msg = accept_section
+            .find("accept error")
             .expect("accept loop must have an error handler with accept error message");
         // Walk back from the message to find the Err(e) line
         let err_stanza = &accept_section[..accept_err_msg];
-        let err_start = err_stanza.rfind("Err(e)")
+        let err_start = err_stanza
+            .rfind("Err(e)")
             .expect("accept loop must have an Err(e) handler");
         let err_handler = &accept_section[err_start..][..200];
 
@@ -1459,7 +1467,8 @@ mod tests {
         let tests_start = source.find("#[cfg(test)]").unwrap_or(source.len());
         let production = &source[..tests_start];
 
-        let read_start = production.rfind("stream.read(&mut buf)")
+        let read_start = production
+            .rfind("stream.read(&mut buf)")
             .expect("production code must read from control socket");
         let read_section = &production[read_start..][..15];
 
@@ -1479,7 +1488,8 @@ mod tests {
         let tests_start = source.find("#[cfg(test)]").unwrap_or(source.len());
         let production = &source[..tests_start];
 
-        let shutdown_start = production.rfind("async fn shutdown_gracefully")
+        let shutdown_start = production
+            .rfind("async fn shutdown_gracefully")
             .expect("production code must define shutdown_gracefully");
         let shutdown_section = &production[shutdown_start..];
 
@@ -1503,13 +1513,13 @@ mod tests {
         let tests_start = source.find("#[cfg(test)]").unwrap_or(source.len());
         let production = &source[..tests_start];
 
-        let prepare_start = production.rfind("PREPARE_RESTART")
+        let prepare_start = production
+            .rfind("PREPARE_RESTART")
             .expect("production code must handle PREPARE_RESTART command");
         let prepare_section = &production[prepare_start..][..800];
 
         assert!(
-            prepare_section.contains("Instant::now()")
-            || prepare_section.contains("Instant::now"),
+            prepare_section.contains("Instant::now()") || prepare_section.contains("Instant::now"),
             "PREPARE_RESTART handler must record lease start time with Instant::now"
         );
         assert!(
@@ -1517,7 +1527,8 @@ mod tests {
             "PREPARE_RESTART handler must spawn a background lease timeout task"
         );
         assert!(
-            prepare_section.contains("Duration::from_secs(60)") || prepare_section.contains("Duration::from_secs"),
+            prepare_section.contains("Duration::from_secs(60)")
+                || prepare_section.contains("Duration::from_secs"),
             "lease timeout must be Duration::from_secs(60)"
         );
         assert!(

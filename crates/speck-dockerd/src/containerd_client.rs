@@ -1,15 +1,13 @@
 use std::collections::HashMap;
 use std::path::Path;
 
+use containerd_client::services::v1::snapshots::{MountsRequest, PrepareSnapshotRequest};
 use containerd_client::services::v1::{
-    container::Runtime as ContainerRuntime, Container, CreateContainerRequest,
-    CreateTaskRequest, DeleteContainerRequest, DeleteImageRequest, DeleteTaskRequest,
-    ExecProcessRequest, GetContainerRequest, GetImageRequest, GetRequest, KillRequest,
-    ListContainersRequest, ListImagesRequest, ListTasksRequest, StartRequest, TransferRequest,
-    WaitRequest,
-};
-use containerd_client::services::v1::snapshots::{
-    MountsRequest, PrepareSnapshotRequest,
+    Container, CreateContainerRequest, CreateTaskRequest, DeleteContainerRequest,
+    DeleteImageRequest, DeleteTaskRequest, ExecProcessRequest, GetContainerRequest,
+    GetImageRequest, GetRequest, KillRequest, ListContainersRequest, ListImagesRequest,
+    ListTasksRequest, StartRequest, TransferRequest, WaitRequest,
+    container::Runtime as ContainerRuntime,
 };
 use containerd_client::tonic;
 use containerd_client::types;
@@ -211,11 +209,7 @@ impl ContainerdClient {
 
     /// Prepare a writable snapshot for a container, using the image's top
     /// committed snapshot as the parent.
-    async fn container_prepare_snapshot(
-        &self,
-        container_id: &str,
-        image_ref: &str,
-    ) -> Result<()> {
+    async fn container_prepare_snapshot(&self, container_id: &str, image_ref: &str) -> Result<()> {
         self.image_set_snapshot_key(image_ref).await?;
         let image = self.image_get(image_ref).await?;
 
@@ -287,14 +281,27 @@ impl ContainerdClient {
 
         let mut env = spec.env.clone();
         if !env.iter().any(|e| e.starts_with("PATH=")) {
-            env.insert(0, "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin".into());
+            env.insert(
+                0,
+                "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin".into(),
+            );
         }
 
         let caps = [
-            "CAP_CHOWN", "CAP_DAC_OVERRIDE", "CAP_FSETID", "CAP_FOWNER",
-            "CAP_MKNOD", "CAP_NET_RAW", "CAP_SETGID", "CAP_SETUID",
-            "CAP_SETFCAP", "CAP_SETPCAP", "CAP_NET_BIND_SERVICE",
-            "CAP_SYS_CHROOT", "CAP_KILL", "CAP_AUDIT_WRITE",
+            "CAP_CHOWN",
+            "CAP_DAC_OVERRIDE",
+            "CAP_FSETID",
+            "CAP_FOWNER",
+            "CAP_MKNOD",
+            "CAP_NET_RAW",
+            "CAP_SETGID",
+            "CAP_SETUID",
+            "CAP_SETFCAP",
+            "CAP_SETPCAP",
+            "CAP_NET_BIND_SERVICE",
+            "CAP_SYS_CHROOT",
+            "CAP_KILL",
+            "CAP_AUDIT_WRITE",
         ];
 
         let spec_json = serde_json::json!({
@@ -390,7 +397,8 @@ impl ContainerdClient {
                 DockerApiError::Internal("containerd returned empty create response".into())
             })?;
 
-        self.container_prepare_snapshot(&container_id, &image_ref).await?;
+        self.container_prepare_snapshot(&container_id, &image_ref)
+            .await?;
 
         Ok(container_id)
     }
@@ -516,7 +524,9 @@ impl ContainerdClient {
             .transfer(with_namespace(request))
             .await
             .map_err(|status| {
-                DockerApiError::Internal(format!("image pull via transfer service failed: {status}"))
+                DockerApiError::Internal(format!(
+                    "image pull via transfer service failed: {status}"
+                ))
             })?;
 
         tracing::info!(reference = %image_ref, "image pulled successfully");
@@ -529,13 +539,13 @@ impl ContainerdClient {
     /// The transfer service may not always propagate unpack labels to the
     /// image metadata, so we set it explicitly by listing the committed
     /// snapshots owned by this image.
-    async fn image_set_snapshot_key(
-        &self,
-        image_ref: &str,
-    ) -> Result<()> {
+    async fn image_set_snapshot_key(&self, image_ref: &str) -> Result<()> {
         let image = self.image_get(image_ref).await?;
 
-        if image.labels.contains_key("containerd.io/snapshot/overlayfs.key") {
+        if image
+            .labels
+            .contains_key("containerd.io/snapshot/overlayfs.key")
+        {
             return Ok(());
         }
 
@@ -595,9 +605,11 @@ impl ContainerdClient {
 
         let mut img_client = containerd_client::Client::from(self.channel.clone()).images();
         let current = img_client
-            .get(with_namespace(containerd_client::services::v1::GetImageRequest {
-                name: image.name.clone(),
-            }))
+            .get(with_namespace(
+                containerd_client::services::v1::GetImageRequest {
+                    name: image.name.clone(),
+                },
+            ))
             .await
             .map_err(|e| DockerApiError::Internal(format!("re-fetch image: {e}")))?
             .into_inner()
@@ -607,10 +619,7 @@ impl ContainerdClient {
         img_client
             .update(with_namespace(
                 containerd_client::services::v1::UpdateImageRequest {
-                    image: Some(containerd_client::services::v1::Image {
-                        labels,
-                        ..current
-                    }),
+                    image: Some(containerd_client::services::v1::Image { labels, ..current }),
                     update_mask: Some(prost_types::FieldMask {
                         paths: vec!["labels".into()],
                     }),

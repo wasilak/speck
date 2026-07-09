@@ -178,16 +178,8 @@ mod tests {
             // Simulate the effect of MAX_RELAY_LOG_READ ceiling
             // by returning chunks capped at 10 bytes for testing.
             let max_chunk = 10;
-            let s_chunk: Vec<u8> = self.stdout[so..]
-                .iter()
-                .take(max_chunk)
-                .copied()
-                .collect();
-            let e_chunk: Vec<u8> = self.stderr[_eo..]
-                .iter()
-                .take(max_chunk)
-                .copied()
-                .collect();
+            let s_chunk: Vec<u8> = self.stdout[so..].iter().take(max_chunk).copied().collect();
+            let e_chunk: Vec<u8> = self.stderr[_eo..].iter().take(max_chunk).copied().collect();
             RelayLogs {
                 stdout: s_chunk,
                 stderr: e_chunk,
