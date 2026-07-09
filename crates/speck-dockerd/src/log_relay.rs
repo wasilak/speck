@@ -105,7 +105,7 @@ fn read_stream(
 fn connect(guest: &speck_vz::Guest, port: u32) -> io::Result<speck_vz::VzSocket> {
     guest
         .vsock_connect(port)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))
+        .map_err(|e| io::Error::other(e.to_string()))
 }
 
 fn write_all_to_socket(socket: &speck_vz::VzSocket, mut buf: &[u8]) -> io::Result<()> {

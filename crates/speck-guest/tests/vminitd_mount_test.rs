@@ -276,7 +276,7 @@ fn configure_sysctl_params_propagates_first_error() {
     mock.expect_sysctl_write()
         .withf(|name, _| name == "net.ipv4.ip_forward")
         .times(1)
-        .returning(|_, _| Err(std::io::Error::new(std::io::ErrorKind::Other, "test error")));
+        .returning(|_, _| Err(std::io::Error::other("test error")));
 
     // Second should never be called
     mock.expect_sysctl_write()

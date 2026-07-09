@@ -244,10 +244,11 @@ mod linux {
     fn parse_cmdline_guest_ip(path: &str) -> Option<String> {
         let content = std::fs::read_to_string(path).ok()?;
         for word in content.split_whitespace() {
-            if let Some(val) = word.strip_prefix("speck_guest_ip=") {
-                if !val.is_empty() {
-                    return Some(val.to_string());
-                }
+            if let Some(val) = word
+                .strip_prefix("speck_guest_ip=")
+                .filter(|v| !v.is_empty())
+            {
+                return Some(val.to_string());
             }
         }
         None
@@ -257,10 +258,11 @@ mod linux {
     fn parse_cmdline_gateway(path: &str) -> Option<String> {
         let content = std::fs::read_to_string(path).ok()?;
         for word in content.split_whitespace() {
-            if let Some(val) = word.strip_prefix("speck_gateway=") {
-                if !val.is_empty() {
-                    return Some(val.to_string());
-                }
+            if let Some(val) = word
+                .strip_prefix("speck_gateway=")
+                .filter(|v| !v.is_empty())
+            {
+                return Some(val.to_string());
             }
         }
         None
@@ -523,10 +525,11 @@ mod linux {
     fn parse_cmdline_speck_home_tag(path: &str) -> Option<String> {
         let content = std::fs::read_to_string(path).ok()?;
         for word in content.split_whitespace() {
-            if let Some(val) = word.strip_prefix("speck_home_tag=") {
-                if !val.is_empty() {
-                    return Some(val.to_string());
-                }
+            if let Some(val) = word
+                .strip_prefix("speck_home_tag=")
+                .filter(|v| !v.is_empty())
+            {
+                return Some(val.to_string());
             }
         }
         None
@@ -553,7 +556,7 @@ mod linux {
                 libc::mount(
                     tag_c.as_ptr(),
                     target_c.as_ptr(),
-                    b"virtiofs\0".as_ptr() as *const libc::c_char,
+                    c"virtiofs".as_ptr(),
                     0,
                     std::ptr::null(),
                 )
@@ -592,7 +595,7 @@ mod linux {
             libc::mount(
                 tag_c.as_ptr(),
                 target_c.as_ptr(),
-                b"virtiofs\0".as_ptr() as *const libc::c_char,
+                c"virtiofs".as_ptr(),
                 0,
                 std::ptr::null(),
             )
@@ -608,8 +611,8 @@ mod linux {
         // Create symlink docker.sock → speck.sock for Ryuk
         let ret = unsafe {
             libc::symlink(
-                b"/var/run/speck.sock\0".as_ptr() as *const libc::c_char,
-                b"/rootfs/var/run/docker.sock\0".as_ptr() as *const libc::c_char,
+                c"/var/run/speck.sock".as_ptr(),
+                c"/rootfs/var/run/docker.sock".as_ptr(),
             )
         };
         if ret < 0 {
@@ -701,7 +704,7 @@ mod linux {
                 libc::mount(
                     tag_c.as_ptr(),
                     target_c.as_ptr(),
-                    b"virtiofs\0".as_ptr() as *const libc::c_char,
+                    c"virtiofs".as_ptr(),
                     0,
                     std::ptr::null(),
                 )
@@ -728,10 +731,8 @@ mod linux {
     fn parse_ca_certs_tag(cmdline_path: &str) -> Option<String> {
         let content = std::fs::read_to_string(cmdline_path).ok()?;
         for word in content.split_whitespace() {
-            if let Some(val) = word.strip_prefix("ca_certs_tag=") {
-                if !val.is_empty() {
-                    return Some(val.to_string());
-                }
+            if let Some(val) = word.strip_prefix("ca_certs_tag=").filter(|v| !v.is_empty()) {
+                return Some(val.to_string());
             }
         }
         None
@@ -760,7 +761,7 @@ mod linux {
             libc::mount(
                 tag_c.as_ptr(),
                 target_c.as_ptr(),
-                b"virtiofs\0".as_ptr() as *const libc::c_char,
+                c"virtiofs".as_ptr(),
                 0,
                 std::ptr::null(),
             )
@@ -1157,7 +1158,7 @@ mod linux {
             // the octets directly so [172,16,0,1] lands as-is on LE aarch64.
             s_addr: u32::from_ne_bytes(gw_bytes),
         };
-        rt.rt_gateway = unsafe { std::mem::transmute(gw_sa) };
+        rt.rt_gateway = unsafe { std::mem::transmute::<libc::sockaddr_in, libc::sockaddr>(gw_sa) };
         rt.rt_dst = libc::sockaddr {
             sa_family: libc::AF_INET as u16,
             sa_data: [0; 14],
@@ -1166,7 +1167,7 @@ mod linux {
             sa_family: libc::AF_INET as u16,
             sa_data: [0; 14],
         };
-        rt.rt_flags = (libc::RTF_UP | libc::RTF_GATEWAY) as u16;
+        rt.rt_flags = libc::RTF_UP | libc::RTF_GATEWAY;
 
         let route_ret =
             unsafe { libc::ioctl(sock_fd, libc::SIOCADDRT as _, &rt as *const libc::rtentry) };
