@@ -8,6 +8,7 @@ use crate::state::AppState;
 pub fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/_ping", get(system::ping).head(system::ping))
+        .route("/auth", post(system::auth))
         .route("/version", get(system::version))
         .route("/info", get(system::info))
         .route("/events", get(events::events_stream))

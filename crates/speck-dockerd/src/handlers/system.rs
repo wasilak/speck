@@ -30,6 +30,18 @@ pub async fn version() -> impl IntoResponse {
     }))
 }
 
+/// POST /auth — docker login credential check.
+///
+/// The real credential verification happens at the registry when docker
+/// pushes or pulls. This endpoint only needs to acknowledge the request so
+/// docker stores the credentials in ~/.docker/config.json.
+pub async fn auth() -> impl IntoResponse {
+    Json(json!({
+        "Status": "Login Succeeded",
+        "IdentityToken": ""
+    }))
+}
+
 pub async fn info(State(state): State<AppState>) -> impl IntoResponse {
     let containers = match state.containerd_client().await {
         Ok(client) => client.container_list().await.unwrap_or_default(),
