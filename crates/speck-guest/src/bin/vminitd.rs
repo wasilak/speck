@@ -17,6 +17,29 @@ fn main() {
     linux::main();
 }
 
+#[cfg(test)]
+#[test]
+fn parse_cmdline_containerd_vsock_port() {
+    const SOURCE: &str = include_str!("vminitd.rs");
+
+    assert!(
+        SOURCE.contains("fn parse_cmdline_containerd_vsock_port(path: &str) -> Option<u32>"),
+        "guest PID 1 must parse containerd_vsock_port=PORT from /proc/cmdline"
+    );
+    assert!(
+        SOURCE.contains(
+            "let containerd_port = parse_cmdline_containerd_vsock_port(\"/proc/cmdline\").unwrap_or(9001);"
+        ),
+        "boot path must default the guest containerd forwarder to vsock port 9001"
+    );
+    assert!(
+        SOURCE.contains(
+            "speck_guest::sock_forwarder::serve(containerd_port, \"/rootfs/run/containerd/containerd.sock\")"
+        ),
+        "guest PID 1 must restore the dedicated containerd socket forwarder"
+    );
+}
+
 #[cfg(target_os = "linux")]
 mod linux {
 
@@ -1255,6 +1278,26 @@ mod tests {
         assert!(
             resize_failed < failed_fatal_exit,
             "failed resize2fs status must exit non-zero after diagnostic"
+        );
+    }
+
+    #[test]
+    fn busybox_empty_blkid_output_counts_as_blank_disk() {
+        assert!(
+            MOUNT_SOURCE.contains("if output.status.success() && stdout_empty && stderr_empty {"),
+            "busybox blkid blank-disk probes succeed with empty stdout/stderr and must be treated as blank"
+        );
+    }
+
+    #[test]
+    fn busybox_non_empty_blkid_output_is_not_blank_disk() {
+        assert!(
+            MOUNT_SOURCE.contains("/sbin/blkid found a signature; refusing to format"),
+            "non-empty successful blkid probes must still fail closed"
+        );
+        assert!(
+            MOUNT_SOURCE.contains("Some(2) if stdout_empty && stderr_empty => true"),
+            "util-linux exit-code 2 blank-disk detection must remain intact"
         );
     }
 }
