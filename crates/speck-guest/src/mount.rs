@@ -314,14 +314,10 @@ pub fn grow_data_filesystem_if_needed(device: &str, mountpoint: &str) -> io::Res
     tracing::info!(device, "growing data filesystem");
     match run_resize_tool(resize_tool, &[device]) {
         Ok(status) if status.success() => Ok(()),
-        Ok(status) => Err(io::Error::new(
-            io::ErrorKind::Other,
-            format!("resize2fs failed with {status}"),
-        )),
-        Err(e) => Err(io::Error::new(
-            io::ErrorKind::Other,
-            format!("data filesystem resize tool failed: {e}"),
-        )),
+        Ok(status) => Err(io::Error::other(format!("resize2fs failed with {status}"))),
+        Err(e) => Err(io::Error::other(format!(
+            "data filesystem resize tool failed: {e}"
+        ))),
     }
 }
 
