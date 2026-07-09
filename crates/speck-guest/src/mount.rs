@@ -348,13 +348,17 @@ pub fn data_disk_has_no_filesystem_signature(device: &str) -> bool {
         }
     };
 
+    let stdout_empty = output.stdout.iter().all(|b| b.is_ascii_whitespace());
+    let stderr_empty = output.stderr.iter().all(|b| b.is_ascii_whitespace());
+
+    if output.status.success() && stdout_empty && stderr_empty {
+        return true;
+    }
+
     if output.status.success() {
         tracing::warn!(device, "/sbin/blkid found a signature; refusing to format");
         return false;
     }
-
-    let stdout_empty = output.stdout.iter().all(|b| b.is_ascii_whitespace());
-    let stderr_empty = output.stderr.iter().all(|b| b.is_ascii_whitespace());
 
     match output.status.code() {
         Some(2) if stdout_empty && stderr_empty => true,

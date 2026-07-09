@@ -61,6 +61,7 @@ mod linux {
         let _port = parse_cmdline_vsock_port("/proc/cmdline").unwrap_or(1234);
         let dns_port = parse_cmdline_dns_port("/proc/cmdline");
         let ready_port = parse_cmdline_ready_vsock_port("/proc/cmdline").unwrap_or(9000);
+        let containerd_port = parse_cmdline_containerd_vsock_port("/proc/cmdline").unwrap_or(9001);
         let docker_port = parse_cmdline_docker_vsock_port("/proc/cmdline").unwrap_or(9003);
         let log_relay_port = parse_cmdline_log_relay_vsock_port("/proc/cmdline");
         let guest_ip = parse_cmdline_guest_ip("/proc/cmdline");
@@ -172,6 +173,12 @@ mod linux {
             }
         }
 
+        std::thread::spawn(move || {
+            if let Err(e) = speck_guest::sock_forwarder::serve(containerd_port, "/rootfs/run/containerd/containerd.sock") {
+                eprintln!("vminitd: containerd forwarder error: {e}");
+            }
+        });
+
         send_ready_signal(ready_port);
 
         // Forward dockerd's Unix socket over vsock port 9003.
@@ -247,6 +254,19 @@ mod linux {
                 if !val.is_empty() {
                     return Some(val.to_string());
                 }
+            }
+        }
+        None
+    }
+
+    /// Parse `containerd_vsock_port=PORT` from the kernel command line.
+    ///
+    /// The default is 9001 when the key is absent.
+    fn parse_cmdline_containerd_vsock_port(path: &str) -> Option<u32> {
+        let content = std::fs::read_to_string(path).ok()?;
+        for word in content.split_whitespace() {
+            if let Some(port_str) = word.strip_prefix("containerd_vsock_port=") {
+                return port_str.parse::<u32>().ok();
             }
         }
         None
