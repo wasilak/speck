@@ -33,10 +33,16 @@ fn parse_cmdline_containerd_vsock_port() {
         "boot path must default the guest containerd forwarder to vsock port 9001"
     );
     assert!(
-        SOURCE.contains(
-            "speck_guest::sock_forwarder::serve(containerd_port, \"/rootfs/run/containerd/containerd.sock\")"
-        ),
+        SOURCE.contains("let containerd_socket = detect_containerd_socket_path();"),
+        "guest PID 1 must select the live containerd socket path before restoring the forwarder"
+    );
+    assert!(
+        SOURCE.contains("speck_guest::sock_forwarder::serve(containerd_port, containerd_socket)"),
         "guest PID 1 must restore the dedicated containerd socket forwarder"
+    );
+    assert!(
+        SOURCE.contains("/rootfs/run/docker/containerd/containerd.sock"),
+        "dockerd-managed guests must forward the managed containerd socket path"
     );
 }
 
@@ -174,7 +180,8 @@ mod linux {
         }
 
         std::thread::spawn(move || {
-            if let Err(e) = speck_guest::sock_forwarder::serve(containerd_port, "/rootfs/run/containerd/containerd.sock") {
+            let containerd_socket = detect_containerd_socket_path();
+            if let Err(e) = speck_guest::sock_forwarder::serve(containerd_port, containerd_socket) {
                 eprintln!("vminitd: containerd forwarder error: {e}");
             }
         });
@@ -270,6 +277,28 @@ mod linux {
             }
         }
         None
+    }
+
+    fn detect_containerd_socket_path() -> &'static str {
+        const PRIMARY: &str = "/rootfs/run/containerd/containerd.sock";
+        const DOCKER_MANAGED: &str = "/rootfs/run/docker/containerd/containerd.sock";
+        const DOCKER_MANAGED_VAR_RUN: &str = "/rootfs/var/run/docker/containerd/containerd.sock";
+
+        if std::path::Path::new(PRIMARY).exists() {
+            eprintln!("vminitd: using containerd socket at {PRIMARY}");
+            PRIMARY
+        } else if std::path::Path::new(DOCKER_MANAGED).exists() {
+            eprintln!("vminitd: using containerd socket at {DOCKER_MANAGED}");
+            DOCKER_MANAGED
+        } else if std::path::Path::new(DOCKER_MANAGED_VAR_RUN).exists() {
+            eprintln!("vminitd: using containerd socket at {DOCKER_MANAGED_VAR_RUN}");
+            DOCKER_MANAGED_VAR_RUN
+        } else {
+            eprintln!(
+                "vminitd: containerd socket not present yet, forwarding to the dockerd-managed path {DOCKER_MANAGED} once it appears"
+            );
+            DOCKER_MANAGED
+        }
     }
 
     /// Parse `docker_vsock_port=PORT` from the kernel command line.
@@ -1250,6 +1279,10 @@ mod tests {
         assert!(
             boot_mount < dockerd_spawn,
             "disk mounting/growth must happen before dockerd starts"
+        );
+        assert!(
+            MOUNT_SOURCE.contains("b\"\\0\""),
+            "bind mounts must pass a NUL-terminated empty filesystem type so /proc, /sys, and /dev are visible inside the chroot"
         );
     }
 

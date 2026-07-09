@@ -68,7 +68,7 @@ pub(crate) fn bind_mount(syscalls: &dyn Syscalls, source: &str, target: &str) {
     let ret = syscalls.mount(
         src.as_bytes_with_nul(),
         tgt.as_bytes_with_nul(),
-        b"",
+        b"\0",
         MS_BIND,
     );
     if ret < 0 {

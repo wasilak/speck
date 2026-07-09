@@ -69,14 +69,33 @@ pub fn serve(vsock_port: u32, unix_path: &'static str) -> io::Result<()> {
             continue;
         }
 
-        let unix_fd = match unix_connect(unix_path) {
-            Ok(fd) => fd,
-            Err(e) => {
-                eprintln!("sock_forwarder: unix_connect({unix_path}) failed: {e}");
-                unsafe {
-                    libc::close(vsock_fd);
+        let mut last_connect_error = None;
+        let unix_fd = {
+            let mut connected = None;
+            for _ in 0..150 {
+                match unix_connect(unix_path) {
+                    Ok(fd) => {
+                        connected = Some(fd);
+                        break;
+                    }
+                    Err(e) => {
+                        last_connect_error = Some(e);
+                        std::thread::sleep(std::time::Duration::from_millis(100));
+                    }
                 }
-                continue;
+            }
+
+            match connected {
+                Some(fd) => fd,
+                None => {
+                    if let Some(e) = last_connect_error {
+                        eprintln!("sock_forwarder: unix_connect({unix_path}) failed: {e}");
+                    }
+                    unsafe {
+                        libc::close(vsock_fd);
+                    }
+                    continue;
+                }
             }
         };
 
