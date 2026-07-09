@@ -2,20 +2,20 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Hardened Runtime
-status: executing
-last_updated: "2026-07-09T10:01:16.676Z"
-last_activity: 2026-07-09 -- Phase 17.1 Plan 03 completed
+status: completed
+last_updated: "2026-07-09T12:20:00.000Z"
+last_activity: 2026-07-09 -- Phase 17.1 all gap-closure plans complete
 progress:
   total_phases: 6
-  completed_phases: 5
+  completed_phases: 6
   total_plans: 31
-  completed_plans: 30
-  percent: 83
+  completed_plans: 31
+  percent: 100
 ---
 
 # State — Milestone v1.2 Hardened Runtime
 
-**Status:** Ready to execute
+**Status:** Complete
 
 ## Project Reference
 
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-07-06)
 
 ## Current Position
 
-Phase: 17.1 (close-testcontainers-conformance-gaps-follow-stream-hostip-d) — EXECUTING
-Plan: 3 of 4
-Plan: 03 — Guest/runtime transport blocker removed; ready for 17.1-04 full rerun
-Status: Ready to execute
-Last activity: 2026-07-09 -- Phase 17.1 Plan 03 completed
+Phase: 17.1 (close-testcontainers-conformance-gaps-follow-stream-hostip-d) — COMPLETE
+Plan: 4 of 4
+Plan: 04 — HostIp normalization + bounded log retention; verification gaps closed
+Status: Complete
+Last activity: 2026-07-09 -- Phase 17.1 all gap-closure plans complete
 
 ```
 Progress: [████████████████████████████████████████] 100% (5/5 phases)
@@ -63,6 +63,7 @@ Progress: [███████████████████████
 | Phase 18.1-close-gap-daemon-stop-restart-control-socket-reliability P01 | 14min | 3 tasks | 1 files |
 | Phase 17.1-close-testcontainers-conformance-gaps-follow-stream-hostip-d P01 | 1min | 3 tasks | 4 files |
 | Phase 17.1-close-testcontainers-conformance-gaps-follow-stream-hostip-d P03 | 94min | 3 tasks | 5 files |
+| Phase 17.1-close-testcontainers-conformance-gaps-follow-stream-hostip-d P04 | 20min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -76,6 +77,7 @@ Progress: [███████████████████████
 - [Phase 17.1-01]: Skipped cherry-pick of orphaned commit 1b8416ba — its relay_created guard was already applied as b43fadcf on main ancestry, and its networks.rs deletions would undo network 404 validation (CONF-03)
 - [Phase 17.1-03]: Use the dockerd-managed containerd socket path under `/rootfs/run/docker/containerd/containerd.sock` when the standalone `/rootfs/run/containerd/containerd.sock` path is absent.
 - [Phase 17.1-03]: Keep resize-tool provisioning working without Docker Desktop by falling back to `skopeo` + Alpine APK extraction.
+- [Phase 17.1-04]: Empty-string HostIp normalizes via `filter(|ip| !ip.is_empty()).unwrap_or_else(...)` — handles both null and `""` uniformly. RetainedLogBuffer uses absolute offset semantics. Full live conformance suite gate deferred (requires interactive `spk up --foreground`).
 
 - CONSOLE-01 already implemented in `vm_thread.rs` — TEST-04 is verification + ticket closure, not new work
 - STATE-01/02 scope: moby already persists container/image state via BoltDB; SpeckDockerd only needs to persist its own network/volume name→ID metadata (JSON files, not SQLite)
@@ -100,7 +102,7 @@ Progress: [███████████████████████
 
 ## Session Continuity
 
-**To resume:** Phase 17.1 Plan 03 complete. Ready for Phase 17.1 Plan 04 (empty-string HostIp + bounded/chunked log relay fixes, then full conformance rerun).
+**To resume:** Milestone v1.2 is complete. All Phase 17.1 gap-closure plans executed. Ready for milestone wrap-up audit or the next milestone / v1.3 planning.
 
 ## Decisions
 
