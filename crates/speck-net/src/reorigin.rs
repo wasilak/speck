@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::io::{ErrorKind, Read, Write};
 use std::net::{Shutdown, TcpStream};
+use std::time::Duration;
 
 use smoltcp::iface::{SocketHandle, SocketSet};
 use smoltcp::socket::tcp;
@@ -184,6 +185,14 @@ impl ReoriginBridge {
                 let result = async {
                     let stream = tokio::net::TcpStream::connect(&addr).await?;
                     let std_stream = stream.into_std()?;
+                    // Enable TCP keepalive so WARP/NAT doesn't kill long-lived
+                    // connections (e.g. large blob downloads that take >600s).
+                    let sock = socket2::Socket::from(std_stream);
+                    let ka = socket2::TcpKeepalive::new()
+                        .with_time(Duration::from_secs(30))
+                        .with_interval(Duration::from_secs(10));
+                    let _ = sock.set_tcp_keepalive(&ka);
+                    let std_stream = std::net::TcpStream::from(sock);
                     std_stream.set_nonblocking(true)?;
                     Ok(std_stream)
                 }
