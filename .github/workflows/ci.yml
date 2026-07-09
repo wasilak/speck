@@ -46,13 +46,12 @@ jobs:
       - name: cargo fmt
         run: cargo fmt --all -- --check
 
+      # Only speck-guest compiles on Linux — all other crates either require
+      # the macOS SDK (objc2, Virtualization.framework) or have an explicit
+      # compile_error! guard (speck-core). Full workspace clippy needs a
+      # macOS runner (TODO: add macos-latest job).
       - name: cargo clippy
-        run: cargo clippy --all-targets -- -Dwarnings
-
-      # Phase 1 uses cargo check (no Apple framework linkage in stubs yet).
-      # Phase 2 upgrades to cargo build on a macOS runner per D-10.
-      - name: cargo check (aarch64 cross-compile)
-        run: cargo check --target aarch64-apple-darwin --workspace
+        run: cargo clippy -p speck-guest --all-targets --target x86_64-unknown-linux-gnu -- -Dwarnings
 
       - name: No-print lint (hard gate)
         run: |
