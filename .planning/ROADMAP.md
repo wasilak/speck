@@ -36,6 +36,7 @@ Full details: `.planning/milestones/v1.1-ROADMAP.md`
 - [x] **Phase 17.1: Close testcontainers conformance gaps (INSERTED)** — follow-stream log relay, HostIp default, network existence validation (2/4 plans executed; 2 gap-closure plans pending after verification gaps — see 17.1-VERIFICATION.md) (completed 2026-07-09)
 - [x] **Phase 18: Developer ID Distribution** — Developer ID signing + notarytool + `.pkg` + Homebrew Cask (completed 2026-07-08)
 - [x] **Phase 18.1: Close gap: daemon reliability (INSERTED)** — Control socket recovery, VmState lease timeout, control.sock cleanup (completed 2026-07-08)
+- [ ] **Phase 19: Close testcontainers conformance gaps (INSERTED)** — Fix `follow=true` live log stream, default HostIp to `"0.0.0.0"`, add network existence validation (in progress)
 
 ---
 
@@ -194,6 +195,7 @@ Plans:
 | 17.1 Close testcontainers gaps | v1.2 | 4/4 | Complete   | 2026-07-09 |
 | 18. Ad-hoc Development Distribution | v1.2 | 3/3 | Complete    | 2026-07-08 |
 | 18.1 Close Gap: Daemon Reliability | v1.2 | 1/1 | Complete   | 2026-07-08 |
+| 19. Close testcontainers conformance gaps | v1.2 | 0/TBD | In progress | - |
 
 ### Phase 18.1: Close gap: daemon stop/restart control socket reliability (INSERTED)
 
@@ -204,3 +206,13 @@ Plans:
 Plans:
 
 - [x] 18.1-01-PLAN.md — Fix accept loop (continue+backoff), add VmState lease timeout, clean up control.sock, add source-inspection tests (completed 2026-07-08)
+
+### Phase 19: Close testcontainers conformance gaps (INSERTED)
+
+**Goal:** Fix the three remaining testcontainers conformance gaps: `logs --follow` delivers live streaming output (not snapshot+EOF), omitted `HostIp` defaults to `"0.0.0.0"`, and network connect/disconnect validates target network existence.
+**Depends on:** Phase 17, Phase 17.1
+**Requirements**: CONF-05, CONF-06, CONF-03
+**Plans:** 1 plan
+
+Plans:
+- [ ] 19-01-PLAN.md — Fix Runtime.Name, rebuild initrd, run conformance suite end-to-end
