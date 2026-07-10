@@ -569,6 +569,26 @@ pub async fn run_up(
         )
     })?;
 
+    // Entitlement preflight (warn-and-continue): a binary missing the
+    // com.apple.security.virtualization entitlement fails opaquely at VM start,
+    // so warn loudly up front. Never hard-fail here — a hard failure would loop
+    // forever under launchd KeepAlive. Reuses the doctor codesign probe.
+    if let crate::commands::doctor::CheckResult::Fail { .. } =
+        crate::commands::doctor::check_codesign()
+    {
+        let exe = std::env::current_exe()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| "<path-to-spk>".to_owned());
+        eprintln!(
+            "WARNING: this binary lacks the com.apple.security.virtualization entitlement — VM start will likely fail.\n         fix: codesign --sign - --entitlements speck.entitlements --force {exe}"
+        );
+        tracing::warn!(
+            binary = %exe,
+            "missing com.apple.security.virtualization entitlement — VM start will likely fail; \
+             remediation: codesign --sign - --entitlements speck.entitlements --force <binary>"
+        );
+    }
+
     // Auto-download assets only when not all provided via CLI overrides.
     let has_all_overrides = args.kernel.is_some()
         && args.initrd.is_some()
