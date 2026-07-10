@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use anyhow::Context as _;
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
 
 const LAUNCHD_LABEL: &str = "io.speck.vm";
@@ -12,8 +12,13 @@ pub async fn run_down(speck_home: &Path) -> anyhow::Result<()> {
     let sock_path = speck_home.join("run/control.sock");
     let alive = match UnixStream::connect(&sock_path).await {
         Ok(mut stream) => {
+            // The daemon's control server reads first (PREPARE_RESTART protocol),
+            // so write PING — any unknown command elicits PONG — then drain the
+            // reply under a 2s timeout. Liveness is defined by connect success;
+            // write/read outcomes are ignored.
+            let _ = stream.write_all(b"PING\n").await;
             let mut buf = [0u8; 8];
-            let _ = stream.read(&mut buf).await;
+            let _ = tokio::time::timeout(Duration::from_secs(2), stream.read(&mut buf)).await;
             drop(stream);
             true
         }
@@ -224,6 +229,25 @@ mod tests {
         assert!(
             src.contains("remove_file"),
             "kill_via_pid_file must remove the stale PID file when ESRCH is detected"
+        );
+    }
+
+    #[test]
+    fn down_probe_writes_ping_before_read() {
+        let src = production_code();
+        let ping_pos = src
+            .find("write_all(b\"PING")
+            .expect("run_down probe must write PING before reading (daemon reads first)");
+        let read_pos = src
+            .find("stream.read")
+            .expect("run_down probe must read the PONG reply");
+        assert!(
+            ping_pos < read_pos,
+            "PING write must precede the read — the daemon's control server reads first"
+        );
+        assert!(
+            src.contains("timeout("),
+            "run_down probe read must be bounded by tokio::time::timeout"
         );
     }
 

@@ -70,8 +70,13 @@ impl TxToken for FdTxToken {
     {
         let mut buf = vec![0u8; len];
         let result = f(&mut buf);
-        unsafe {
-            libc::write(self.fd, buf.as_ptr() as *const libc::c_void, len);
+        let n = unsafe { libc::write(self.fd, buf.as_ptr() as *const libc::c_void, len) };
+        if n < 0 || (n as usize) != len {
+            tracing::debug!(
+                len,
+                result = n,
+                "dropped egress frame (socketpair write failed/short)"
+            );
         }
         result
     }
