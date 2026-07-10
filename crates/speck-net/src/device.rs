@@ -106,7 +106,11 @@ impl Device for FdDevice {
         let mut caps = DeviceCapabilities::default();
         caps.medium = Medium::Ethernet;
         caps.max_transmission_unit = self.mtu;
-        caps.max_burst_size = Some(1);
+        // smoltcp multiplies max_burst_size by MSS and clamps the advertised TCP
+        // receive window in every outgoing segment — `Some(1)` forced stop-and-wait
+        // for guest→host transfers. Unbounded is safe now that the socketpair has
+        // 4MB kernel buffers.
+        caps.max_burst_size = None;
         caps
     }
 }
