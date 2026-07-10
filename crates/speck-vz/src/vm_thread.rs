@@ -526,6 +526,23 @@ impl VmThread {
                     Socket::pair(Domain::UNIX, Type::DGRAM, None).map_err(Error::NetworkIo)?;
                 let (host_socket, vm_socket) = (sockets.0, sockets.1);
 
+                // macOS default net.local.dgram.recvspace is 4096 bytes (~2 Ethernet
+                // frames); overflow frames are silently dropped and recovered only via
+                // ~1s TCP RTO, collapsing throughput to KB/s. 4MB is safe under the
+                // 8MB kern.ipc.maxsockbuf ceiling.
+                host_socket
+                    .set_send_buffer_size(4 * 1024 * 1024)
+                    .map_err(Error::NetworkIo)?;
+                host_socket
+                    .set_recv_buffer_size(4 * 1024 * 1024)
+                    .map_err(Error::NetworkIo)?;
+                vm_socket
+                    .set_send_buffer_size(4 * 1024 * 1024)
+                    .map_err(Error::NetworkIo)?;
+                vm_socket
+                    .set_recv_buffer_size(4 * 1024 * 1024)
+                    .map_err(Error::NetworkIo)?;
+
                 host_socket
                     .set_nonblocking(true)
                     .map_err(Error::NetworkIo)?;

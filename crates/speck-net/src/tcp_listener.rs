@@ -19,8 +19,8 @@ pub fn ensure_listeners(sockets: &mut SocketSet, port: u16, desired: usize) {
         .count();
 
     for _ in current..desired {
-        let rx_buf = tcp::SocketBuffer::new(vec![0u8; 65535]);
-        let tx_buf = tcp::SocketBuffer::new(vec![0u8; 65535]);
+        let rx_buf = tcp::SocketBuffer::new(vec![0u8; 1024 * 1024]);
+        let tx_buf = tcp::SocketBuffer::new(vec![0u8; 1024 * 1024]);
         let mut socket = tcp::Socket::new(rx_buf, tx_buf);
         // `port` as u16 → IpListenEndpoint { addr: None, port } = accept on any IP
         if socket.listen(port).is_ok() {
