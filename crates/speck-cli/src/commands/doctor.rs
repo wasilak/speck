@@ -2,7 +2,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use sha2::{Digest, Sha256};
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use anstream::println;
 
@@ -195,9 +195,10 @@ pub fn check_vpn_dns() -> CheckResult {
 
 /// Check whether the Speck VM daemon is running by probing the control socket.
 ///
-/// Connects with a 2-second timeout and drains at least one byte (the PONG the daemon
-/// writes on connection) to prevent a broken-pipe warning in the daemon log — same
-/// pattern used in `commands/down.rs`.
+/// The daemon's control server reads first (PREPARE_RESTART protocol), so the
+/// client writes PING — any unknown command elicits PONG from the `_ =>` arm —
+/// and then drains the PONG reply under a 2-second timeout to avoid a
+/// broken-pipe warning in the daemon log. Same pattern as `commands/down.rs`.
 async fn check_vm_running(speck_home: &Path) -> CheckResult {
     let sock_path = speck_home.join("run/control.sock");
     match tokio::time::timeout(
@@ -207,9 +208,11 @@ async fn check_vm_running(speck_home: &Path) -> CheckResult {
     .await
     {
         Ok(Ok(mut stream)) => {
-            // Drain PONG to prevent broken-pipe warning in daemon (Pitfall 5).
+            // Write PING first — the daemon reads before replying. Liveness is
+            // defined by connect success; write/read outcomes are ignored.
+            let _ = stream.write_all(b"PING\n").await;
             let mut buf = [0u8; 8];
-            let _ = stream.read(&mut buf).await;
+            let _ = tokio::time::timeout(Duration::from_secs(2), stream.read(&mut buf)).await;
             CheckResult::Pass
         }
         _ => CheckResult::Fail {
@@ -482,6 +485,30 @@ mod tests {
         assert!(
             src.contains("Duration::from_secs(2)"),
             "check_vm_running must use a 2-second timeout"
+        );
+    }
+
+    #[test]
+    fn check_vm_running_writes_ping_before_read() {
+        let src = production_code();
+        let ping_pos = src
+            .find("write_all(b\"PING")
+            .expect("check_vm_running must write PING before reading (daemon reads first)");
+        let read_pos = src
+            .find("stream.read")
+            .expect("check_vm_running must read the PONG reply");
+        assert!(
+            ping_pos < read_pos,
+            "PING write must precede the read — the daemon's control server reads first"
+        );
+        let after_ping = &src[ping_pos..];
+        assert!(
+            after_ping.contains("timeout(Duration::from_secs(2), stream.read"),
+            "check_vm_running read must be wrapped in a 2-second tokio::time::timeout"
+        );
+        assert!(
+            !src.contains("the PONG the daemon writes on connection"),
+            "stale doc comment claiming the daemon writes PONG on connection must be gone"
         );
     }
 
