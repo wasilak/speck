@@ -864,6 +864,7 @@ impl VmThread {
                                 let raw_fd = unsafe { (*connection).fileDescriptor() };
                                 let dup_fd = unsafe { libc::dup(raw_fd) };
                                 if dup_fd >= 0 {
+                                    raise_socket_buffers(dup_fd);
                                     let mut c =
                                         control_for_block.lock().unwrap_or_else(|e| e.into_inner());
                                     c.dns_vsock_fd = Some(dup_fd);
@@ -950,6 +951,7 @@ impl VmThread {
                                     let io_err = std::io::Error::last_os_error();
                                     let _ = done_tx_for_block.send(Err(Error::VsockIo(io_err)));
                                 } else {
+                                    raise_socket_buffers(dup_fd);
                                     let sock = unsafe { VzSocket::from_raw_fd(dup_fd) };
                                     let _ = done_tx_for_block.send(Ok(sock));
                                 }
@@ -1210,6 +1212,43 @@ impl Drop for VmThread {
     }
 }
 
+/// Raise SO_RCVBUF/SO_SNDBUF to 4MB on a vsock connection fd.
+///
+/// `VZVirtioSocketConnection.fileDescriptor()` returns one end of a unix
+/// socketpair with macOS-default 8KB buffers (`net.local.stream.recvspace =
+/// 8192`). When the guest sends a burst >8KB, Virtualization.framework's
+/// internal pump loses the tail and the gRPC h2 stream dies with "bytes
+/// remaining on stream" — same bug family as the network socketpair fix
+/// (commit 4ac3a9e0). 4MB is safe under the 8MB `kern.ipc.maxsockbuf` ceiling.
+///
+/// A dup'd fd shares the underlying socket, so setting buffers on the dup is
+/// equivalent to setting them on the original. Best-effort: a setsockopt
+/// failure logs a warning but never fails the connection. Raw `libc` is used
+/// deliberately — wrapping the fd in `socket2::Socket` would take ownership
+/// and close the live connection on drop.
+fn raise_socket_buffers(fd: RawFd) {
+    let size: libc::c_int = 4 * 1024 * 1024;
+    for (opt, name) in [(libc::SO_RCVBUF, "SO_RCVBUF"), (libc::SO_SNDBUF, "SO_SNDBUF")] {
+        let ret = unsafe {
+            libc::setsockopt(
+                fd,
+                libc::SOL_SOCKET,
+                opt,
+                &size as *const libc::c_int as *const libc::c_void,
+                std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+            )
+        };
+        if ret != 0 {
+            tracing::warn!(
+                fd,
+                option = name,
+                error = %std::io::Error::last_os_error(),
+                "failed to raise vsock socket buffer; continuing with default"
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1282,6 +1321,50 @@ mod tests {
         assert!(
             body.contains("setIsConsole(true)"),
             "the console port must be flagged as the primary console (setIsConsole(true))"
+        );
+    }
+
+    #[test]
+    fn raise_socket_buffers_sets_4mb_buffers() {
+        // Pure socket test — no VM entitlement needed. The test owns both ends
+        // of the socketpair so the fd stays valid; only the raw fd is borrowed.
+        let (sock, _peer) =
+            Socket::pair(Domain::UNIX, Type::STREAM, None).expect("socketpair must succeed");
+
+        raise_socket_buffers(sock.as_raw_fd());
+
+        assert!(
+            sock.recv_buffer_size().expect("getsockopt SO_RCVBUF") >= 4 * 1024 * 1024,
+            "SO_RCVBUF must be raised to at least 4MB"
+        );
+        assert!(
+            sock.send_buffer_size().expect("getsockopt SO_SNDBUF") >= 4 * 1024 * 1024,
+            "SO_SNDBUF must be raised to at least 4MB"
+        );
+    }
+
+    #[test]
+    fn vsock_fd_dup_sites_raise_socket_buffers() {
+        let source = include_str!("vm_thread.rs");
+
+        let dns_fn = &source[source
+            .find("fn do_connect_dns_vsock(")
+            .expect("do_connect_dns_vsock must exist")..];
+        let end = dns_fn.find("\n    fn ").unwrap_or(dns_fn.len());
+        let dns_body = &dns_fn[..end];
+        assert!(
+            dns_body.contains("raise_socket_buffers(dup_fd)"),
+            "do_connect_dns_vsock must raise socket buffers on the dup'd vsock fd"
+        );
+
+        let vsock_fn = &source[source
+            .find("fn do_vsock_connect_with_timeout(")
+            .expect("do_vsock_connect_with_timeout must exist")..];
+        let end = vsock_fn.find("\n    fn ").unwrap_or(vsock_fn.len());
+        let vsock_body = &vsock_fn[..end];
+        assert!(
+            vsock_body.contains("raise_socket_buffers(dup_fd)"),
+            "do_vsock_connect_with_timeout must raise socket buffers on the dup'd vsock fd"
         );
     }
 
