@@ -87,8 +87,8 @@ impl PortPublishBridge {
                 continue;
             }
 
-            let rx_buffer = tcp::SocketBuffer::new(vec![0u8; 65535]);
-            let tx_buffer = tcp::SocketBuffer::new(vec![0u8; 65535]);
+            let rx_buffer = tcp::SocketBuffer::new(vec![0u8; 1024 * 1024]);
+            let tx_buffer = tcp::SocketBuffer::new(vec![0u8; 1024 * 1024]);
             let mut socket = tcp::Socket::new(rx_buffer, tx_buffer);
 
             match socket.connect(
