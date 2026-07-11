@@ -412,6 +412,85 @@ mod tests {
         assert_eq!(result.unwrap(), VmState::Running);
     }
 
+    /// Regression test for guest-to-host vsock data loss under downstream
+    /// backpressure.
+    ///
+    /// `VZVirtioSocketConnection`'s guest-to-host path flows through a
+    /// framework-internal unix socketpair whose writer-side SO_SNDBUF is fixed
+    /// at 8192 bytes. If the bridge blocks on downstream unix writes, that 8KB
+    /// fills and the framework drops the remaining data and closes the
+    /// connection. This test mimics the framework side with a socketpair whose
+    /// writer SNDBUF is capped at 8192 and a downstream client that reads
+    /// NOTHING for the entire duration of a 64KB write: the bridge must drain
+    /// the vsock fd continuously regardless of downstream backpressure.
+    #[test]
+    fn bridge_drains_vsock_with_stalled_downstream() {
+        use std::io::{Read, Write};
+        use std::os::unix::io::IntoRawFd;
+        use std::os::unix::net::UnixStream;
+
+        // Fake Virtualization.framework socketpair. Cap the WRITER side send
+        // buffer at 8192 to mimic the framework's fixed internal buffer (on
+        // macOS AF_UNIX, in-flight capacity is governed solely by the writer's
+        // SNDBUF).
+        let (mut fw_writer, vsock_end) = UnixStream::pair().expect("framework socketpair");
+        let sndbuf: libc::c_int = 8192;
+        let rc = unsafe {
+            libc::setsockopt(
+                fw_writer.as_raw_fd(),
+                libc::SOL_SOCKET,
+                libc::SO_SNDBUF,
+                &sndbuf as *const libc::c_int as *const libc::c_void,
+                std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+            )
+        };
+        assert_eq!(rc, 0, "setsockopt(SO_SNDBUF=8192) failed");
+        let vsock = unsafe { VzSocket::from_raw_fd(vsock_end.into_raw_fd()) };
+
+        // Downstream pair: bridge_end goes into the bridge; client_end stalls.
+        let (bridge_end, mut client_end) = UnixStream::pair().expect("downstream socketpair");
+
+        // bridge_vsock_unix blocks its caller in the unix→vsock poll loop, so
+        // run it on its own thread.
+        let bridge = std::thread::spawn(move || bridge_vsock_unix(vsock, bridge_end));
+
+        const TOTAL: usize = 65536;
+        let expected: Vec<u8> = (0..TOTAL).map(|i| (i % 251) as u8).collect();
+
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let payload = expected.clone();
+        let writer = std::thread::spawn(move || {
+            fw_writer
+                .write_all(&payload)
+                .expect("framework writer failed");
+            drop(fw_writer); // EOF for the drain side
+            let _ = done_tx.send(());
+        });
+
+        // CRITICAL: nothing reads from client_end before this assertion — the
+        // downstream stall during the entire write is the point of the test.
+        done_rx.recv_timeout(Duration::from_secs(5)).expect(
+            "vsock bridge applied downstream backpressure to the framework's \
+             8KB buffer: the 64KB guest-side write did not complete within 5s",
+        );
+        writer.join().expect("framework writer thread panicked");
+
+        // Only now does the stalled client read. Everything must arrive
+        // intact, followed by EOF — proving the half-close and cancel byte
+        // fired only after the queue was fully flushed.
+        let mut got = Vec::new();
+        client_end
+            .read_to_end(&mut got)
+            .expect("downstream read_to_end failed");
+        assert_eq!(got.len(), TOTAL, "byte count mismatch at downstream");
+        assert_eq!(got, expected, "payload corrupted in transit");
+        drop(client_end);
+
+        // The bridge call itself must return: the cancel pipe still
+        // terminates the unix→vsock poll loop.
+        bridge.join().expect("bridge thread panicked");
+    }
+
     #[test]
     fn ten_start_stop_cycles() {
         if std::env::var("SPECK_STRESS_TEST").is_err() {
