@@ -256,13 +256,23 @@ fn unix_vsock_proxy(
 
 /// Bidirectional byte bridge between a [`VzSocket`] (vsock) and a [`UnixStream`].
 ///
-/// Each direction runs in its own thread. A `pipe()` is used as a cancellation
-/// signal: whichever direction finishes first writes to the pipe; the other
-/// direction's `poll()` wakes up and exits. This is necessary because macOS
-/// `AF_UNIX` sockets do not unblock a concurrent `read()` via `shutdown()`.
+/// Three threads cooperate:
+///
+/// - a **drain thread** owns the vsock read fd and does nothing but read and
+///   queue chunks — its only blocking point is the vsock `read` itself, so
+///   Virtualization.framework's fixed 8KB socketpair send buffer can never
+///   fill due to downstream backpressure (which makes the framework DROP data
+///   and close the connection);
+/// - a **downstream writer thread** dequeues chunks and writes them to the
+///   unix stream, emitting the half-close and cancel byte only after the
+///   queue is fully flushed;
+/// - the **calling thread** runs the unix→vsock `poll()` loop.
+///
+/// A `pipe()` is used as a cancellation signal: the downstream writer thread
+/// writes a byte when the vsock→unix direction finishes; the unix→vsock
+/// `poll()` wakes up and exits. This is necessary because macOS `AF_UNIX`
+/// sockets do not unblock a concurrent `read()` via `shutdown()`.
 fn bridge_vsock_unix(vsock: VzSocket, stream: std::os::unix::net::UnixStream) {
-    use std::io::Write;
-
     // Dup the vsock fd so both directions have independent ownership.
     let dup_fd = unsafe { libc::dup(vsock.as_raw_fd()) };
     if dup_fd < 0 {
@@ -287,19 +297,53 @@ fn bridge_vsock_unix(vsock: VzSocket, stream: std::os::unix::net::UnixStream) {
     let cancel_r = pipe_fds[0];
     let cancel_w = pipe_fds[1];
 
-    // vsock → unix
+    // vsock → unix: decoupled into a drain thread and a downstream writer
+    // thread. An unbounded queue is safe here: vsock connections carry
+    // request/response gRPC streams (containerd/BuildKit/dockerd), not
+    // infinite firehoses, so the queue depth is bounded in practice by one
+    // connection's response burst — the same trade-off as the reorigin
+    // channel design. A bounded channel with a blocking send would
+    // reintroduce exactly the backpressure that makes Virtualization.framework
+    // drop data and close the connection once its fixed 8KB socketpair SNDBUF
+    // fills.
+    let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
+
+    // Drain thread: owns the vsock read fd. Never blocks on anything except
+    // the vsock read itself, so the framework's writer-side buffer is always
+    // drained promptly. On EOF/error it exits, dropping `tx` — the flush
+    // signal for the writer thread. The unix→vsock loop's SHUT_RDWR on the
+    // dup'd fd (same open file description) unblocks a `read` parked here, so
+    // this thread cannot leak when the downstream closes first.
     std::thread::spawn(move || {
-        let mut stream_write = stream_clone;
         let vsock_read = vsock;
         let mut buf = [0u8; 65536];
         loop {
             match vsock_read.read(&mut buf) {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
-                    if stream_write.write_all(&buf[..n]).is_err() {
+                    if tx.send(buf[..n].to_vec()).is_err() {
                         break;
                     }
                 }
+            }
+        }
+    });
+
+    // Downstream writer thread: owns the unix write half and `cancel_w`.
+    // `recv()` keeps yielding queued chunks after the drain thread drops `tx`
+    // and only then disconnects, so the loop naturally flushes the entire
+    // remaining queue before teardown. The half-close and cancel byte fire
+    // strictly after all guest data has been delivered downstream.
+    //
+    // NOTE: the unix→vsock loop below sets O_NONBLOCK on the shared open file
+    // description, so writes here can fail with WouldBlock under downstream
+    // backpressure; `write_chunk_blocking` waits for writability via
+    // poll(POLLOUT) instead of erroring out.
+    std::thread::spawn(move || {
+        let stream_write = stream_clone;
+        while let Ok(chunk) = rx.recv() {
+            if write_chunk_blocking(&stream_write, &chunk).is_err() {
+                break;
             }
         }
         let _ = stream_write.shutdown(std::net::Shutdown::Write);
@@ -317,8 +361,9 @@ fn bridge_vsock_unix(vsock: VzSocket, stream: std::os::unix::net::UnixStream) {
             let flags = libc::fcntl(stream_fd, libc::F_GETFL, 0);
             if flags < 0 || libc::fcntl(stream_fd, libc::F_SETFL, flags | libc::O_NONBLOCK) < 0 {
                 tracing::warn!(error = %std::io::Error::last_os_error(), "failed to set unix stream nonblocking; dropping connection");
-                libc::write(cancel_w, c"".as_ptr() as *const libc::c_void, 1);
-                libc::close(cancel_w);
+                // `cancel_w` is owned by the downstream writer thread, which
+                // writes and closes it exactly once when the vsock→unix
+                // direction ends; one-directional bridging continues.
                 libc::close(cancel_r);
                 return;
             }
@@ -375,6 +420,45 @@ fn bridge_vsock_unix(vsock: VzSocket, stream: std::os::unix::net::UnixStream) {
         unsafe { libc::close(cancel_r) };
         drop(stream);
     }
+}
+
+/// Write `data` fully to `stream`, waiting for writability on `WouldBlock`.
+///
+/// The unix→vsock poll loop sets `O_NONBLOCK` on the stream's open file
+/// description (shared with the `try_clone`d write half), so a stalled
+/// downstream consumer surfaces as `WouldBlock` here rather than a blocking
+/// write. Waiting on poll(POLLOUT) keeps the writer thread parked without
+/// erroring out — the drain thread keeps emptying the vsock fd meanwhile.
+fn write_chunk_blocking(
+    stream: &std::os::unix::net::UnixStream,
+    mut data: &[u8],
+) -> std::io::Result<()> {
+    use std::io::Write;
+
+    let mut stream_ref = stream;
+    while !data.is_empty() {
+        match stream_ref.write(data) {
+            Ok(0) => return Err(std::io::Error::other("downstream write returned 0")),
+            Ok(n) => data = &data[n..],
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                let mut pfd = libc::pollfd {
+                    fd: stream.as_raw_fd(),
+                    events: libc::POLLOUT,
+                    revents: 0,
+                };
+                let ret = unsafe { libc::poll(&mut pfd, 1, -1) };
+                if ret < 0 {
+                    let e = std::io::Error::last_os_error();
+                    if e.kind() != std::io::ErrorKind::Interrupted {
+                        return Err(e);
+                    }
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(())
 }
 
 impl Drop for Guest {
