@@ -256,13 +256,23 @@ fn unix_vsock_proxy(
 
 /// Bidirectional byte bridge between a [`VzSocket`] (vsock) and a [`UnixStream`].
 ///
-/// Each direction runs in its own thread. A `pipe()` is used as a cancellation
-/// signal: whichever direction finishes first writes to the pipe; the other
-/// direction's `poll()` wakes up and exits. This is necessary because macOS
-/// `AF_UNIX` sockets do not unblock a concurrent `read()` via `shutdown()`.
+/// Three threads cooperate:
+///
+/// - a **drain thread** owns the vsock read fd and does nothing but read and
+///   queue chunks — its only blocking point is the vsock `read` itself, so
+///   Virtualization.framework's fixed 8KB socketpair send buffer can never
+///   fill due to downstream backpressure (which makes the framework DROP data
+///   and close the connection);
+/// - a **downstream writer thread** dequeues chunks and writes them to the
+///   unix stream, emitting the half-close and cancel byte only after the
+///   queue is fully flushed;
+/// - the **calling thread** runs the unix→vsock `poll()` loop.
+///
+/// A `pipe()` is used as a cancellation signal: the downstream writer thread
+/// writes a byte when the vsock→unix direction finishes; the unix→vsock
+/// `poll()` wakes up and exits. This is necessary because macOS `AF_UNIX`
+/// sockets do not unblock a concurrent `read()` via `shutdown()`.
 fn bridge_vsock_unix(vsock: VzSocket, stream: std::os::unix::net::UnixStream) {
-    use std::io::Write;
-
     // Dup the vsock fd so both directions have independent ownership.
     let dup_fd = unsafe { libc::dup(vsock.as_raw_fd()) };
     if dup_fd < 0 {
@@ -287,19 +297,53 @@ fn bridge_vsock_unix(vsock: VzSocket, stream: std::os::unix::net::UnixStream) {
     let cancel_r = pipe_fds[0];
     let cancel_w = pipe_fds[1];
 
-    // vsock → unix
+    // vsock → unix: decoupled into a drain thread and a downstream writer
+    // thread. An unbounded queue is safe here: vsock connections carry
+    // request/response gRPC streams (containerd/BuildKit/dockerd), not
+    // infinite firehoses, so the queue depth is bounded in practice by one
+    // connection's response burst — the same trade-off as the reorigin
+    // channel design. A bounded channel with a blocking send would
+    // reintroduce exactly the backpressure that makes Virtualization.framework
+    // drop data and close the connection once its fixed 8KB socketpair SNDBUF
+    // fills.
+    let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
+
+    // Drain thread: owns the vsock read fd. Never blocks on anything except
+    // the vsock read itself, so the framework's writer-side buffer is always
+    // drained promptly. On EOF/error it exits, dropping `tx` — the flush
+    // signal for the writer thread. The unix→vsock loop's SHUT_RDWR on the
+    // dup'd fd (same open file description) unblocks a `read` parked here, so
+    // this thread cannot leak when the downstream closes first.
     std::thread::spawn(move || {
-        let mut stream_write = stream_clone;
         let vsock_read = vsock;
         let mut buf = [0u8; 65536];
         loop {
             match vsock_read.read(&mut buf) {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
-                    if stream_write.write_all(&buf[..n]).is_err() {
+                    if tx.send(buf[..n].to_vec()).is_err() {
                         break;
                     }
                 }
+            }
+        }
+    });
+
+    // Downstream writer thread: owns the unix write half and `cancel_w`.
+    // `recv()` keeps yielding queued chunks after the drain thread drops `tx`
+    // and only then disconnects, so the loop naturally flushes the entire
+    // remaining queue before teardown. The half-close and cancel byte fire
+    // strictly after all guest data has been delivered downstream.
+    //
+    // NOTE: the unix→vsock loop below sets O_NONBLOCK on the shared open file
+    // description, so writes here can fail with WouldBlock under downstream
+    // backpressure; `write_chunk_blocking` waits for writability via
+    // poll(POLLOUT) instead of erroring out.
+    std::thread::spawn(move || {
+        let stream_write = stream_clone;
+        while let Ok(chunk) = rx.recv() {
+            if write_chunk_blocking(&stream_write, &chunk).is_err() {
+                break;
             }
         }
         let _ = stream_write.shutdown(std::net::Shutdown::Write);
@@ -317,8 +361,9 @@ fn bridge_vsock_unix(vsock: VzSocket, stream: std::os::unix::net::UnixStream) {
             let flags = libc::fcntl(stream_fd, libc::F_GETFL, 0);
             if flags < 0 || libc::fcntl(stream_fd, libc::F_SETFL, flags | libc::O_NONBLOCK) < 0 {
                 tracing::warn!(error = %std::io::Error::last_os_error(), "failed to set unix stream nonblocking; dropping connection");
-                libc::write(cancel_w, c"".as_ptr() as *const libc::c_void, 1);
-                libc::close(cancel_w);
+                // `cancel_w` is owned by the downstream writer thread, which
+                // writes and closes it exactly once when the vsock→unix
+                // direction ends; one-directional bridging continues.
                 libc::close(cancel_r);
                 return;
             }
@@ -377,6 +422,45 @@ fn bridge_vsock_unix(vsock: VzSocket, stream: std::os::unix::net::UnixStream) {
     }
 }
 
+/// Write `data` fully to `stream`, waiting for writability on `WouldBlock`.
+///
+/// The unix→vsock poll loop sets `O_NONBLOCK` on the stream's open file
+/// description (shared with the `try_clone`d write half), so a stalled
+/// downstream consumer surfaces as `WouldBlock` here rather than a blocking
+/// write. Waiting on poll(POLLOUT) keeps the writer thread parked without
+/// erroring out — the drain thread keeps emptying the vsock fd meanwhile.
+fn write_chunk_blocking(
+    stream: &std::os::unix::net::UnixStream,
+    mut data: &[u8],
+) -> std::io::Result<()> {
+    use std::io::Write;
+
+    let mut stream_ref = stream;
+    while !data.is_empty() {
+        match stream_ref.write(data) {
+            Ok(0) => return Err(std::io::Error::other("downstream write returned 0")),
+            Ok(n) => data = &data[n..],
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                let mut pfd = libc::pollfd {
+                    fd: stream.as_raw_fd(),
+                    events: libc::POLLOUT,
+                    revents: 0,
+                };
+                let ret = unsafe { libc::poll(&mut pfd, 1, -1) };
+                if ret < 0 {
+                    let e = std::io::Error::last_os_error();
+                    if e.kind() != std::io::ErrorKind::Interrupted {
+                        return Err(e);
+                    }
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(())
+}
+
 impl Drop for Guest {
     fn drop(&mut self) {
         let _ = self.thread.send_shutdown();
@@ -410,6 +494,85 @@ mod tests {
         let result = guest.start();
         assert!(result.is_ok(), "VM should boot: {:?}", result);
         assert_eq!(result.unwrap(), VmState::Running);
+    }
+
+    /// Regression test for guest-to-host vsock data loss under downstream
+    /// backpressure.
+    ///
+    /// `VZVirtioSocketConnection`'s guest-to-host path flows through a
+    /// framework-internal unix socketpair whose writer-side SO_SNDBUF is fixed
+    /// at 8192 bytes. If the bridge blocks on downstream unix writes, that 8KB
+    /// fills and the framework drops the remaining data and closes the
+    /// connection. This test mimics the framework side with a socketpair whose
+    /// writer SNDBUF is capped at 8192 and a downstream client that reads
+    /// NOTHING for the entire duration of a 64KB write: the bridge must drain
+    /// the vsock fd continuously regardless of downstream backpressure.
+    #[test]
+    fn bridge_drains_vsock_with_stalled_downstream() {
+        use std::io::{Read, Write};
+        use std::os::unix::io::IntoRawFd;
+        use std::os::unix::net::UnixStream;
+
+        // Fake Virtualization.framework socketpair. Cap the WRITER side send
+        // buffer at 8192 to mimic the framework's fixed internal buffer (on
+        // macOS AF_UNIX, in-flight capacity is governed solely by the writer's
+        // SNDBUF).
+        let (mut fw_writer, vsock_end) = UnixStream::pair().expect("framework socketpair");
+        let sndbuf: libc::c_int = 8192;
+        let rc = unsafe {
+            libc::setsockopt(
+                fw_writer.as_raw_fd(),
+                libc::SOL_SOCKET,
+                libc::SO_SNDBUF,
+                &sndbuf as *const libc::c_int as *const libc::c_void,
+                std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+            )
+        };
+        assert_eq!(rc, 0, "setsockopt(SO_SNDBUF=8192) failed");
+        let vsock = unsafe { VzSocket::from_raw_fd(vsock_end.into_raw_fd()) };
+
+        // Downstream pair: bridge_end goes into the bridge; client_end stalls.
+        let (bridge_end, mut client_end) = UnixStream::pair().expect("downstream socketpair");
+
+        // bridge_vsock_unix blocks its caller in the unix→vsock poll loop, so
+        // run it on its own thread.
+        let bridge = std::thread::spawn(move || bridge_vsock_unix(vsock, bridge_end));
+
+        const TOTAL: usize = 65536;
+        let expected: Vec<u8> = (0..TOTAL).map(|i| (i % 251) as u8).collect();
+
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let payload = expected.clone();
+        let writer = std::thread::spawn(move || {
+            fw_writer
+                .write_all(&payload)
+                .expect("framework writer failed");
+            drop(fw_writer); // EOF for the drain side
+            let _ = done_tx.send(());
+        });
+
+        // CRITICAL: nothing reads from client_end before this assertion — the
+        // downstream stall during the entire write is the point of the test.
+        done_rx.recv_timeout(Duration::from_secs(5)).expect(
+            "vsock bridge applied downstream backpressure to the framework's \
+             8KB buffer: the 64KB guest-side write did not complete within 5s",
+        );
+        writer.join().expect("framework writer thread panicked");
+
+        // Only now does the stalled client read. Everything must arrive
+        // intact, followed by EOF — proving the half-close and cancel byte
+        // fired only after the queue was fully flushed.
+        let mut got = Vec::new();
+        client_end
+            .read_to_end(&mut got)
+            .expect("downstream read_to_end failed");
+        assert_eq!(got.len(), TOTAL, "byte count mismatch at downstream");
+        assert_eq!(got, expected, "payload corrupted in transit");
+        drop(client_end);
+
+        // The bridge call itself must return: the cancel pipe still
+        // terminates the unix→vsock poll loop.
+        bridge.join().expect("bridge thread panicked");
     }
 
     #[test]
