@@ -575,6 +575,85 @@ mod tests {
         bridge.join().expect("bridge thread panicked");
     }
 
+    /// Regression test for half-close semantics on the unix→vsock direction.
+    ///
+    /// A docker CLI half-close (`CloseWrite` after stdin EOF on `exec -i` /
+    /// hijacked streams) surfaces as read-EOF on the unix side of the bridge.
+    /// That must shut down ONLY the vsock write direction (`SHUT_WR`): the
+    /// guest may still produce output afterwards, and those bytes must reach
+    /// the client. A `SHUT_RDWR` here kills the drain thread's read (the dup
+    /// shares the same open file description) and loses everything the guest
+    /// writes after stdin EOF.
+    #[test]
+    fn bridge_half_close_delivers_data_after_unix_closewrite() {
+        use std::io::{Read, Write};
+        use std::os::unix::io::IntoRawFd;
+        use std::os::unix::net::UnixStream;
+
+        // Fake vsock: guest_end plays the guest, vsock_end goes into the bridge.
+        let (mut guest_end, vsock_end) = UnixStream::pair().expect("fake vsock socketpair");
+        let vsock = unsafe { VzSocket::from_raw_fd(vsock_end.into_raw_fd()) };
+
+        // Downstream pair: bridge_end goes into the bridge; client_end is the
+        // docker-CLI-like client.
+        let (bridge_end, mut client_end) = UnixStream::pair().expect("downstream socketpair");
+
+        let (bridge_done_tx, bridge_done_rx) = std::sync::mpsc::channel();
+        let bridge = std::thread::spawn(move || {
+            bridge_vsock_unix(vsock, bridge_end);
+            let _ = bridge_done_tx.send(());
+        });
+
+        // 1. Client sends its request.
+        client_end
+            .write_all(b"REQUEST")
+            .expect("client request write failed");
+
+        // 2. Guest reads exactly the request bytes.
+        let mut req = [0u8; 7];
+        guest_end
+            .read_exact(&mut req)
+            .expect("guest did not receive the request");
+        assert_eq!(&req, b"REQUEST");
+
+        // 3. Client half-closes (docker CLI CloseWrite / stdin EOF).
+        client_end
+            .shutdown(std::net::Shutdown::Write)
+            .expect("client CloseWrite failed");
+
+        // 4. Guest observes EOF on its read side — the half-close propagated
+        //    as SHUT_WR on the vsock write direction.
+        let mut sink = [0u8; 16];
+        loop {
+            match guest_end.read(&mut sink) {
+                Ok(0) => break,
+                Ok(_) => panic!("unexpected extra bytes on guest read side"),
+                Err(e) => panic!("guest read failed while waiting for EOF: {e}"),
+            }
+        }
+
+        // 5. Guest THEN produces output — this is the data a SHUT_RDWR
+        //    teardown would lose (or reject with EPIPE).
+        guest_end
+            .write_all(b"RESPONSE")
+            .expect("guest write after client CloseWrite failed");
+        drop(guest_end); // EOF for the drain thread
+
+        // 6. All post-half-close output must reach the client, then EOF.
+        let mut got = Vec::new();
+        client_end
+            .read_to_end(&mut got)
+            .expect("client read_to_end failed");
+        assert_eq!(got, b"RESPONSE", "guest output after CloseWrite was lost");
+
+        // 7. The bridge must tear down fully (cancel byte from the drained
+        //    vsock→unix direction releases the parked unix→vsock thread).
+        bridge_done_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("bridge did not tear down within 5s after guest EOF");
+        bridge.join().expect("bridge thread panicked");
+    }
+
     #[test]
     fn ten_start_stop_cycles() {
         if std::env::var("SPECK_STRESS_TEST").is_err() {
