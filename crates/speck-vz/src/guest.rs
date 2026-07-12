@@ -311,9 +311,13 @@ fn bridge_vsock_unix(vsock: VzSocket, stream: std::os::unix::net::UnixStream) {
     // Drain thread: owns the vsock read fd. Never blocks on anything except
     // the vsock read itself, so the framework's writer-side buffer is always
     // drained promptly. On EOF/error it exits, dropping `tx` — the flush
-    // signal for the writer thread. The unix→vsock loop's SHUT_RDWR on the
-    // dup'd fd (same open file description) unblocks a `read` parked here, so
-    // this thread cannot leak when the downstream closes first.
+    // signal for the writer thread. On the error/cancel teardown paths the
+    // unix→vsock loop's SHUT_RDWR on the dup'd fd (same open file
+    // description) unblocks a `read` parked here, so this thread cannot leak
+    // when the downstream dies first. On the client half-close path there is
+    // deliberately no SHUT_RDWR: this thread keeps draining guest output and
+    // exits on its own via guest EOF — which is what triggers the cancel byte
+    // that releases the parked unix→vsock thread.
     std::thread::spawn(move || {
         let vsock_read = vsock;
         let mut buf = [0u8; 65536];
@@ -368,8 +372,19 @@ fn bridge_vsock_unix(vsock: VzSocket, stream: std::os::unix::net::UnixStream) {
                 return;
             }
         }
+        /// Why the unix→vsock loop exited.
+        enum ExitCause {
+            /// Unix read-EOF: the client half-closed (docker CLI CloseWrite /
+            /// stdin EOF on a hijacked stream). Only the vsock write direction
+            /// may be shut down — the guest can still produce output.
+            HalfClose,
+            /// Unix read error, vsock write failure, poll error, or
+            /// cancel-pipe wake: tear down both directions.
+            Teardown,
+        }
+
         let mut buf = [0u8; 65536];
-        'outer: loop {
+        let cause = 'outer: loop {
             let mut fds = [
                 libc::pollfd {
                     fd: stream_fd,
@@ -384,11 +399,11 @@ fn bridge_vsock_unix(vsock: VzSocket, stream: std::os::unix::net::UnixStream) {
             ];
             let ret = unsafe { libc::poll(fds.as_mut_ptr(), 2, -1) };
             if ret <= 0 {
-                break;
+                break ExitCause::Teardown;
             }
 
             if fds[1].revents & libc::POLLIN != 0 {
-                break;
+                break ExitCause::Teardown;
             }
 
             if fds[0].revents != 0 {
@@ -402,21 +417,73 @@ fn bridge_vsock_unix(vsock: VzSocket, stream: std::os::unix::net::UnixStream) {
                             if e.kind() == std::io::ErrorKind::WouldBlock {
                                 break;
                             }
+                            break 'outer ExitCause::Teardown;
                         }
-                        break 'outer;
+                        // read == 0: client half-close. All client bytes were
+                        // already written to the vsock before EOF was
+                        // observed, so no flush is needed here.
+                        break 'outer ExitCause::HalfClose;
                     }
                     let data = &buf[..n as usize];
                     let mut written = 0;
                     while written < data.len() {
                         match vsock_write.write(&data[written..]) {
-                            Ok(0) | Err(_) => break 'outer,
+                            Ok(0) | Err(_) => break 'outer ExitCause::Teardown,
                             Ok(w) => written += w,
                         }
                     }
                 }
             }
+        };
+
+        match cause {
+            ExitCause::HalfClose => {
+                // Propagate the half-close to the guest: shut down ONLY the
+                // vsock write direction. The drain thread keeps reading guest
+                // output produced after the client's stdin EOF.
+                unsafe { libc::shutdown(vsock_write.as_raw_fd(), libc::SHUT_WR) };
+                // Park until the vsock→unix direction finishes: the drain
+                // thread exits on guest EOF, the downstream writer thread
+                // flushes the queue and then fires the cancel byte.
+                //
+                // Accepted trade-off (T-20-03): a client that fully closes is
+                // indistinguishable from a half-close at read time. If the
+                // guest never writes again, the bridge threads stay parked
+                // until the guest's next write hits EPIPE at the downstream
+                // writer, which fires the cancel byte. This mirrors the guest
+                // sock_forwarder's half-close semantics (fixed in commit
+                // d56a55ef) and is bounded per-connection.
+                loop {
+                    let mut pfd = libc::pollfd {
+                        fd: cancel_r,
+                        events: libc::POLLIN,
+                        revents: 0,
+                    };
+                    let ret = unsafe { libc::poll(&mut pfd, 1, -1) };
+                    if ret > 0 {
+                        break;
+                    }
+                    if ret < 0 {
+                        let e = std::io::Error::last_os_error();
+                        if e.kind() == std::io::ErrorKind::Interrupted {
+                            continue;
+                        }
+                        break;
+                    }
+                }
+                // Defensive full shutdown: harmless — the cancel byte is
+                // emitted strictly after the drain thread exited and the
+                // queue was flushed downstream.
+                unsafe { libc::shutdown(vsock_write.as_raw_fd(), libc::SHUT_RDWR) };
+            }
+            ExitCause::Teardown => {
+                // Full teardown: this SHUT_RDWR is what unblocks a drain
+                // thread parked in `read` when the downstream dies first
+                // (same open file description as the dup'd read fd). Do not
+                // weaken this path.
+                unsafe { libc::shutdown(vsock_write.as_raw_fd(), libc::SHUT_RDWR) };
+            }
         }
-        unsafe { libc::shutdown(vsock_write.as_raw_fd(), libc::SHUT_RDWR) };
         unsafe { libc::close(cancel_r) };
         drop(stream);
     }
@@ -624,13 +691,10 @@ mod tests {
         // 4. Guest observes EOF on its read side — the half-close propagated
         //    as SHUT_WR on the vsock write direction.
         let mut sink = [0u8; 16];
-        loop {
-            match guest_end.read(&mut sink) {
-                Ok(0) => break,
-                Ok(_) => panic!("unexpected extra bytes on guest read side"),
-                Err(e) => panic!("guest read failed while waiting for EOF: {e}"),
-            }
-        }
+        let n = guest_end
+            .read(&mut sink)
+            .expect("guest read failed while waiting for EOF");
+        assert_eq!(n, 0, "expected EOF on guest read side after CloseWrite");
 
         // 5. Guest THEN produces output — this is the data a SHUT_RDWR
         //    teardown would lose (or reject with EPIPE).
