@@ -129,6 +129,7 @@ Open for definition. Candidate areas:
 | D-18 | Phase 17.1/19 gap-closure inserted phases (decimal numbering) for follow-stream/HostIp/network validation | ✓ Good — clear insertion semantics without renumbering | v1.2 |
 | D-19 | Containerd transfer service for image pull (with unpack) — works | ✓ Good — container lifecycle works end-to-end | v1.2 |
 | D-20 | Ad-hoc release distribution only; Developer ID deferred | ✓ Good — ships dev artifact pipeline; DEVID requires Apple Program | v1.2 |
+| D-21 | **LOCKED:** Docker API = transparent byte proxy to guest dockerd + thin allowlisted middleware (binds/ports/HostIp/503 only). Reverses v1.2 CONF-01 (SpeckDockerd endpoint reimplementation against containerd), which caused the docker CLI 29.x conformance bug pile. Conformance gate: `scripts/conformance-smoke.sh` must pass. See CLAUDE.md "Architecture Invariants". | ✗ CONF-01 drifted — corrected | v1.3 |
 
 ## Evolution
 

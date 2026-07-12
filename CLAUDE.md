@@ -21,6 +21,16 @@ Speck is an ultra-fast, minimalist container runtime built exclusively for **App
 - **Architecture**: Core must be a library with zero presentation coupling — CLI, future GUI, and K8s seam are all consumers of the same Core.
 - **Licensing**: AGPLv3 + CLA; no permissive license that would let a vendor close the source, and no time-delayed conversion.
 
+### Architecture Invariants (LOCKED — decision D-21, 2026-07-11)
+
+These are load-bearing decisions. No agent may plan, implement, or "improve" against them without an explicit user-approved decision reversal logged in `.planning/PROJECT.md`.
+
+1. **The Docker API surface is a transparent byte proxy to the real dockerd running inside the guest** (`/run/speck/dockerd.sock`, via the hardened vsock bridge). Speck does NOT reimplement Docker API endpoints against containerd. Rationale: reimplementation puts Speck in an unwinnable API-fidelity arms race with moby — this exact drift (v1.2 CONF-01, SpeckDockerd axum reimplementation) produced the docker CLI 29.x conformance bug pile.
+2. **Host-side interception is a thin allowlisted middleware, not a reimplementation.** Only endpoints that MUST be host-aware may be intercepted or rewritten: container create (bind-mount path translation to VirtioFS), port-publish tracking for the host netstack, `HostIp` rewriting in inspect/port responses, and the 503 restart gate. Everything else passes through byte-for-byte, including hijacked/upgraded streams (attach/exec).
+3. **Conformance is defined by an executable gate, not by claims**: `scripts/conformance-smoke.sh` run against a live daemon with the system docker CLI. A phase touching the API layer is not done while it fails.
+4. **Never let a blocking downstream write stall reads from a VZ vsock fd** (framework kills the connection and discards data past its internal 8KB buffer — see regression test `bridge_drains_vsock_with_stalled_downstream`). Any new vsock consumer must drain eagerly into userspace memory.
+5. **All socketpair/vsock fds crossing the VM boundary get explicit `SO_SNDBUF`/`SO_RCVBUF` (4MB)** — macOS defaults (4–8KB) silently destroy throughput or drop data. On macOS AF_UNIX, only the **writer's SNDBUF** governs capacity.
+
 <!-- GSD:project-end -->
 
 <!-- GSD:stack-start source:research/STACK.md -->

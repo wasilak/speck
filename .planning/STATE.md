@@ -106,6 +106,15 @@ Last activity: 2026-07-09 — Milestone v1.2 completed and archived
 3. Should `Syscalls` trait in `vminitd.rs` be `pub(crate)` only or `pub` for separate test binary? — relevant to Phase 15
 4. `PUT /containers/{id}/wait?condition=not-running` — in scope for CONF-07 or v1.3?
 
+## Quick Tasks Completed
+
+| ID | Description | Date | Commits |
+|----|-------------|------|---------|
+| 260709-u4q | Fix pull/push throughput collapse: 4MB net socketpair buffers, unclamp advertised TCP window, 1MB smoltcp buffers | 2026-07-10 | 4ac3a9e0, 8c044e46 |
+| 260710-cpz | Fix control-socket probe deadlock (down/status/doctor); 1MiB port-publish buffers; egress drop logging; entitlement warning | 2026-07-10 | f7506798, ab256842, 8fc5e1e5 |
+| 260710-qzm | 4MB buffers on vsock connection fds (fixes host→guest direction) | 2026-07-10 | c0d60885 |
+| 260711-d5v | Decouple vsock bridge reads from downstream writes — fixes VZ 8KB guest→host truncation that broke docker ps and all gRPC responses >8KB | 2026-07-11 | a2e21312, facaf67d |
+
 ## Session Continuity
 
 **To resume:** Milestone v1.2 is complete. All Phase 17.1 gap-closure plans executed. Ready for milestone wrap-up audit or the next milestone / v1.3 planning.
@@ -127,3 +136,4 @@ Last activity: 2026-07-09 — Milestone v1.2 completed and archived
 ## Operator Next Steps
 
 - Start the next milestone with /gsd-new-milestone
+- **v1.3 direction is LOCKED (D-21, 2026-07-11):** restore transparent byte-proxy to guest dockerd; SpeckDockerd shrinks to allowlisted middleware (binds/ports/HostIp/503). See CLAUDE.md "Architecture Invariants". Definition of done: `scripts/conformance-smoke.sh` passes 18/18 (baseline 2026-07-11: 8/18).
