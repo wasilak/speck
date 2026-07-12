@@ -226,6 +226,9 @@ fn unix_vsock_proxy(
     sock_path: PathBuf,
     label: &'static str,
 ) -> Result<(), Error> {
+    const CONNECT_RETRIES: usize = 3;
+    const CONNECT_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(25);
+
     // Remove stale socket file if it exists (e.g., from a previous run).
     let _ = std::fs::remove_file(&sock_path);
 
@@ -235,14 +238,39 @@ fn unix_vsock_proxy(
     std::thread::spawn(move || {
         loop {
             match listener.accept() {
-                Ok((stream, _)) => match connector() {
-                    Ok(vsock) => {
+                Ok((stream, _)) => {
+                    let mut stream = Some(stream);
+                    let mut connected = None;
+                    for attempt in 1..=CONNECT_RETRIES {
+                        match connector() {
+                            Ok(vsock) => {
+                                connected = Some(vsock);
+                                break;
+                            }
+                            Err(err) if attempt < CONNECT_RETRIES => {
+                                tracing::debug!(
+                                    error = %err,
+                                    attempt,
+                                    retries = CONNECT_RETRIES,
+                                    "transient vsock connect failure for {label} proxy client; retrying"
+                                );
+                                std::thread::sleep(CONNECT_RETRY_DELAY);
+                            }
+                            Err(err) => {
+                                tracing::warn!(
+                                    error = %err,
+                                    retries = CONNECT_RETRIES,
+                                    "vsock connect failed for {label} proxy client"
+                                );
+                            }
+                        }
+                    }
+
+                    if let Some(vsock) = connected {
+                        let stream = stream.take().expect("accepted unix stream missing");
                         std::thread::spawn(move || bridge_vsock_unix(vsock, stream));
                     }
-                    Err(e) => {
-                        tracing::warn!(error = %e, "vsock connect failed for {label} proxy client");
-                    }
-                },
+                }
                 Err(e) => {
                     tracing::warn!(error = %e, "{label} unix listener accept error; proxy exiting");
                     break;
@@ -716,6 +744,53 @@ mod tests {
             .recv_timeout(Duration::from_secs(5))
             .expect("bridge did not tear down within 5s after guest EOF");
         bridge.join().expect("bridge thread panicked");
+    }
+
+    #[test]
+    fn unix_vsock_proxy_retries_transient_connect_failure() {
+        use std::io::{Read, Write};
+        use std::os::unix::io::IntoRawFd;
+        use std::os::unix::net::UnixStream;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let attempts = std::sync::Arc::new(AtomicUsize::new(0));
+        let attempts_in_connector = std::sync::Arc::clone(&attempts);
+        let (guest_tx, guest_rx) = std::sync::mpsc::channel();
+        let connector = move || {
+            let n = attempts_in_connector.fetch_add(1, Ordering::SeqCst);
+            if n < 2 {
+                return Err(Error::VsockConnect(
+                    "transient refusal (guest backlog-1 listener busy)".into(),
+                ));
+            }
+            let (guest_end, vsock_end) = UnixStream::pair().expect("fake vsock socketpair");
+            guest_tx.send(guest_end).expect("test receiver gone");
+            Ok(unsafe { VzSocket::from_raw_fd(vsock_end.into_raw_fd()) })
+        };
+
+        let sock_path = std::env::temp_dir().join(format!(
+            "speck-test-{}-unix_vsock_proxy_retries.sock",
+            std::process::id(),
+        ));
+        unix_vsock_proxy(connector, sock_path.clone(), "test").expect("proxy bind failed");
+
+        let mut client = UnixStream::connect(&sock_path).expect("client connect failed");
+        client.write_all(b"PING").expect("client write failed");
+
+        let mut guest_end = guest_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("connector was not retried to success; the accepted client was dropped");
+        guest_end
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .expect("set_read_timeout failed");
+        let mut buf = [0u8; 4];
+        guest_end
+            .read_exact(&mut buf)
+            .expect("fake guest did not receive the client's bytes");
+        assert_eq!(&buf, b"PING");
+        assert_eq!(attempts.load(Ordering::SeqCst), 3, "expected exactly 3 attempts");
+
+        let _ = std::fs::remove_file(&sock_path);
     }
 
     #[test]
