@@ -2,6 +2,7 @@
 #![deny(clippy::print_stderr)]
 #![deny(clippy::dbg_macro)]
 
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::RwLock;
@@ -41,11 +42,16 @@ impl SpeckDockerd {
         let run_dir = speck_home.join("run");
         std::fs::create_dir_all(&run_dir)
             .map_err(|e| DockerApiError::Internal(format!("create runtime dir: {e}")))?;
-        let internal_sock_path = run_dir.join("guest-dockerd.sock");
+        std::fs::set_permissions(&run_dir, std::fs::Permissions::from_mode(0o700))
+            .map_err(|e| DockerApiError::Internal(format!("chmod runtime dir 0700: {e}")))?;
+
+        let internal_sock_path = run_dir.join("dockerd-proxy.sock");
 
         guest
             .docker_api_unix_proxy(internal_sock_path.clone())
             .map_err(|err| DockerApiError::Internal(err.to_string()))?;
+        std::fs::set_permissions(&internal_sock_path, std::fs::Permissions::from_mode(0o600))
+            .map_err(|e| DockerApiError::Internal(format!("chmod internal dockerd proxy socket 0600: {e}")))?;
 
         tracing::info!(
             public_sock = %sock_path.display(),
