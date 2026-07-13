@@ -57,6 +57,14 @@ pub fn daemonize(speck_home: &Path, binary: &Path) -> anyhow::Result<()> {
         .trim()
         .to_owned();
 
+    // A stale launchd job can remain loaded after a previous daemon crash.
+    // Boot it out first so repeated `spk up` runs are idempotent.
+    let _ = std::process::Command::new("launchctl")
+        .args(["bootout", &format!("gui/{uid_str}/{LAUNCHD_LABEL}")])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+
     let plist = format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -1225,6 +1233,18 @@ mod tests {
         assert!(
             source.contains("RunAtLoad") && source.contains("<true/>"),
             "RunAtLoad must be true so the daemon starts immediately on bootstrap"
+        );
+    }
+
+    #[test]
+    fn daemonize_boots_out_stale_launchd_job_before_bootstrap() {
+        let source = include_str!("up.rs");
+
+        assert!(
+            source.contains("launchctl")
+                && source.contains("\"bootout\"")
+                && source.contains("gui/{uid_str}/{LAUNCHD_LABEL}"),
+            "daemonize must boot out a stale io.speck.vm job before bootstrap so repeated spk up runs recover cleanly"
         );
     }
 

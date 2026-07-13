@@ -49,9 +49,9 @@ pub async fn run_restart(speck_home: &Path) -> anyhow::Result<()> {
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
 
-    // Step 5 — Start: call spk up --wait 120 as subprocess
+    // Step 5 — Start: call spk up --wait --timeout 120 as subprocess
     let up_status = tokio::process::Command::new(&binary)
-        .args(["up", "--wait", "120"])
+        .args(["up", "--wait", "--timeout", "120"])
         .status()
         .await
         .context("failed to run spk up")?;
@@ -88,6 +88,10 @@ mod tests {
         assert!(
             src.contains("\"--wait\""),
             "run_restart must pass --wait to spk up"
+        );
+        assert!(
+            src.contains("\"--timeout\"") && src.contains("\"120\""),
+            "run_restart must pass the restart wait timeout with --timeout 120"
         );
     }
 
