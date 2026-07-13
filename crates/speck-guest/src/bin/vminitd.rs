@@ -69,6 +69,7 @@ mod linux {
         let ready_port = parse_cmdline_ready_vsock_port("/proc/cmdline").unwrap_or(9000);
         let containerd_port = parse_cmdline_containerd_vsock_port("/proc/cmdline").unwrap_or(9001);
         let docker_port = parse_cmdline_docker_vsock_port("/proc/cmdline").unwrap_or(9003);
+        let tcp_forwarder_port = parse_cmdline_tcp_forwarder_vsock_port("/proc/cmdline").unwrap_or(9006);
         let log_relay_port = parse_cmdline_log_relay_vsock_port("/proc/cmdline");
         let guest_ip = parse_cmdline_guest_ip("/proc/cmdline");
         let gateway = parse_cmdline_gateway("/proc/cmdline");
@@ -197,6 +198,12 @@ mod linux {
             }
         });
 
+        std::thread::spawn(move || {
+            if let Err(e) = speck_guest::tcp_forwarder::serve(tcp_forwarder_port) {
+                eprintln!("vminitd: tcp forwarder error: {e}");
+            }
+        });
+
         // PID 1 must never exit
         loop {
             std::thread::sleep(std::time::Duration::from_secs(3600));
@@ -310,6 +317,16 @@ mod linux {
         let content = std::fs::read_to_string(path).ok()?;
         for word in content.split_whitespace() {
             if let Some(port_str) = word.strip_prefix("docker_vsock_port=") {
+                return port_str.parse::<u32>().ok();
+            }
+        }
+        None
+    }
+
+    fn parse_cmdline_tcp_forwarder_vsock_port(path: &str) -> Option<u32> {
+        let content = std::fs::read_to_string(path).ok()?;
+        for word in content.split_whitespace() {
+            if let Some(port_str) = word.strip_prefix("tcp_forwarder_vsock_port=") {
                 return port_str.parse::<u32>().ok();
             }
         }

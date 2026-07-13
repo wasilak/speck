@@ -238,7 +238,7 @@ async fn proxy_forwards_request_verbatim_d21() {
                 .to_vec(),
         ),
     );
-    spawn_proxy(build_proxy_router(backend_sock, running_state()), &proxy_sock);
+    spawn_proxy(build_proxy_router(backend_sock, None, running_state()), &proxy_sock);
 
     let mut client = UnixStream::connect(&proxy_sock)
         .await
@@ -282,7 +282,7 @@ async fn proxy_streams_body_larger_than_2mb() {
         &backend_sock,
         FakeScript::Canned(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n".to_vec()),
     );
-    spawn_proxy(build_proxy_router(backend_sock, running_state()), &proxy_sock);
+    spawn_proxy(build_proxy_router(backend_sock, None, running_state()), &proxy_sock);
 
     let mut client = UnixStream::connect(&proxy_sock)
         .await
@@ -332,7 +332,7 @@ async fn proxy_joins_upgrade_bidirectionally() {
     let proxy_sock = dir.join("proxy.sock");
 
     let _recorded = spawn_fake_dockerd(&backend_sock, FakeScript::UpgradeEcho);
-    spawn_proxy(build_proxy_router(backend_sock, running_state()), &proxy_sock);
+    spawn_proxy(build_proxy_router(backend_sock, None, running_state()), &proxy_sock);
 
     let mut client = UnixStream::connect(&proxy_sock)
         .await
@@ -380,7 +380,7 @@ async fn proxy_returns_503_while_restarting() {
     let proxy_sock = dir.join("proxy.sock");
 
     let vm_state = Arc::new(RwLock::new(VmState::Restarting));
-    spawn_proxy(build_proxy_router(backend_sock, vm_state), &proxy_sock);
+    spawn_proxy(build_proxy_router(backend_sock, None, vm_state), &proxy_sock);
 
     let mut client = UnixStream::connect(&proxy_sock)
         .await

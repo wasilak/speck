@@ -1,4 +1,5 @@
 use std::io;
+use std::os::fd::FromRawFd;
 use std::os::unix::io::AsRawFd;
 
 /// A host-side vsock connection wrapping a raw file descriptor.
@@ -40,6 +41,13 @@ impl VzSocket {
         } else {
             Ok(ret as usize)
         }
+    }
+
+    /// Consume the vsock wrapper and expose the underlying host-side Unix stream.
+    pub fn into_unix_stream(self) -> std::os::unix::net::UnixStream {
+        let fd = self.fd;
+        std::mem::forget(self);
+        unsafe { std::os::unix::net::UnixStream::from_raw_fd(fd) }
     }
 }
 

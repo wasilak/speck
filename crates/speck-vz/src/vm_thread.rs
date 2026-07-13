@@ -27,7 +27,7 @@ use objc2_virtualization::{
 use socket2::{Domain, Socket, Type};
 
 use crate::config::GuestConfig;
-use crate::config::PortMapConfig;
+use crate::config::{PortMapConfig, PortMapUpdate};
 use crate::delegate::{VmDelegate, VmStateEvent};
 use crate::error::Error;
 use crate::vsock::VzSocket;
@@ -137,12 +137,15 @@ pub(crate) enum VmCommand {
         reply: mpsc::Sender<std::result::Result<(), Error>>,
     },
     AddPortMap {
-        host_port: u16,
-        container_port: u16,
+        config: PortMapConfig,
+        reply: mpsc::Sender<std::result::Result<(), Error>>,
+    },
+    RemovePortMap {
+        config: PortMapConfig,
         reply: mpsc::Sender<std::result::Result<(), Error>>,
     },
     SetPortMapChannel {
-        tx: tokio::sync::mpsc::Sender<PortMapConfig>,
+        tx: tokio::sync::mpsc::Sender<PortMapUpdate>,
         reply: mpsc::Sender<std::result::Result<(), Error>>,
     },
     /// Accumulate Docker bind mounts and update the pre-provisioned
@@ -184,7 +187,7 @@ struct VmControl {
     netstack_fd: Option<RawFd>,
     dns_vsock_fd: Option<RawFd>,
     port_maps: Vec<PortMapConfig>,
-    port_map_tx: Option<tokio::sync::mpsc::Sender<PortMapConfig>>,
+    port_map_tx: Option<tokio::sync::mpsc::Sender<PortMapUpdate>>,
     /// Accumulated Docker bind mounts (D-05); rebuilt as VZMultipleDirectoryShare
     /// on the pre-provisioned virtiofs-binds device at each container start.
     docker_bind_mounts: Vec<crate::config::VolumeMountConfig>,
@@ -303,14 +306,10 @@ impl VmThread {
                             let _ = reply.send(result);
                         }
                         VmCommand::AddPortMap {
-                            host_port,
-                            container_port,
+                            config: port_map,
                             reply,
                         } => {
-                            let port_map = PortMapConfig {
-                                host_port,
-                                container_port,
-                            };
+                            tracing::info!(host_port = port_map.host_port, container_port = port_map.container_port, target_ip = ?port_map.target_ip, "vm thread received AddPortMap");
                             let sender = {
                                 let mut ctrl = control.lock().unwrap_or_else(|e| e.into_inner());
                                 if ctrl.state != InternalState::Running {
@@ -322,7 +321,30 @@ impl VmThread {
                             };
 
                             if let Some(tx) = sender {
-                                let result = tx.blocking_send(port_map).map_err(|_| {
+                                let result = tx.blocking_send(PortMapUpdate::Add(port_map)).map_err(|_| {
+                                    Error::Network("netstack port-map channel closed".into())
+                                });
+                                let _ = reply.send(result);
+                            } else {
+                                let _ = reply.send(Ok(()));
+                            }
+                        }
+                        VmCommand::RemovePortMap {
+                            config: port_map,
+                            reply,
+                        } => {
+                            let sender = {
+                                let mut ctrl = control.lock().unwrap_or_else(|e| e.into_inner());
+                                if ctrl.state != InternalState::Running {
+                                    let _ = reply.send(Err(Error::NotRunning));
+                                    continue;
+                                }
+                                ctrl.port_maps.retain(|existing| *existing != port_map);
+                                ctrl.port_map_tx.clone()
+                            };
+
+                            if let Some(tx) = sender {
+                                let result = tx.blocking_send(PortMapUpdate::Remove(port_map)).map_err(|_| {
                                     Error::Network("netstack port-map channel closed".into())
                                 });
                                 let _ = reply.send(result);
@@ -1149,16 +1171,11 @@ impl VmThread {
         )?
     }
 
-    pub fn add_port_map(
-        &self,
-        host_port: u16,
-        container_port: u16,
-    ) -> std::result::Result<(), Error> {
+    pub fn add_port_map_config(&self, config: PortMapConfig) -> std::result::Result<(), Error> {
         let (tx, rx) = mpsc::channel();
         self.send_blocking(
             VmCommand::AddPortMap {
-                host_port,
-                container_port,
+                config,
                 reply: tx,
             },
             rx,
@@ -1171,10 +1188,21 @@ impl VmThread {
     /// subsequent `add_port_map` calls can forward entries in real time.
     pub fn set_port_map_channel(
         &self,
-        tx: tokio::sync::mpsc::Sender<PortMapConfig>,
+        tx: tokio::sync::mpsc::Sender<PortMapUpdate>,
     ) -> std::result::Result<(), Error> {
         let (reply, rx) = mpsc::channel();
         self.send_blocking(VmCommand::SetPortMapChannel { tx, reply }, rx)?
+    }
+
+    pub fn remove_port_map_config(&self, config: PortMapConfig) -> std::result::Result<(), Error> {
+        let (tx, rx) = mpsc::channel();
+        self.send_blocking(
+            VmCommand::RemovePortMap {
+                config,
+                reply: tx,
+            },
+            rx,
+        )?
     }
 
     /// Accumulate Docker bind mounts and update the pre-provisioned

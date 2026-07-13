@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-pub use speck_net::PortMapConfig;
+pub use speck_net::{PortMapConfig, PortMapUpdate};
 use speck_net::config::NetworkConfig;
 
 /// Configuration for a single VirtioFS volume mount.
@@ -569,6 +569,7 @@ mod tests {
             .add_port_map(PortMapConfig {
                 host_port: 8080,
                 container_port: 80,
+                target_ip: None,
             })
             .build();
 
@@ -577,6 +578,7 @@ mod tests {
             vec![PortMapConfig {
                 host_port: 8080,
                 container_port: 80,
+                target_ip: None,
             }]
         );
         assert!(config.validate().is_ok());
@@ -586,6 +588,7 @@ mod tests {
             .add_port_map(PortMapConfig {
                 host_port: 1024,
                 container_port: 80,
+                target_ip: None,
             })
             .build();
 

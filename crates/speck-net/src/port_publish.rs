@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::io::{ErrorKind, Read, Write};
+use std::net::Ipv4Addr;
 use std::net::{Shutdown, TcpListener, TcpStream};
 
 use serde::{Deserialize, Serialize};
@@ -16,15 +17,52 @@ const EPHEMERAL_START: u16 = 49152;
 pub struct PortMapConfig {
     pub host_port: u16,
     pub container_port: u16,
+    pub target_ip: Option<Ipv4Addr>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PortMapUpdate {
+    Add(PortMapConfig),
+    Remove(PortMapConfig),
 }
 
 /// Bridges host-side published TCP ports into the guest through smoltcp.
 pub struct PortPublishBridge {
-    bridges: HashMap<SocketHandle, TcpStream>,
+    bridges: HashMap<SocketHandle, PortBridgeState>,
     listeners: Vec<(TcpListener, PortMapConfig)>,
     next_ephemeral_port: u16,
     used_ephemeral_ports: HashSet<u16>,
     mtu: u16,
+}
+
+struct PortBridgeState {
+    stream: TcpStream,
+    h2g_overflow: Option<(Vec<u8>, usize)>,
+}
+
+impl PortBridgeState {
+    fn new(stream: TcpStream) -> Self {
+        Self {
+            stream,
+            h2g_overflow: None,
+        }
+    }
+
+    fn flush_h2g(&mut self, socket: &mut tcp::Socket) {
+        if let Some((data, offset)) = &mut self.h2g_overflow {
+            let send_avail = socket.send_capacity().saturating_sub(socket.send_queue());
+            if send_avail == 0 {
+                return;
+            }
+            let remaining = &data[*offset..];
+            let n = remaining.len().min(send_avail);
+            let _ = socket.send_slice(&remaining[..n]);
+            *offset += n;
+            if *offset >= data.len() {
+                self.h2g_overflow = None;
+            }
+        }
+    }
 }
 
 impl PortPublishBridge {
@@ -53,13 +91,17 @@ impl PortPublishBridge {
         Ok(())
     }
 
+    pub fn remove_port_map(&mut self, config: PortMapConfig) {
+        self.listeners.retain(|(_, existing)| *existing != config);
+    }
+
     pub fn poll_new_host_connections(&mut self, sockets: &mut SocketSet, cx: &mut Context) {
         let mut accepted = Vec::new();
 
         for (listener, config) in &self.listeners {
             loop {
                 match listener.accept() {
-                    Ok((stream, _addr)) => accepted.push((stream, *config)),
+                Ok((stream, _addr)) => accepted.push((stream, *config)),
                     Err(e) if e.kind() == ErrorKind::WouldBlock => break,
                     Err(e) => {
                         tracing::warn!(host_port = config.host_port, error = %e, "port publish accept failed");
@@ -70,6 +112,12 @@ impl PortPublishBridge {
         }
 
         for (stream, config) in accepted {
+            tracing::info!(
+                host_port = config.host_port,
+                guest_port = config.container_port,
+                target_ip = ?config.target_ip,
+                "accepted host connection for published port"
+            );
             let Some(ephemeral_port) = self.allocate_ephemeral_port() else {
                 tracing::warn!(
                     host_port = config.host_port,
@@ -93,12 +141,32 @@ impl PortPublishBridge {
 
             match socket.connect(
                 cx,
-                (GUEST_IP, config.container_port),
-                (GATEWAY_IP, ephemeral_port),
+                (
+                    config
+                        .target_ip
+                        .map(IpAddress::from)
+                        .unwrap_or(GUEST_IP),
+                    config.container_port,
+                ),
+                (
+                    if config.target_ip.is_some() {
+                        GUEST_IP
+                    } else {
+                        GATEWAY_IP
+                    },
+                    ephemeral_port,
+                ),
             ) {
                 Ok(()) => {
+                    tracing::info!(
+                        host_port = config.host_port,
+                        guest_port = config.container_port,
+                        target_ip = ?config.target_ip,
+                        ephemeral_port,
+                        "created smoltcp published-port connection"
+                    );
                     let handle = sockets.add(socket);
-                    self.bridges.insert(handle, stream);
+                    self.bridges.insert(handle, PortBridgeState::new(stream));
                 }
                 Err(e) => {
                     tracing::warn!(error = ?e, "failed to active-connect published port socket");
@@ -118,37 +186,57 @@ impl PortPublishBridge {
                 if !socket.is_open() {
                     true
                 } else {
-                    let mut stream = self.bridges.remove(&handle).unwrap();
+                    let mut bridge = self.bridges.remove(&handle).unwrap();
 
-                    let mut host_buf = [0u8; 65536];
-                    match stream.read(&mut host_buf) {
-                        Ok(0) => true,
-                        Ok(n) => {
-                            let _ = socket.send_slice(&host_buf[..n]);
-                            if socket.can_recv() {
-                                let mut buf = vec![0u8; self.mtu as usize];
-                                if let Ok(len) = socket.recv_slice(&mut buf)
-                                    && len > 0
-                                {
-                                    let _ = stream.write_all(&buf[..len]);
+                    if socket.can_send() {
+                        tracing::info!(state = ?socket.state(), "published-port socket can_send");
+                        bridge.flush_h2g(socket);
+                    }
+
+                    let host_result = if socket.can_send() && bridge.h2g_overflow.is_none() {
+                        let mut host_buf = [0u8; 65536];
+                        match bridge.stream.read(&mut host_buf) {
+                            Ok(0) => Some(true),
+                            Ok(n) => {
+                                tracing::info!(bytes = n, state = ?socket.state(), "read host bytes for published port");
+                                let send_avail = socket.send_capacity().saturating_sub(socket.send_queue());
+                                let to_send = n.min(send_avail);
+                                if to_send > 0 {
+                                    tracing::info!(bytes = to_send, state = ?socket.state(), "forwarding host bytes into guest published-port socket");
+                                    let _ = socket.send_slice(&host_buf[..to_send]);
                                 }
+                                if to_send < n {
+                                    bridge.h2g_overflow = Some((host_buf[..n].to_vec(), to_send));
+                                }
+                                Some(false)
                             }
-                            self.bridges.insert(handle, stream);
+                            Err(e) if e.kind() == ErrorKind::WouldBlock => Some(false),
+                            Err(_) => Some(true),
+                        }
+                    } else {
+                        None
+                    };
+
+                    if socket.can_recv() {
+                        let mut buf = vec![0u8; self.mtu as usize];
+                        if let Ok(len) = socket.recv_slice(&mut buf)
+                            && len > 0
+                        {
+                            tracing::info!(bytes = len, state = ?socket.state(), "received guest bytes for published port");
+                            let _ = bridge.stream.write_all(&buf[..len]);
+                        }
+                    }
+
+                    match host_result {
+                        Some(true) => true,
+                        Some(false) => {
+                            self.bridges.insert(handle, bridge);
                             false
                         }
-                        Err(e) if e.kind() == ErrorKind::WouldBlock => {
-                            if socket.can_recv() {
-                                let mut buf = vec![0u8; self.mtu as usize];
-                                if let Ok(len) = socket.recv_slice(&mut buf)
-                                    && len > 0
-                                {
-                                    let _ = stream.write_all(&buf[..len]);
-                                }
-                            }
-                            self.bridges.insert(handle, stream);
+                        None => {
+                            self.bridges.insert(handle, bridge);
                             false
                         }
-                        Err(_) => true,
                     }
                 }
             };
@@ -192,8 +280,8 @@ impl PortPublishBridge {
     }
 
     fn close_bridge(&mut self, handle: SocketHandle, sockets: &mut SocketSet) {
-        if let Some(stream) = self.bridges.remove(&handle) {
-            let _ = stream.shutdown(Shutdown::Both);
+        if let Some(bridge) = self.bridges.remove(&handle) {
+            let _ = bridge.stream.shutdown(Shutdown::Both);
         }
 
         let socket = sockets.get_mut::<tcp::Socket>(handle);
@@ -213,6 +301,7 @@ mod tests {
         let config = PortMapConfig {
             host_port: 8080,
             container_port: 80,
+            target_ip: None,
         };
 
         let encoded = serde_json::to_string(&config).unwrap();
@@ -228,5 +317,21 @@ mod tests {
         assert_eq!(bridge.bridge_count(), 0);
         assert_eq!(bridge.port_map_count(), 0);
         assert_eq!(bridge.next_ephemeral_port(), 49152);
+    }
+
+    #[test]
+    fn test_remove_port_map_drops_listener() {
+        let mut bridge = PortPublishBridge::new(1500);
+        let config = PortMapConfig {
+            host_port: 38081,
+            container_port: 80,
+            target_ip: None,
+        };
+
+        bridge.add_port_map(config).expect("bind listener");
+        assert_eq!(bridge.port_map_count(), 1);
+
+        bridge.remove_port_map(config);
+        assert_eq!(bridge.port_map_count(), 0);
     }
 }

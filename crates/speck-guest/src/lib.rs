@@ -5,6 +5,8 @@ pub mod log_relay;
 #[cfg(target_os = "linux")]
 pub mod sock_forwarder;
 #[cfg(target_os = "linux")]
+pub mod tcp_forwarder;
+#[cfg(target_os = "linux")]
 pub mod vsock_echo;
 
 // ---------------------------------------------------------------------------

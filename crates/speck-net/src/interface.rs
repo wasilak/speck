@@ -36,6 +36,13 @@ impl SmoltcpInterface {
                     config.subnet_prefix,
                 ))
                 .unwrap();
+            // Published-port proxying dials containers on Docker's default bridge
+            // network (`172.17.0.0/16`) from the bridge gateway address
+            // `172.17.0.1`. Add that address explicitly so reply packets to the
+            // source IP are accepted by the interface instead of being dropped.
+            addrs
+                .push(IpCidr::new(IpAddress::v4(172, 17, 0, 1), 16))
+                .unwrap();
         });
         iface.set_any_ip(true);
 

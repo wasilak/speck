@@ -2622,6 +2622,7 @@ dependencies = [
  "bollard",
  "containerd-client",
  "futures-util",
+ "http-body-util",
  "hyper",
  "hyper-util",
  "prost",

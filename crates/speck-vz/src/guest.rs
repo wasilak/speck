@@ -1,7 +1,7 @@
 use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
 
-use crate::config::{GuestConfig, PortMapConfig};
+use crate::config::{GuestConfig, PortMapConfig, PortMapUpdate};
 use crate::error::Error;
 use crate::vm_thread::{VmCommand, VmThread};
 use crate::vsock::VzSocket;
@@ -85,7 +85,27 @@ impl Guest {
     }
 
     pub fn add_port_map(&self, host_port: u16, container_port: u16) -> Result<(), Error> {
-        self.thread.add_port_map(host_port, container_port)
+        self.thread.add_port_map_config(PortMapConfig {
+            host_port,
+            container_port,
+            target_ip: None,
+        })
+    }
+
+    pub fn remove_port_map(&self, host_port: u16, container_port: u16) -> Result<(), Error> {
+        self.thread.remove_port_map_config(PortMapConfig {
+            host_port,
+            container_port,
+            target_ip: None,
+        })
+    }
+
+    pub fn add_port_map_config(&self, config: PortMapConfig) -> Result<(), Error> {
+        self.thread.add_port_map_config(config)
+    }
+
+    pub fn remove_port_map_config(&self, config: PortMapConfig) -> Result<(), Error> {
+        self.thread.remove_port_map_config(config)
     }
 
     /// Update the pre-provisioned `virtiofs-binds` VirtioFS device with Docker
@@ -108,7 +128,7 @@ impl Guest {
     /// to wire the netstack's receiver so that subsequent `add_port_map` calls are forwarded.
     pub fn set_port_map_channel(
         &self,
-        tx: tokio::sync::mpsc::Sender<PortMapConfig>,
+        tx: tokio::sync::mpsc::Sender<PortMapUpdate>,
     ) -> Result<(), Error> {
         self.thread.set_port_map_channel(tx)
     }

@@ -652,7 +652,7 @@ pub async fn run_up(
         .ready_vsock_port(9000)
         .docker_vsock_port(9003)
         .log_relay_vsock_port(9005)
-        .cmdline("console=hvc0 panic=-1 container_backend=dockerd docker_vsock_port=9003 ready_vsock_port=9000 dns_vsock_port=53 speck_guest_ip=172.16.0.2 speck_gateway=172.16.0.1 log_relay_vsock_port=9005")
+        .cmdline("console=hvc0 panic=-1 container_backend=dockerd docker_vsock_port=9003 ready_vsock_port=9000 dns_vsock_port=53 speck_guest_ip=172.16.0.2 speck_gateway=172.16.0.1 log_relay_vsock_port=9005 tcp_forwarder_vsock_port=9006")
         .speck_home(speck_home)
         .network(NetworkConfig::default())
         .dns_vsock_port(53)
@@ -691,7 +691,7 @@ pub async fn run_up(
 
     write_vm_resource_snapshot(speck_home, &effective.vm)?;
 
-    let (port_map_tx, port_map_rx) = tokio::sync::mpsc::channel::<speck_net::PortMapConfig>(64);
+    let (port_map_tx, port_map_rx) = tokio::sync::mpsc::channel::<speck_net::PortMapUpdate>(64);
     guest.set_port_map_channel(port_map_tx)?;
     let netstack_fd = guest.netstack_fd()?;
     let dns_vsock_fd = match guest.connect_dns_vsock(53) {

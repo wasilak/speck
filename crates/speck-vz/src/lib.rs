@@ -11,7 +11,7 @@ mod virtiofs;
 mod vm_thread;
 mod vsock;
 
-pub use config::{GuestConfig, PortMapConfig, VolumeMountConfig};
+pub use config::{GuestConfig, PortMapConfig, PortMapUpdate, VolumeMountConfig};
 pub use error::{Error, Result};
 pub use guest::Guest;
 pub use speck_core::{EngineEvent, EventSink, VmState};

@@ -53,7 +53,7 @@ impl SpeckDockerd {
             "serving speck.sock via guest dockerd passthrough proxy"
         );
 
-        let router = proxy::build_proxy_router(internal_sock_path, vm_state);
+        let router = proxy::build_proxy_router(internal_sock_path, Some(guest), vm_state);
         let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
         tokio::spawn(server::serve(router, sock_path.clone(), shutdown_rx));

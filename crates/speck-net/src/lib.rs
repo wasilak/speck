@@ -13,7 +13,7 @@ pub(crate) mod tcp_listener;
 pub use dns::spawn_dns_proxy;
 pub use error::{Error, Result};
 pub use mtu::{detect_host_mtu, mss_for_mtu};
-pub use port_publish::{PortMapConfig, PortPublishBridge};
+pub use port_publish::{PortMapConfig, PortMapUpdate, PortPublishBridge};
 pub use resolver_table::{ResolverTable, read_resolver_table_once, spawn_resolver_watcher};
 
 use std::os::unix::io::RawFd;
@@ -59,7 +59,7 @@ impl SpeckNet {
         fd: RawFd,
         vsock_fd: Option<RawFd>,
         port_maps: Vec<PortMapConfig>,
-        mut port_map_rx: Option<mpsc::Receiver<PortMapConfig>>,
+        mut port_map_rx: Option<mpsc::Receiver<PortMapUpdate>>,
         resolver_rx: tokio::sync::watch::Receiver<crate::resolver_table::ResolverTable>,
     ) -> Vec<tokio::task::JoinHandle<std::result::Result<(), Error>>> {
         let mut handles = Vec::new();
@@ -137,9 +137,16 @@ impl SpeckNet {
                 reorigin.poll_bridges(net.sockets_mut());
 
                 if let Some(rx) = port_map_rx.as_mut() {
-                    while let Ok(port_map) = rx.try_recv() {
-                        if let Err(e) = port_publish.add_port_map(port_map) {
-                            tracing::warn!(host_port = port_map.host_port, error = %e, "failed to add dynamic port map");
+                    while let Ok(update) = rx.try_recv() {
+                        match update {
+                            PortMapUpdate::Add(port_map) => {
+                                if let Err(e) = port_publish.add_port_map(port_map) {
+                                    tracing::warn!(host_port = port_map.host_port, error = %e, "failed to add dynamic port map");
+                                }
+                            }
+                            PortMapUpdate::Remove(port_map) => {
+                                port_publish.remove_port_map(port_map);
+                            }
                         }
                     }
                 }
