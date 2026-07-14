@@ -38,6 +38,8 @@ check "rm"                        docker rm smoke1
 check "run foreground w/ output"  sh -c 'docker run --rm alpine echo hello | grep -q hello'
 check "run image CMD fallback"    docker run -d --name smoke2 nginx:alpine
 check "port publish"              sh -c 'docker rm -f smoke2 >/dev/null 2>&1; docker run -d --name smoke2 -p 18099:80 nginx:alpine && sleep 3 && curl -sf --max-time 5 http://localhost:18099/ >/dev/null'
+check "port inspect HostIp"       sh -c 'docker inspect smoke2 | grep -q '"'"'"HostIp": "127.0.0.1"'"'"''
+check "docker port output"        sh -c 'docker port smoke2 | grep -q "127.0.0.1:18099"'
 check "wait"                      sh -c 'docker run -d --name smokew alpine true && docker wait smokew && docker rm smokew'
 check "events (2s window)"        sh -c 'timeout 2 docker events; [ $? -eq 124 -o $? -eq 0 ]'
 check "volume create/ls/rm"       sh -c 'docker volume create smokevol && docker volume ls | grep -q smokevol && docker volume rm smokevol'

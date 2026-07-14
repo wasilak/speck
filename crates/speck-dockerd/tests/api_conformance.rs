@@ -349,6 +349,263 @@ async fn test_inspect_shows_port_bindings() {
 }
 
 #[tokio::test]
+#[ignore = "requires signed binary + spk up running + nginx:alpine image"]
+async fn test_inspect_host_ip_live() {
+    if std::env::var("SPECK_TEST_INTEGRATION").is_err() {
+        eprintln!("skipping integration test: SPECK_TEST_INTEGRATION not set");
+        return;
+    }
+    let result = tokio::time::timeout(Duration::from_secs(30), async {
+        let docker = speck_docker();
+        let _ = docker
+            .remove_container(
+                "test-inspect-hostip",
+                Some(RemoveContainerOptions {
+                    force: true,
+                    ..Default::default()
+                }),
+            )
+            .await;
+
+        let mut port_bindings: HashMap<String, Option<Vec<PortBinding>>> = HashMap::new();
+        port_bindings.insert(
+            "80/tcp".to_string(),
+            Some(vec![PortBinding {
+                host_ip: Some("127.0.0.1".to_string()),
+                host_port: Some("18082".to_string()),
+            }]),
+        );
+
+        let config = ContainerCreateBody {
+            image: Some("nginx:alpine".to_string()),
+            host_config: Some(HostConfig {
+                port_bindings: Some(port_bindings),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let options = CreateContainerOptionsBuilder::default()
+            .name("test-inspect-hostip")
+            .build();
+        let response = docker
+            .create_container(Some(options), config)
+            .await
+            .expect("create container");
+        let container_id = response.id;
+
+        docker
+            .start_container(&container_id, None::<StartContainerOptions>)
+            .await
+            .expect("start nginx");
+
+        // Give nginx a moment to bind its port.
+        tokio::time::sleep(Duration::from_secs(2)).await;
+
+        let inspect = docker
+            .inspect_container(&container_id, None::<InspectContainerOptions>)
+            .await
+            .expect("inspect container");
+
+        let ports = inspect
+            .network_settings
+            .as_ref()
+            .and_then(|ns| ns.ports.as_ref())
+            .expect("NetworkSettings.Ports should be present");
+        let binding = ports
+            .get("80/tcp")
+            .and_then(|bindings| bindings.as_ref())
+            .and_then(|bindings| bindings.first())
+            .expect("80/tcp should have a port binding");
+        assert_eq!(
+            binding.host_ip.as_deref(),
+            Some("127.0.0.1"),
+            "HostIp must be rewritten to 127.0.0.1 for host reachability"
+        );
+        assert_eq!(
+            binding.host_port.as_deref(),
+            Some("18082"),
+            "HostPort must be preserved"
+        );
+
+        docker
+            .remove_container(
+                &container_id,
+                Some(RemoveContainerOptions {
+                    force: true,
+                    ..Default::default()
+                }),
+            )
+            .await
+            .expect("remove container");
+    })
+    .await;
+    assert!(result.is_ok(), "test_inspect_host_ip_live timed out after 30s");
+}
+
+#[tokio::test]
+#[ignore = "requires signed binary + spk up running + nginx:alpine image"]
+async fn test_port_command_live() {
+    if std::env::var("SPECK_TEST_INTEGRATION").is_err() {
+        eprintln!("skipping integration test: SPECK_TEST_INTEGRATION not set");
+        return;
+    }
+    let result = tokio::time::timeout(Duration::from_secs(30), async {
+        let docker = speck_docker();
+        let _ = docker
+            .remove_container(
+                "test-port-command",
+                Some(RemoveContainerOptions {
+                    force: true,
+                    ..Default::default()
+                }),
+            )
+            .await;
+
+        let mut port_bindings: HashMap<String, Option<Vec<PortBinding>>> = HashMap::new();
+        port_bindings.insert(
+            "80/tcp".to_string(),
+            Some(vec![PortBinding {
+                host_ip: Some("0.0.0.0".to_string()),
+                host_port: Some("18083".to_string()),
+            }]),
+        );
+
+        let config = ContainerCreateBody {
+            image: Some("nginx:alpine".to_string()),
+            host_config: Some(HostConfig {
+                port_bindings: Some(port_bindings),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let options = CreateContainerOptionsBuilder::default()
+            .name("test-port-command")
+            .build();
+        let response = docker
+            .create_container(Some(options), config)
+            .await
+            .expect("create container");
+        let container_id = response.id;
+
+        docker
+            .start_container(&container_id, None::<StartContainerOptions>)
+            .await
+            .expect("start nginx");
+
+        tokio::time::sleep(Duration::from_secs(2)).await;
+
+        // docker port uses inspect under the hood — verify the binding is host-reachable
+        let inspect = docker
+            .inspect_container(&container_id, None::<InspectContainerOptions>)
+            .await
+            .expect("inspect container");
+
+        let ports = inspect
+            .network_settings
+            .as_ref()
+            .and_then(|ns| ns.ports.as_ref())
+            .expect("NetworkSettings.Ports should be present");
+        let binding = ports
+            .get("80/tcp")
+            .and_then(|bindings| bindings.as_ref())
+            .and_then(|bindings| bindings.first())
+            .expect("80/tcp should have a port binding");
+        assert_eq!(
+            binding.host_ip.as_deref(),
+            Some("127.0.0.1"),
+            "docker port must show host-reachable 127.0.0.1, not guest-internal 0.0.0.0"
+        );
+        assert_eq!(binding.host_port.as_deref(), Some("18083"));
+
+        docker
+            .remove_container(
+                &container_id,
+                Some(RemoveContainerOptions {
+                    force: true,
+                    ..Default::default()
+                }),
+            )
+            .await
+            .expect("remove container");
+    })
+    .await;
+    assert!(result.is_ok(), "test_port_command_live timed out after 30s");
+}
+
+#[tokio::test]
+#[ignore = "requires signed binary + spk up running + live restart cycle"]
+async fn test_restart_gate_live() {
+    if std::env::var("SPECK_TEST_INTEGRATION").is_err() {
+        eprintln!("skipping integration test: SPECK_TEST_INTEGRATION not set");
+        return;
+    }
+    let result = tokio::time::timeout(Duration::from_secs(60), async {
+        let docker = speck_docker();
+
+        // Discover speck binary
+        let speck_bin = std::env::var("SPECK_BIN").unwrap_or_else(|_| {
+            let candidates = [
+                "target/release/spk",
+                "target/debug/spk",
+            ];
+            for c in &candidates {
+                if std::path::Path::new(c).exists() {
+                    return c.to_string();
+                }
+            }
+            panic!("spk binary not found. Set SPECK_BIN or build with cargo build --release");
+        });
+
+        // Spawn spk restart in the background
+        let mut restart_cmd = tokio::process::Command::new(&speck_bin);
+        restart_cmd.arg("restart");
+        let mut restart_child = restart_cmd
+            .spawn()
+            .expect("spawn spk restart");
+
+        // Poll Docker API during restart window — expect at least one 503
+        let mut saw_503 = false;
+        let poll_start = tokio::time::Instant::now();
+        while poll_start.elapsed() < Duration::from_secs(15) {
+            match docker.list_containers(None::<ListContainersOptions>).await {
+                Ok(_) => {}
+                Err(bollard::errors::Error::DockerResponseServerError {
+                    status_code: 503, ..
+                }) => {
+                    saw_503 = true;
+                }
+                Err(err) => {
+                    eprintln!("unexpected error during restart poll: {err}");
+                }
+            }
+            if saw_503 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+
+        assert!(saw_503, "must receive at least one 503 during spk restart");
+
+        // Wait for restart to complete, then assert recovery
+        let _ = restart_child.wait().await;
+
+        // Poll until Docker API recovers (up to 30s)
+        let recovery_start = tokio::time::Instant::now();
+        let mut recovered = false;
+        while recovery_start.elapsed() < Duration::from_secs(30) {
+            if docker.ping().await.is_ok() {
+                recovered = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+        assert!(recovered, "Docker API must recover after spk restart completes");
+    })
+    .await;
+    assert!(result.is_ok(), "test_restart_gate_live timed out after 60s");
+}
+
+#[tokio::test]
 async fn test_logs_follow_streams_delayed_output() {
     if std::env::var("SPECK_TEST_INTEGRATION").is_err() {
         eprintln!("skipping integration test: SPECK_TEST_INTEGRATION not set");
