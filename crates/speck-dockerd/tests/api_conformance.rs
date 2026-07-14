@@ -1145,6 +1145,146 @@ async fn test_port_publish_nginx() {
         .expect("remove nginx container");
 }
 
+/// Verify that stop/remove both tear down localhost listeners and that a forced
+/// remove allows the same host port to be rebound immediately.
+#[tokio::test]
+#[ignore = "requires signed binary + spk up running + nginx:alpine image + live localhost listener cleanup"]
+async fn test_port_publish_stale_listener_cleanup() {
+    async fn assert_published_http(port: u16) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let mut tcp = TcpStream::connect(("127.0.0.1", port))
+            .await
+            .expect("published port should accept localhost connections");
+        tcp.write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+            .await
+            .expect("write HTTP request to published port");
+
+        let mut response = Vec::new();
+        tcp.read_to_end(&mut response)
+            .await
+            .expect("read HTTP response from published port");
+
+        let response_str = String::from_utf8_lossy(&response);
+        assert!(
+            response_str.contains("nginx"),
+            "HTTP response from published port should contain 'nginx', got: {response_str:.80}"
+        );
+    }
+
+    let docker = speck_docker();
+    let host_port = 18099;
+    let primary_name = "test-port-cleanup-primary";
+    let rebound_name = "test-port-cleanup-rebind";
+
+    let mut port_bindings: HashMap<String, Option<Vec<PortBinding>>> = HashMap::new();
+    port_bindings.insert(
+        "80/tcp".to_string(),
+        Some(vec![PortBinding {
+            host_ip: Some("127.0.0.1".to_string()),
+            host_port: Some(host_port.to_string()),
+        }]),
+    );
+
+    let config = ContainerCreateBody {
+        image: Some("nginx:alpine".to_string()),
+        host_config: Some(HostConfig {
+            port_bindings: Some(port_bindings.clone()),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+
+    let primary_id = docker
+        .create_container(
+            Some(CreateContainerOptionsBuilder::default().name(primary_name).build()),
+            config,
+        )
+        .await
+        .expect("create primary nginx container")
+        .id;
+
+    docker
+        .start_container(&primary_id, None::<StartContainerOptions>)
+        .await
+        .expect("start primary nginx");
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert_published_http(host_port).await;
+
+    // Stop by short container ID to exercise id-resolution cleanup separately
+    // from the alias-based rm -f path below.
+    let primary_short_id = primary_id.chars().take(12).collect::<String>();
+    docker
+        .stop_container(
+            &primary_short_id,
+            None::<bollard::query_parameters::StopContainerOptions>,
+        )
+        .await
+        .expect("stop primary nginx by short id");
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert!(
+        TcpStream::connect(("127.0.0.1", host_port)).await.is_err(),
+        "localhost port {host_port} should close after stop"
+    );
+
+    docker
+        .start_container(&primary_short_id, None::<StartContainerOptions>)
+        .await
+        .expect("restart primary nginx by short id");
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert_published_http(host_port).await;
+
+    docker
+        .remove_container(
+            primary_name,
+            Some(RemoveContainerOptions {
+                force: true,
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("force-remove primary nginx by alias");
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert!(
+        TcpStream::connect(("127.0.0.1", host_port)).await.is_err(),
+        "localhost port {host_port} should close after rm -f"
+    );
+
+    let rebound_id = docker
+        .create_container(
+            Some(CreateContainerOptionsBuilder::default().name(rebound_name).build()),
+            ContainerCreateBody {
+                image: Some("nginx:alpine".to_string()),
+                host_config: Some(HostConfig {
+                    port_bindings: Some(port_bindings),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("create rebound nginx container")
+        .id;
+
+    docker
+        .start_container(&rebound_id, None::<StartContainerOptions>)
+        .await
+        .expect("start rebound nginx");
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert_published_http(host_port).await;
+
+    docker
+        .remove_container(
+            rebound_name,
+            Some(RemoveContainerOptions {
+                force: true,
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("remove rebound nginx container");
+}
+
 /// Verify that DNS resolves inside a container, confirming that Speck's host-resolver
 /// path is used rather than a backend-managed DNS that ignores macOS scoped resolvers.
 ///
