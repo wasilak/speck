@@ -17,7 +17,7 @@ pub use guest::Guest;
 pub use speck_core::{EngineEvent, EventSink, VmState};
 pub use virtiofs::{
     BIND_MOUNTS_GUEST_ROOT, BIND_MOUNTS_TAG, bind_mount_guest_source_path,
-    container_path_to_share_name,
+    bind_mount_guest_source_path_for_namespace, container_path_to_share_name,
 };
 pub use vsock::VzSocket;
 

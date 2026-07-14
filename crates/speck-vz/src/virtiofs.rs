@@ -63,7 +63,40 @@ pub fn bind_mount_guest_source_path(path: &Path) -> PathBuf {
         path.is_absolute(),
         "bind mount guest source paths require absolute container paths"
     );
-    Path::new(BIND_MOUNTS_GUEST_ROOT).join(container_path_to_share_name(path))
+    Path::new(BIND_MOUNTS_GUEST_ROOT).join(bind_mount_share_name(None, path))
+}
+
+/// Convert a validated absolute container path plus runtime namespace into a
+/// guest-visible bind source path that cannot collide with other containers.
+pub fn bind_mount_guest_source_path_for_namespace(namespace: &str, path: &Path) -> PathBuf {
+    assert!(
+        path.is_absolute(),
+        "bind mount guest source paths require absolute container paths"
+    );
+    Path::new(BIND_MOUNTS_GUEST_ROOT).join(bind_mount_share_name(Some(namespace), path))
+}
+
+fn bind_mount_share_name(namespace: Option<&str>, path: &Path) -> String {
+    let share_name = container_path_to_share_name(path);
+    let raw_name = match namespace {
+        Some(namespace) => format!("{namespace}--{share_name}"),
+        None => share_name,
+    };
+    canonicalize_bind_share_name(raw_name)
+}
+
+#[cfg(target_os = "macos")]
+fn canonicalize_bind_share_name(raw_name: String) -> String {
+    let name_ns = NSString::from_str(&raw_name);
+    let canonical = unsafe { VZMultipleDirectoryShare::canonicalizedNameFromName(&name_ns) };
+    canonical
+        .map(|value| objc2::rc::autoreleasepool(|pool| unsafe { value.to_str(pool).to_owned() }))
+        .unwrap_or(raw_name)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn canonicalize_bind_share_name(raw_name: String) -> String {
+    raw_name
 }
 
 /// Derive a stable VirtioFS tag for an identity mount path.
@@ -265,7 +298,9 @@ pub fn configure_virtiofs_devices(
         let url = NSURL::fileURLWithPath(&path_str);
 
         let shared_dir = unsafe {
-            VZSharedDirectory::initWithURL_readOnly(VZSharedDirectory::alloc(), &url, true)
+            // Identity roots back direct host-path bind mounts for common macOS
+            // paths, so they must preserve writable semantics for `:rw` binds.
+            VZSharedDirectory::initWithURL_readOnly(VZSharedDirectory::alloc(), &url, false)
         };
         let share = unsafe {
             VZSingleDirectoryShare::initWithDirectory(VZSingleDirectoryShare::alloc(), &shared_dir)
@@ -396,7 +431,10 @@ pub fn update_virtiofs_bind_mounts(
         NSMutableDictionary::<NSString, VZSharedDirectory>::init(NSMutableDictionary::alloc());
 
     for bind in binds {
-        let share_name = container_path_to_share_name(&bind.container_path);
+        let share_name = bind_mount_share_name(
+            bind.runtime_namespace.as_deref(),
+            &bind.container_path,
+        );
 
         // Validate the share name using Apple's own canonicalization.
         let name_ns = NSString::from_str(&share_name);
@@ -484,6 +522,7 @@ mod tests {
             container_path: "/app".into(),
             read_only: false,
             volume_name: None,
+            runtime_namespace: None,
         }];
         let home = Path::new("/tmp/speck-home");
         let result = cmdline_virtiofs_arg(&mounts, home, &[], None);
@@ -500,12 +539,14 @@ mod tests {
                 container_path: "/app".into(),
                 read_only: false,
                 volume_name: None,
+                runtime_namespace: None,
             },
             VolumeMountConfig {
                 host_path: "/Users/user/config".into(),
                 container_path: "/etc/config".into(),
                 read_only: true,
                 volume_name: None,
+                runtime_namespace: None,
             },
         ];
         let home = Path::new("/tmp/speck-home");
@@ -666,6 +707,27 @@ mod tests {
             bind_mount_guest_source_path(container_path),
             expected,
             "Phase 21 bind helper must compose the runtime bind root with container_path_to_share_name()"
+        );
+    }
+
+    #[test]
+    fn phase21_namespaced_bind_mount_guest_source_path_prefixes_namespace() {
+        let guest_path =
+            bind_mount_guest_source_path_for_namespace("b42", std::path::Path::new("/data"));
+        assert_eq!(
+            guest_path,
+            std::path::PathBuf::from("/run/speck/binds/b42--..data"),
+            "per-container bind namespaces must prefix the share name under the runtime bind root"
+        );
+    }
+
+    #[test]
+    fn phase21_namespaced_bind_mount_guest_source_paths_do_not_collide() {
+        let container_path = std::path::Path::new("/data");
+        assert_ne!(
+            bind_mount_guest_source_path_for_namespace("b1", container_path),
+            bind_mount_guest_source_path_for_namespace("b2", container_path),
+            "the same container path must map to different guest sources across runtime namespaces"
         );
     }
 }

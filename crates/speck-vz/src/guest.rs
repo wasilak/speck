@@ -113,13 +113,21 @@ impl Guest {
     ///
     /// Bind mounts are accumulated across containers: repeated calls append to the
     /// list and rebuild `VZMultipleDirectoryShare` on the running VM so every
-    /// container's bind-mounted host paths remain visible.  Returns
+    /// container's bind-mounted host paths remain visible. Returns
     /// `Err(NotRunning)` if the VM is not yet started.
     pub fn add_bind_mounts(
         &self,
         binds: Vec<crate::config::VolumeMountConfig>,
     ) -> Result<(), Error> {
         self.thread.update_bind_mounts(binds)
+    }
+
+    /// Remove bind mounts previously registered for a container.
+    pub fn remove_bind_mounts(
+        &self,
+        binds: Vec<crate::config::VolumeMountConfig>,
+    ) -> Result<(), Error> {
+        self.thread.remove_bind_mounts(binds)
     }
 
     /// Register the netstack port-map sender with the VM thread.

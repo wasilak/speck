@@ -305,6 +305,7 @@ pub async fn start(State(state): State<AppState>, Path(id): Path<String>) -> Res
                     container_path: b.container_path,
                     read_only: b.read_only,
                     volume_name: None,
+                    runtime_namespace: None,
                 }),
                 Err(e) => {
                     tracing::warn!(

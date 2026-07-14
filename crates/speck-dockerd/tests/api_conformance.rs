@@ -1008,9 +1008,22 @@ async fn test_bind_mount_host_path_live_updates() {
     std::fs::write(&tmp_file, "before-update\n").expect("write initial bind file");
 
     let docker = speck_docker();
+    let _ = docker
+        .remove_container(
+            "test-bind-mount-live-updates",
+            Some(RemoveContainerOptions {
+                force: true,
+                ..Default::default()
+            }),
+        )
+        .await;
     let config = ContainerCreateBody {
         image: Some("alpine".to_string()),
-        cmd: Some(vec!["sleep".to_string(), "30".to_string()]),
+        cmd: Some(vec![
+            "sh".to_string(),
+            "-lc".to_string(),
+            "sleep 5; cat /bind/live-update.txt".to_string(),
+        ]),
         host_config: Some(HostConfig {
             binds: Some(vec![format!("{}:/bind:rw", tmp_dir.display())]),
             ..Default::default()
@@ -1031,29 +1044,32 @@ async fn test_bind_mount_host_path_live_updates() {
         .await
         .expect("start container");
 
+    tokio::time::sleep(Duration::from_secs(1)).await;
     std::fs::write(&tmp_file, "after-update\n").expect("update bind file after start");
 
-    let exec = docker
-        .create_exec(
-            &container_id,
-            ExecConfig {
-                cmd: Some(vec!["cat".to_string(), "/bind/live-update.txt".to_string()]),
-                attach_stdout: Some(true),
-                attach_stderr: Some(true),
-                ..Default::default()
-            },
-        )
+    docker
+        .wait_container(&container_id, None::<WaitContainerOptions>)
+        .try_collect::<Vec<_>>()
         .await
-        .expect("create exec");
+        .expect("wait container");
 
-    let output = docker.start_exec(&exec.id, None).await.expect("start exec");
-    let output_text = match output {
-        StartExecResults::Attached { output, .. } => {
-            let lines: Vec<_> = output.try_collect().await.expect("exec output stream");
-            lines.iter().map(|l| l.to_string()).collect::<String>()
-        }
-        StartExecResults::Detached => String::new(),
-    };
+    let logs = docker
+        .logs(
+            &container_id,
+            Some(LogsOptions {
+                stdout: true,
+                stderr: true,
+                ..Default::default()
+            }),
+        )
+        .try_collect::<Vec<_>>()
+        .await
+        .expect("get bind mount logs");
+    let output_text: String = logs
+        .iter()
+        .flat_map(|l| l.as_ref())
+        .map(|&b| b as char)
+        .collect();
 
     docker
         .remove_container(
@@ -1080,7 +1096,18 @@ async fn test_bind_mount_host_path_live_updates() {
 #[tokio::test]
 #[ignore = "requires signed binary + spk up running + nginx:alpine image"]
 async fn test_port_publish_nginx() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
     let docker = speck_docker();
+    let _ = docker
+        .remove_container(
+            "test-port-publish-backend",
+            Some(RemoveContainerOptions {
+                force: true,
+                ..Default::default()
+            }),
+        )
+        .await;
     let mut port_bindings: HashMap<String, Option<Vec<PortBinding>>> = HashMap::new();
     port_bindings.insert(
         "80/tcp".to_string(),
@@ -1115,13 +1142,15 @@ async fn test_port_publish_nginx() {
     // Give nginx a moment to bind its port.
     tokio::time::sleep(Duration::from_secs(3)).await;
 
-    // Verify actual TCP traffic through the published port on the macOS host.
+    // Verify actual HTTP traffic through the published port on the macOS host.
     // This exercises the full path: host → smoltcp port forwarding → VM → nginx.
     let mut tcp = TcpStream::connect("127.0.0.1:18080")
         .await
         .expect("TCP connect to published port 18080 should succeed");
 
-    use tokio::io::AsyncReadExt;
+    tcp.write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+        .await
+        .expect("write HTTP request to published port");
     let mut response = Vec::new();
     tcp.read_to_end(&mut response)
         .await
@@ -1176,6 +1205,25 @@ async fn test_port_publish_stale_listener_cleanup() {
     let host_port = 18099;
     let primary_name = "test-port-cleanup-primary";
     let rebound_name = "test-port-cleanup-rebind";
+
+    let _ = docker
+        .remove_container(
+            primary_name,
+            Some(RemoveContainerOptions {
+                force: true,
+                ..Default::default()
+            }),
+        )
+        .await;
+    let _ = docker
+        .remove_container(
+            rebound_name,
+            Some(RemoveContainerOptions {
+                force: true,
+                ..Default::default()
+            }),
+        )
+        .await;
 
     let mut port_bindings: HashMap<String, Option<Vec<PortBinding>>> = HashMap::new();
     port_bindings.insert(

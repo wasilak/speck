@@ -14,7 +14,6 @@ use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::server::conn::auto::Builder;
 use speck_core::VmState;
 use speck_dockerd::proxy::build_proxy_router;
-use speck_vz::bind_mount_guest_source_path;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
 use tower::ServiceExt;
@@ -335,19 +334,215 @@ async fn create_rewrites_bind_sources_for_guest_path() {
     let binds = forwarded["HostConfig"]["Binds"]
         .as_array()
         .expect("forwarded binds array");
-    assert_eq!(
-        binds,
-        &vec![
-            serde_json::Value::String(format!(
-                "{}:/var/data:ro",
-                bind_mount_guest_source_path(Path::new("/var/data")).display()
-            )),
-            serde_json::Value::String(format!(
-                "{}:/var/cache:rw",
-                bind_mount_guest_source_path(Path::new("/var/cache")).display()
-            )),
-        ]
+    let bind_specs: Vec<&str> = binds
+        .iter()
+        .map(|bind| bind.as_str().expect("bind spec string"))
+        .collect();
+    let canonical_host_dir = std::fs::canonicalize(&host_dir).expect("canonical host bind source");
+    assert_eq!(bind_specs.len(), 2);
+    assert_eq!(bind_specs[0], format!("{}:/var/data:ro", canonical_host_dir.display()));
+    assert_eq!(bind_specs[1], format!("{}:/var/cache:rw", canonical_host_dir.display()));
+}
+
+#[tokio::test]
+async fn create_uses_distinct_bind_namespaces_for_same_container_path() {
+    let dir = unique_dir();
+    let backend_sock = dir.join("backend.sock");
+    let proxy_sock = dir.join("proxy.sock");
+    let host_a = dir.join("host-a");
+    let host_b = dir.join("host-b");
+    std::fs::create_dir_all(&host_a).expect("create first host bind source");
+    std::fs::create_dir_all(&host_b).expect("create second host bind source");
+
+    let recorded = spawn_fake_dockerd(
+        &backend_sock,
+        FakeScript::Canned(
+            b"HTTP/1.1 201 CREATED\r\n\
+              Content-Type: application/json\r\n\
+              Content-Length: 16\r\n\r\n\
+              {\"Id\":\"ctr-123\"}"
+                .to_vec(),
+        ),
     );
+    spawn_proxy(build_proxy_router(backend_sock, None, running_state()), &proxy_sock);
+
+    for (index, host_dir) in [host_a, host_b].into_iter().enumerate() {
+        let create_body = serde_json::json!({
+            "Image": "alpine",
+            "HostConfig": {
+                "Binds": [format!("{}:/var/data:ro", host_dir.display())]
+            }
+        })
+        .to_string();
+
+        let mut client = UnixStream::connect(&proxy_sock)
+            .await
+            .expect("connect to proxy socket");
+        client
+            .write_all(
+                format!(
+                    "POST /v1.55/containers/create?case={index} HTTP/1.1\r\n\
+                     Host: docker\r\n\
+                     Content-Type: application/json\r\n\
+                     Content-Length: {}\r\n\r\n{}",
+                    create_body.len(),
+                    create_body
+                )
+                .as_bytes(),
+            )
+            .await
+            .expect("write create request");
+
+        let (status, _headers, body) = read_response(&mut client).await;
+        assert_eq!(status, 201);
+        assert_eq!(body, br#"{"Id":"ctr-123"}"#);
+    }
+
+    let reqs = recorded.lock().expect("recorded requests lock");
+    assert_eq!(reqs.len(), 2);
+    let canonical_host_a = std::fs::canonicalize(dir.join("host-a")).expect("canonical first host bind source");
+    let canonical_host_b = std::fs::canonicalize(dir.join("host-b")).expect("canonical second host bind source");
+    let first: serde_json::Value = serde_json::from_slice(&reqs[0].body).expect("first create body");
+    let second: serde_json::Value = serde_json::from_slice(&reqs[1].body).expect("second create body");
+    let first_bind = first["HostConfig"]["Binds"][0]
+        .as_str()
+        .expect("first bind string");
+    let second_bind = second["HostConfig"]["Binds"][0]
+        .as_str()
+        .expect("second bind string");
+    assert_ne!(first_bind, second_bind, "same container target must not reuse a global bind share name");
+    assert_eq!(first_bind, format!("{}:/var/data:ro", canonical_host_a.display()));
+    assert_eq!(second_bind, format!("{}:/var/data:ro", canonical_host_b.display()));
+}
+
+#[tokio::test]
+async fn create_preserves_bind_suffix_options_during_rewrite() {
+    let dir = unique_dir();
+    let backend_sock = dir.join("backend.sock");
+    let proxy_sock = dir.join("proxy.sock");
+    let host_dir = dir.join("host-with-options");
+    std::fs::create_dir_all(&host_dir).expect("create host bind source");
+
+    let recorded = spawn_fake_dockerd(
+        &backend_sock,
+        FakeScript::Canned(
+            b"HTTP/1.1 201 CREATED\r\n\
+              Content-Type: application/json\r\n\
+              Content-Length: 17\r\n\r\n\
+              {\"Id\":\"ctr-opts\"}"
+                .to_vec(),
+        ),
+    );
+    spawn_proxy(build_proxy_router(backend_sock, None, running_state()), &proxy_sock);
+
+    let create_body = serde_json::json!({
+        "Image": "alpine",
+        "HostConfig": {
+            "Binds": [format!("{}:/var/data:ro,z,rshared", host_dir.display())]
+        }
+    })
+    .to_string();
+
+    let mut client = UnixStream::connect(&proxy_sock)
+        .await
+        .expect("connect to proxy socket");
+    client
+        .write_all(
+            format!(
+                "POST /v1.55/containers/create HTTP/1.1\r\n\
+                 Host: docker\r\n\
+                 Content-Type: application/json\r\n\
+                 Content-Length: {}\r\n\r\n{}",
+                create_body.len(),
+                create_body
+            )
+            .as_bytes(),
+        )
+        .await
+        .expect("write create request");
+
+    let (status, _headers, body) = read_response(&mut client).await;
+    assert_eq!(status, 201);
+    assert_eq!(body, br#"{"Id":"ctr-opts"}"#);
+
+    let reqs = recorded.lock().expect("recorded requests lock");
+    assert_eq!(reqs.len(), 1);
+    let canonical_host_dir = std::fs::canonicalize(&host_dir).expect("canonical host bind source");
+    let forwarded: serde_json::Value =
+        serde_json::from_slice(&reqs[0].body).expect("forwarded create body as json");
+    let bind = forwarded["HostConfig"]["Binds"][0]
+        .as_str()
+        .expect("forwarded bind spec string");
+    assert_eq!(
+        bind,
+        format!("{}:/var/data:ro,z,rshared", canonical_host_dir.display()),
+        "bind suffix/options must be preserved verbatim after source rewrite: {bind}"
+    );
+}
+
+#[tokio::test]
+async fn create_preserves_named_volume_bind_specs_while_rewriting_host_binds() {
+    let dir = unique_dir();
+    let backend_sock = dir.join("backend.sock");
+    let proxy_sock = dir.join("proxy.sock");
+    let host_dir = dir.join("host-bind-src");
+    std::fs::create_dir_all(&host_dir).expect("create host bind source");
+
+    let recorded = spawn_fake_dockerd(
+        &backend_sock,
+        FakeScript::Canned(
+            b"HTTP/1.1 201 CREATED\r\n\
+              Content-Type: application/json\r\n\
+              Content-Length: 18\r\n\r\n\
+              {\"Id\":\"ctr-mixed\"}"
+                .to_vec(),
+        ),
+    );
+    spawn_proxy(build_proxy_router(backend_sock, None, running_state()), &proxy_sock);
+
+    let create_body = serde_json::json!({
+        "Image": "alpine",
+        "HostConfig": {
+            "Binds": [
+                "cache:/var/cache:rw",
+                format!("{}:/var/data:ro,z", host_dir.display())
+            ]
+        }
+    })
+    .to_string();
+
+    let mut client = UnixStream::connect(&proxy_sock)
+        .await
+        .expect("connect to proxy socket");
+    client
+        .write_all(
+            format!(
+                "POST /v1.55/containers/create HTTP/1.1\r\n\
+                 Host: docker\r\n\
+                 Content-Type: application/json\r\n\
+                 Content-Length: {}\r\n\r\n{}",
+                create_body.len(),
+                create_body
+            )
+            .as_bytes(),
+        )
+        .await
+        .expect("write create request");
+
+    let (status, _headers, body) = read_response(&mut client).await;
+    assert_eq!(status, 201);
+    assert_eq!(body, br#"{"Id":"ctr-mixed"}"#);
+
+    let reqs = recorded.lock().expect("recorded requests lock");
+    let forwarded: serde_json::Value =
+        serde_json::from_slice(&reqs[0].body).expect("forwarded create body as json");
+    let binds = forwarded["HostConfig"]["Binds"]
+        .as_array()
+        .expect("forwarded binds array");
+    assert_eq!(binds[0].as_str(), Some("cache:/var/cache:rw"));
+    let canonical_host_dir = std::fs::canonicalize(&host_dir).expect("canonical host bind source");
+    let rewritten = binds[1].as_str().expect("rewritten host bind string");
+    assert_eq!(rewritten, format!("{}:/var/data:ro,z", canonical_host_dir.display()));
 }
 
 #[tokio::test]
@@ -415,7 +610,7 @@ async fn create_rejects_invalid_bind_specs_with_400() {
     let cases = vec![
         (
             "relative host path",
-            "relative-host:/var/data:ro".to_string(),
+            "./relative-host:/var/data:ro".to_string(),
             "bind host path invalid",
         ),
         (
@@ -427,11 +622,6 @@ async fn create_rejects_invalid_bind_specs_with_400() {
             "container path traversal",
             format!("{}:/var/../data:ro", valid_host_dir.display()),
             "bind container path invalid",
-        ),
-        (
-            "invalid mode",
-            format!("{}:/var/data:read-only", valid_host_dir.display()),
-            "invalid bind mount mode",
         ),
     ];
 

@@ -670,7 +670,7 @@ pub async fn run_up(
         builder = builder.ca_certs_paths(&ca_cert_paths);
     }
 
-    for optional_root in ["/Volumes", "/private/tmp"] {
+    for optional_root in ["/Volumes", "/private/tmp", "/private/var"] {
         if std::path::Path::new(optional_root).exists() {
             builder = builder.add_identity_mount(optional_root);
         }

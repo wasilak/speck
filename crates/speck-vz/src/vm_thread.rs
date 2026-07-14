@@ -154,6 +154,10 @@ pub(crate) enum VmCommand {
         binds: Vec<crate::config::VolumeMountConfig>,
         reply: mpsc::Sender<std::result::Result<(), Error>>,
     },
+    RemoveBindMounts {
+        binds: Vec<crate::config::VolumeMountConfig>,
+        reply: mpsc::Sender<std::result::Result<(), Error>>,
+    },
     Shutdown,
 }
 
@@ -359,16 +363,19 @@ impl VmThread {
                             let _ = reply.send(Ok(()));
                         }
                         VmCommand::UpdateBindMounts { binds, reply } => {
-                            // Step 1: accumulate bind mounts under the mutex and
-                            // collect the full list (VM reference stays in ctrl).
+                            // Build the prospective bind list first. The VM-local
+                            // registry is only committed after the VirtioFS share
+                            // update succeeds, so failed updates cannot leak stale
+                            // bind state into later requests.
                             let all_binds = {
-                                let mut ctrl = control.lock().unwrap_or_else(|e| e.into_inner());
+                                let ctrl = control.lock().unwrap_or_else(|e| e.into_inner());
                                 if ctrl.state != InternalState::Running {
                                     let _ = reply.send(Err(Error::NotRunning));
                                     continue;
                                 }
-                                ctrl.docker_bind_mounts.extend(binds);
-                                ctrl.docker_bind_mounts.clone()
+                                let mut next = ctrl.docker_bind_mounts.clone();
+                                next.extend(binds);
+                                next
                             };
 
                             // Step 2: dispatch the VirtioFS update onto the serial
@@ -377,12 +384,13 @@ impl VmThread {
                             // re-borrow the machine inside the queue closure —
                             // the same pattern used by do_vsock_connect.
                             let control_clone = Arc::clone(&control);
+                            let binds_for_update = all_binds.clone();
                             let (done_tx, done_rx) =
                                 mpsc::channel::<std::result::Result<(), Error>>();
                             queue.exec_sync(move || {
                                 let ctrl = control_clone.lock().unwrap_or_else(|e| e.into_inner());
                                 let result = if let Some(ref vm) = *ctrl.machine {
-                                    crate::virtiofs::update_virtiofs_bind_mounts(vm, &all_binds)
+                                    crate::virtiofs::update_virtiofs_bind_mounts(vm, &binds_for_update)
                                 } else {
                                     Err(Error::NotRunning)
                                 };
@@ -394,6 +402,49 @@ impl VmThread {
                                     "bind mount update reply channel closed".into(),
                                 ))
                             });
+                            if result.is_ok() {
+                                let mut ctrl = control.lock().unwrap_or_else(|e| e.into_inner());
+                                ctrl.docker_bind_mounts = all_binds;
+                            }
+                            let _ = reply.send(result);
+                        }
+                        VmCommand::RemoveBindMounts { binds, reply } => {
+                            let all_binds = {
+                                let ctrl = control.lock().unwrap_or_else(|e| e.into_inner());
+                                if ctrl.state != InternalState::Running {
+                                    let _ = reply.send(Err(Error::NotRunning));
+                                    continue;
+                                }
+                                ctrl.docker_bind_mounts
+                                    .iter()
+                                    .filter(|existing| !binds.contains(existing))
+                                    .cloned()
+                                    .collect::<Vec<_>>()
+                            };
+
+                            let control_clone = Arc::clone(&control);
+                            let binds_for_update = all_binds.clone();
+                            let (done_tx, done_rx) =
+                                mpsc::channel::<std::result::Result<(), Error>>();
+                            queue.exec_sync(move || {
+                                let ctrl = control_clone.lock().unwrap_or_else(|e| e.into_inner());
+                                let result = if let Some(ref vm) = *ctrl.machine {
+                                    crate::virtiofs::update_virtiofs_bind_mounts(vm, &binds_for_update)
+                                } else {
+                                    Err(Error::NotRunning)
+                                };
+                                drop(ctrl);
+                                let _ = done_tx.send(result);
+                            });
+                            let result = done_rx.recv().unwrap_or_else(|_| {
+                                Err(Error::ChannelError(
+                                    "bind mount removal reply channel closed".into(),
+                                ))
+                            });
+                            if result.is_ok() {
+                                let mut ctrl = control.lock().unwrap_or_else(|e| e.into_inner());
+                                ctrl.docker_bind_mounts = all_binds;
+                            }
                             let _ = reply.send(result);
                         }
                         VmCommand::Shutdown => break,
@@ -1217,6 +1268,14 @@ impl VmThread {
     ) -> std::result::Result<(), Error> {
         let (tx, rx) = mpsc::channel();
         self.send_blocking(VmCommand::UpdateBindMounts { binds, reply: tx }, rx)?
+    }
+
+    pub fn remove_bind_mounts(
+        &self,
+        binds: Vec<crate::config::VolumeMountConfig>,
+    ) -> std::result::Result<(), Error> {
+        let (tx, rx) = mpsc::channel();
+        self.send_blocking(VmCommand::RemoveBindMounts { binds, reply: tx }, rx)?
     }
 
     pub fn join(&mut self) -> std::result::Result<(), Error> {

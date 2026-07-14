@@ -5,7 +5,7 @@ pub use speck_net::{PortMapConfig, PortMapUpdate};
 use speck_net::config::NetworkConfig;
 
 /// Configuration for a single VirtioFS volume mount.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VolumeMountConfig {
     /// Path on the host filesystem.
     pub host_path: PathBuf,
@@ -15,6 +15,8 @@ pub struct VolumeMountConfig {
     pub read_only: bool,
     /// Optional named volume name. `None` for bind mounts.
     pub volume_name: Option<String>,
+    /// Optional runtime namespace used to isolate per-container bind shares.
+    pub runtime_namespace: Option<String>,
 }
 
 /// Configuration for a micro-VM guest.

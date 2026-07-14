@@ -1,139 +1,111 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.2
-milestone_name: Hardened Runtime
-status: completed
-last_updated: "2026-07-09T13:02:44.171Z"
-last_activity: 2026-07-09 — Milestone v1.2 completed and archived
+milestone: v1.3
+milestone_name: Transparent Proxy Restoration
+status: executing
+stopped_at: Completed 21-03-PLAN.md
+last_updated: "2026-07-14T08:54:20.000Z"
+last_activity: 2026-07-14 -- Completed Phase 21 Plan 03
 progress:
-  total_phases: 7
-  completed_phases: 7
-  total_plans: 32
-  completed_plans: 32
+  total_phases: 5
+  completed_phases: 2
+  total_plans: 6
+  completed_plans: 6
   percent: 100
 ---
 
-# State — Milestone v1.2 Hardened Runtime
-
-**Status:** v1.2 milestone complete
-
-## Deferred Items
-
-Items acknowledged and deferred at milestone close on 2026-07-09:
-
-| Category | Item | Status |
-|----------|------|--------|
-| verification_gap | Phase 17: follow=true log live streaming (CONF-05) | gaps_found (addressed in Phase 17.1/19) |
-| verification_gap | Phase 17: HostIp default to "0.0.0.0" (CONF-06) | gaps_found (addressed in Phase 19) |
-| verification_gap | Phase 17: Network connect/disconnect existence validation | gaps_found (addressed in Phase 17.1) |
-| verification_gap | Phase 17.1: Follow-stream verification gap | gaps_found (addressed in Phase 19) |
+# State — Milestone v1.3 Transparent Proxy Restoration
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-07-06)
+See: .planning/PROJECT.md (updated 2026-07-09)
 
 **Core value:** A container runtime on Apple Silicon that never loses the network — micro-VMs inherit the host's routing/DNS live, surviving corporate VPNs and Cloudflare WARP where Docker Desktop fails.
-**Current focus:** Phase 19 — close-testcontainers-conformance-gaps-inserted
+**Current focus:** Phase 22 — response-rewriting-restart-gate
 
 ## Current Position
 
-Phase: Milestone v1.2 complete
-Plan: —
-Status: Awaiting next milestone
-Last activity: 2026-07-09 — Milestone v1.2 completed and archived
+Phase: 22 (response-rewriting-restart-gate) — NOT STARTED
+Plan: 0 planned
+Status: Phase 21 complete; next phase not started
+Last activity: 2026-07-14 -- Completed Phase 21 Plan 03
 
-## Milestone v1.2 Phase Overview
+Progress: [██████████] 100%
+
+## Milestone v1.3 Phase Overview
 
 | Phase | Name | Requirements | Status |
 |-------|------|--------------|--------|
-| 15 | Stability Foundation | TEST-01..07 | Complete ✅ |
-| 16 | Daemon Polish | DAEMON-01..04 | Complete ✅ |
-| 17 | testcontainers Conformance | CONF-01..07 | Complete ✅ |
-| 18 | Ad-hoc Development Distribution | DIST-01..04 | Complete ✅ |
+| 20 | Transparent Proxy Cutover | PROXY-01, PROXY-02, PROXY-03 | Complete |
+| 21 | Create Interception Middleware | MW-01, MW-02 | Complete |
+| 22 | Response Rewriting & Restart Gate | MW-03, MW-04 | Not started |
+| 23 | SpeckDockerd Retirement | PROXY-04 | Not started |
+| 24 | Conformance Exit Gate | GATE-01, GATE-02, GATE-03 | Not started |
+
+**Exit gate:** `scripts/conformance-smoke.sh` 18/18 (baseline 2026-07-11: 8/18) + intact `spk down/up` launchd cycle.
 
 ## Performance Metrics
 
-| Metric | v1.1 actual | v1.2 target |
-|--------|-------------|-------------|
-| Phases | 8 | 4 |
-| Plans | 26 | TBD |
-| Timeline | 5 days | TBD |
-| Phase 15 P02 | 4 min | 2 tasks | 4 files |
-| Phase 15-stability-foundation P04 | 40 | - tasks | - files |
-| Phase 15-stability-foundation P07 | 6min | 2 tasks | 3 files |
-| Phase 15-stability-foundation P08 | 15min | 3 tasks | 4 files |
-| Phase 16-daemon-polish P02 | 12min | 2 tasks | 2 files |
-| Phase 16-daemon-polish P03 | 12min | 2 tasks | 3 files |
-| Phase 16-daemon-polish P05 | 8min | 3 tasks | 4 files |
-| Phase 18-developer-id-distribution P03 | 3min | 2 tasks | 3 files |
-| Phase 18.1-close-gap-daemon-stop-restart-control-socket-reliability P01 | 14min | 3 tasks | 1 files |
-| Phase 17.1-close-testcontainers-conformance-gaps-follow-stream-hostip-d P01 | 1min | 3 tasks | 4 files |
-| Phase 17.1-close-testcontainers-conformance-gaps-follow-stream-hostip-d P03 | 94min | 3 tasks | 5 files |
-| Phase 17.1-close-testcontainers-conformance-gaps-follow-stream-hostip-d P04 | 20min | 2 tasks | 5 files |
+| Metric | v1.1 | v1.2 | v1.3 |
+|--------|------|------|------|
+| Phases | 8 | 7 | 5 planned |
+| Plans | 26 | 32 | 3 complete |
+| Timeline | 5 days | 3 days | Phase 20 complete |
+
+| Phase 20 Plan | Duration | Tasks | Files |
+|---------------|----------|-------|-------|
+| 20-01 | resumed | 3 | 1 |
+| 20-02 | resumed | 2 | 3 |
+| 20-03 | resumed | 2 | 3 |
+| 21-01 | 5 min | 2 | 5 |
+| 21-02 | 13 min | 2 | 4 |
+| 21-03 | 3 min | 2 | 3 |
 
 ## Accumulated Context
 
-### Roadmap Evolution
+### Key Decisions (carried into v1.3)
 
-- Phase 18.1 inserted after Phase 18: Close gap: daemon stop/restart control socket reliability (URGENT)
-- Phase 17.1 inserted after Phase 17: Close testcontainers conformance gaps (follow-stream, HostIp default, network validation) (URGENT)
-
-### Key Decisions (v1.2)
-
-- [Phase 17.1-01]: Skipped cherry-pick of orphaned commit 1b8416ba — its relay_created guard was already applied as b43fadcf on main ancestry, and its networks.rs deletions would undo network 404 validation (CONF-03)
-- [Phase 17.1-03]: Use the dockerd-managed containerd socket path under `/rootfs/run/docker/containerd/containerd.sock` when the standalone `/rootfs/run/containerd/containerd.sock` path is absent.
-- [Phase 17.1-03]: Keep resize-tool provisioning working without Docker Desktop by falling back to `skopeo` + Alpine APK extraction.
-- [Phase 17.1-04]: Empty-string HostIp normalizes via `filter(|ip| !ip.is_empty()).unwrap_or_else(...)` — handles both null and `""` uniformly. RetainedLogBuffer uses absolute offset semantics. Full live conformance suite gate deferred (requires interactive `spk up --foreground`).
-
-- CONSOLE-01 already implemented in `vm_thread.rs` — TEST-04 is verification + ticket closure, not new work
-- STATE-01/02 scope: moby already persists container/image state via BoltDB; SpeckDockerd only needs to persist its own network/volume name→ID metadata (JSON files, not SQLite)
-- CONF-01 wires SpeckDockerd axum server as the intercepting Docker API layer (replaces raw vsock byte-bridge)
-- `spk restart` is external process sequencing (stop + start) with `503 Retry-After`; in-process VM restart is out of scope for v1.2
-- JSON with atomic rename (write-to-tmp + rename) preferred over SQLite for network/volume metadata — scope is narrow, no query capability needed
+- **D-21 (LOCKED, 2026-07-11):** Docker API = transparent byte proxy to guest dockerd + thin allowlisted middleware (binds/ports/HostIp/503 only). Reverses v1.2 CONF-01 reimplementation. See CLAUDE.md "Architecture Invariants".
+- Guest already runs real dockerd 26.1.5 at `/run/speck/dockerd.sock`; vminitd `sock_forwarder` already forwards vsock ports to guest unix sockets.
+- `guest::docker_api_unix_proxy()` exists (raw byte proxy over hardened `bridge_vsock_unix`) — currently dead code; Phase 20 wires it back.
+- Prior art to adapt from SpeckDockerd before retirement: 503 restart middleware (VmState), port-map channel to netstack (`set_port_map_channel`), VirtioFS share config.
+- Middleware needs an HTTP-aware interception layer for create/inspect only — hijack/upgrade streams must stay raw bytes (sequencing: pure proxy → middleware incrementally → gate last).
+- Migration: images pulled into containerd namespace "speck" won't be visible to dockerd's store — document, don't build migration (Phase 23).
+- Phase 21.01 locked the guest-visible runtime bind root to `/run/speck/binds` via `speck_bind_root=...` on the kernel cmdline.
+- Phase 21.01 exports `bind_mount_guest_source_path` from `speck-vz` so later proxy bind rewrites reuse one path algorithm.
+- Phase 21.02 rewrites only `HostConfig.Binds` on `POST /containers/create`, leaving the rest of the Docker create payload structure intact.
+- Phase 21.02 keeps missing host paths as middleware-side 400 responses rather than adopting Docker-style host-path auto-create semantics.
+- Phase 21.03 resolves published-port cleanup through exact IDs, explicit aliases, and unique short-ID prefixes so `docker rm -f` and `docker stop` tear down the same localhost listener state.
+- Phase 21.03 joins localhost listener threads during shutdown, preventing stale accept loops from blocking immediate host-port reuse after cleanup.
 
 ### Watch-out Items
 
-- `notarytool submit --wait` exits 0 on rejection — CI must parse JSON `.status`, not `$?`
-- `mockall` `#[automock]` must appear **before** `#[async_trait]`, not after
-- Serial console reader thread must be started **before** `VZVirtualMachine.start()` — pipe buffer fills on boot burst
-- `com.apple.security.virtualization` entitlement must be `<true/>` (boolean), not `<string>true</string>` — wrong type is silent SIGKILL after notarization
-- `spk restart` must await stop reply channel before issuing start — races GCD completion handler otherwise
+- Never let a blocking downstream write stall reads from a VZ vsock fd — drain eagerly (Invariant #4; regression test `bridge_drains_vsock_with_stalled_downstream`).
+- All socketpair/vsock fds crossing the VM boundary need explicit 4MB `SO_SNDBUF`/`SO_RCVBUF`; on macOS AF_UNIX only the writer's SNDBUF governs capacity (Invariant #5).
+- `spk restart` must await stop reply channel before issuing start — races GCD completion handler otherwise.
+- Block-scope RwLock write guards in middleware to avoid non-Send guards across `.await`.
+- Source-inspection test asserting speck.sock is served by the proxy must land with the Phase 20 wiring.
+- Internal dockerd transport is now pinned to `$SPECK_HOME/run/dockerd-proxy.sock` with 0700/0600 permissions.
 
-### Open Questions (from research)
+### Blockers/Concerns
 
-1. App Store Connect API key for CI notarization vs Apple ID + app-specific password — relevant to Phase 18
-2. Should `spk doctor` show last N lines of `console.log` on boot failure? (trivial; confirm scope before Phase 15 planning)
-3. Should `Syscalls` trait in `vminitd.rs` be `pub(crate)` only or `pub` for separate test binary? — relevant to Phase 15
-4. `PUT /containers/{id}/wait?condition=not-running` — in scope for CONF-07 or v1.3?
+- Live Phase 20 conformance blocked locally: `spk restart` rejects an unexpected `120` argument and direct `spk up --wait` fails `launchctl bootstrap`; `spk doctor` still reports missing virtualization entitlement after `cargo xtask codesign-dev`.
 
-## Quick Tasks Completed
+## Deferred Items
 
-| ID | Description | Date | Commits |
-|----|-------------|------|---------|
-| 260709-u4q | Fix pull/push throughput collapse: 4MB net socketpair buffers, unclamp advertised TCP window, 1MB smoltcp buffers | 2026-07-10 | 4ac3a9e0, 8c044e46 |
-| 260710-cpz | Fix control-socket probe deadlock (down/status/doctor); 1MiB port-publish buffers; egress drop logging; entitlement warning | 2026-07-10 | f7506798, ab256842, 8fc5e1e5 |
-| 260710-qzm | 4MB buffers on vsock connection fds (fixes host→guest direction) | 2026-07-10 | c0d60885 |
-| 260711-d5v | Decouple vsock bridge reads from downstream writes — fixes VZ 8KB guest→host truncation that broke docker ps and all gRPC responses >8KB | 2026-07-11 | a2e21312, facaf67d |
+Carried forward at v1.2 close (2026-07-09) and requirements definition (2026-07-12):
+
+| Category | Item | Status |
+|----------|------|--------|
+| deferred | Developer ID signing + notarization + Homebrew Cask | Requires Apple Developer Program |
+| deferred | Broader guest-outbound port coverage beyond 443/80 in reorigin | Future |
+| deferred | K3s/CRI integration prototype | Future |
+| deferred | Listener buffer memory tuning (12 × 2MB smoltcp listeners) | Future |
 
 ## Session Continuity
 
-**To resume:** Milestone v1.2 is complete. All Phase 17.1 gap-closure plans executed. Ready for milestone wrap-up audit or the next milestone / v1.3 planning.
+Last session: 2026-07-14T08:54:20.000Z
+Stopped at: Completed 21-03-PLAN.md
+Resume file: None
 
-## Decisions
-
-- [Phase ?]: Syscalls trait uses u64 for flags to allow cross-platform compilation
-- [Phase ?]: mount flag constants (MS_BIND=4096, MS_RELATIME=2097152) defined locally to avoid macOS libc dependency
-- [Phase ?]: mount_disks integration test excluded due to real filesystem deps; mount_early_filesystems validates mock pattern
-- [Phase 15-08]: Added source-inspection safety guard tests per file (no_unsafe_env_mutation) to enforce no raw env mutation in test code
-- [Phase 16-03]: spk restart uses external process sequencing (subprocess stop + start) with exit code guards — prevents double-VM on failed stop; PREPARE_RESTART signal sent over control socket for daemon 503 middleware
-- [Phase 16-05]: Used std::sync::RwLock instead of parking_lot for middleware VmState (parking_lot not in any crate's dep tree); did not modify guest::docker_api_unix_proxy signature — it's a raw byte proxy, middleware wiring belongs in SpeckDockerd axum layer
-- [Phase 18-03]: Active release distribution remains ad-hoc development-only; Developer ID, notarization, stapling, and official Homebrew Cask publication are deferred.
-- [Phase 18-03]: GitHub Releases upload `cargo xtask dist` non-notarized development artifacts instead of mutating the legacy Formula.
-- [Phase 18-03]: Legacy Formula is preserved as a clearly development-only install route until an equivalent official path exists.
-- [Phase ?]: Block-scoped RwLock write guard in PREPARE_RESTART to avoid non-Send guard across .await
-- [Phase ?]: Source-inspection tests locate error handlers via unique log message strings rather than Err(e) position
-
-## Operator Next Steps
-
-- Start the next milestone with /gsd-new-milestone
-- **v1.3 direction is LOCKED (D-21, 2026-07-11):** restore transparent byte-proxy to guest dockerd; SpeckDockerd shrinks to allowlisted middleware (binds/ports/HostIp/503). See CLAUDE.md "Architecture Invariants". Definition of done: `scripts/conformance-smoke.sh` passes 18/18 (baseline 2026-07-11: 8/18).
+**To resume:** Plan Phase 22 or execute it once response-rewrite and restart-gate plans exist.

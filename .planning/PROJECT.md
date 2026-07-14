@@ -12,14 +12,19 @@ v1.2 delivered hardened test coverage for the core DNS/networking stack (DNS pro
 
 **Known deferred:** Developer ID signing + notarization + Cask (requires Apple Developer Program). Verification gaps from Phase 17 acknowledged as resolved by subsequent gap-closure phases.
 
-## Next Milestone Goals
+## Current Milestone: v1.3 Transparent Proxy Restoration
 
-Open for definition. Candidate areas:
-- Developer ID distribution (BREW-DEVID)
-- Production DNS/VPN verification (DNS-01/03/05)
-- First-class `spk restart` command
-- Full testcontainers CI integration
-- K3s/CRI integration prototype
+**Goal:** Implement locked decision D-21 — `speck.sock` becomes a transparent byte proxy to the real dockerd running inside the guest; SpeckDockerd shrinks from a Docker API reimplementation to a thin allowlisted middleware.
+
+**Target features:**
+- Docker API served by transparent proxy to guest dockerd (`/run/speck/dockerd.sock`) over the hardened vsock bridge
+- Middleware allowlist only: container-create bind translation (VirtioFS), port-publish tracking for the host netstack, HostIp rewriting, 503 restart gate
+- Hijacked/upgraded streams (attach/exec) pass through byte-for-byte
+- Exit gate: `scripts/conformance-smoke.sh` 18/18 (baseline 2026-07-11: 8/18) + intact `spk down/up` launchd cycle
+
+**Context (2026-07-09 → 2026-07-11 debugging round):** three systemic transport bugs fixed with regression tests — netstack socketpair buffers (1.7KB/s pulls), control-socket probe deadlock (down/status/doctor hangs), VZ vsock 8KB data loss (docker ps h2 errors). The remaining conformance failures are all consequences of the CONF-01 reimplementation drift that D-21 reverses.
+
+**Out of scope for v1.3:** Developer ID distribution, K3s/CRI, GUI.
 
 ## Constraints
 
