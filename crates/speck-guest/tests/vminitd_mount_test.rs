@@ -15,6 +15,8 @@ use speck_guest::mount::{
     mount_rootfs_runtime_filesystems,
 };
 
+const VMINITD_SOURCE: &str = include_str!("../src/bin/vminitd.rs");
+
 // ---------------------------------------------------------------------------
 // Mock syscall implementation
 // ---------------------------------------------------------------------------
@@ -142,6 +144,40 @@ fn mount_rootfs_runtime_mounts_proc_sys_dev_then_tmpfs_run() {
         .returning(|_, _, _, _| 0);
 
     mount_rootfs_runtime_filesystems(&mock);
+}
+
+#[test]
+fn phase21_vminitd_mounts_runtime_bind_root_before_dockerd_start() {
+    let bind_root_parser = VMINITD_SOURCE
+        .find("fn parse_cmdline_bind_root(path: &str) -> Option<String>")
+        .expect("Phase 21 requires vminitd to parse speck_bind_root=PATH from /proc/cmdline");
+    let mount_helper = VMINITD_SOURCE[bind_root_parser..]
+        .find("fn mount_virtiofs_volumes(cmdline_path: &str)")
+        .map(|offset| bind_root_parser + offset)
+        .expect("Phase 21 requires mount_virtiofs_volumes to consume the runtime bind-root contract");
+    let binds_mount = VMINITD_SOURCE[mount_helper..]
+        .find("virtiofs-binds")
+        .map(|offset| mount_helper + offset)
+        .expect("Phase 21 requires mount_virtiofs_volumes to mount the fixed virtiofs-binds tag");
+    let boot_mount = VMINITD_SOURCE
+        .find("mount_virtiofs_volumes(\"/proc/cmdline\")")
+        .expect("Phase 21 boot path must mount the runtime bind root before dockerd starts");
+    let dockerd_spawn = VMINITD_SOURCE
+        .find("spawn_dockerd_with_restart")
+        .expect("boot path should support dockerd startup");
+
+    assert!(
+        VMINITD_SOURCE.contains("speck_bind_root="),
+        "Phase 21 requires a dedicated speck_bind_root=PATH kernel cmdline contract"
+    );
+    assert!(
+        bind_root_parser < binds_mount,
+        "Phase 21 bind-root parser must feed the virtiofs-binds mount logic"
+    );
+    assert!(
+        boot_mount < dockerd_spawn,
+        "Phase 21 requires vminitd to mount the runtime bind root before dockerd starts"
+    );
 }
 
 // ---------------------------------------------------------------------------

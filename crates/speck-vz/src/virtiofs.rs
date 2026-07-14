@@ -617,4 +617,39 @@ mod tests {
             "cmdline should contain ca_certs_tag=ca-certs, got: {result}"
         );
     }
+
+    #[test]
+    fn phase21_cmdline_contains_runtime_bind_root_contract() {
+        let mounts: Vec<VolumeMountConfig> = vec![];
+        let home = std::path::Path::new("/tmp/speck-home");
+        let result = cmdline_virtiofs_arg(&mounts, home, &[], None);
+        assert!(
+            result.contains("speck_bind_root=/run/speck/binds"),
+            "Phase 21 requires a fixed guest bind-root contract on the kernel cmdline: {result}"
+        );
+    }
+
+    #[test]
+    fn phase21_bind_mount_guest_source_path_uses_runtime_bind_root() {
+        let guest_path = bind_mount_guest_source_path(std::path::Path::new("/data"));
+        assert_eq!(
+            guest_path,
+            std::path::PathBuf::from("/run/speck/binds/..data"),
+            "Phase 21 bind helper must map /data to the deterministic guest source path under the runtime bind root"
+        );
+    }
+
+    #[test]
+    fn phase21_bind_mount_guest_source_path_reuses_share_name_algorithm() {
+        let container_path = std::path::Path::new("/var/lib/app");
+        let expected = std::path::PathBuf::from(format!(
+            "/run/speck/binds/{}",
+            container_path_to_share_name(container_path)
+        ));
+        assert_eq!(
+            bind_mount_guest_source_path(container_path),
+            expected,
+            "Phase 21 bind helper must compose the runtime bind root with container_path_to_share_name()"
+        );
+    }
 }
