@@ -157,6 +157,14 @@ async fn passthrough(State(state): State<ProxyState>, mut req: Request) -> crate
     {
         return intercept_container_delete(state, req, id.to_owned()).await;
     }
+    if req.method() == hyper::Method::GET
+        && let Some(id) = extract_container_id(stripped_path, "/containers/", "/json")
+    {
+        return intercept_container_inspect(state, req, id.to_owned()).await;
+    }
+    if req.method() == hyper::Method::GET && stripped_path == "/containers/json" {
+        return intercept_container_list(state, req).await;
+    }
 
     let wants_upgrade = req.headers().contains_key(UPGRADE);
     let client_upgrade = wants_upgrade.then(|| upgrade::on(&mut req));
@@ -445,6 +453,127 @@ async fn intercept_container_delete(
         }
     }
     Ok(response)
+}
+
+async fn intercept_container_inspect(
+    state: ProxyState,
+    req: Request,
+    id_or_name: String,
+) -> crate::Result<Response> {
+    let backend_resp = forward_request(&state, req).await?;
+    let (mut parts, body_bytes) = collect_response(backend_resp).await?;
+
+    let should_rewrite = {
+        let published = state.published_ports.lock().expect("published ports lock poisoned");
+        resolve_container_id(&published, &id_or_name)
+            .and_then(|id| published.by_id.get(&id))
+            .map(|entry| !entry.ports.is_empty())
+            .unwrap_or(false)
+    };
+
+    tracing::info!(container = %id_or_name, should_rewrite, "intercept_container_inspect");
+
+    if !should_rewrite {
+        return Ok(Response::from_parts(parts, Body::from(body_bytes)));
+    }
+
+    let mut json: serde_json::Value = match serde_json::from_slice(&body_bytes) {
+        Ok(v) => v,
+        Err(err) => {
+            tracing::warn!(error = %err, "failed to parse inspect response for HostIp rewrite; passing through");
+            return Ok(Response::from_parts(parts, Body::from(body_bytes)));
+        }
+    };
+
+    if let Some(ports) = json
+        .get_mut("NetworkSettings")
+        .and_then(|ns| ns.get_mut("Ports"))
+        .and_then(|p| p.as_object_mut())
+    {
+        for bindings in ports.values_mut() {
+            if let Some(arr) = bindings.as_array_mut() {
+                for binding in arr {
+                    if let Some(obj) = binding.as_object_mut() {
+                        obj.insert("HostIp".to_string(), serde_json::Value::String("127.0.0.1".to_string()));
+                    }
+                }
+            }
+        }
+    }
+
+    let rewritten = match serde_json::to_vec(&json) {
+        Ok(v) => v,
+        Err(err) => {
+            tracing::warn!(error = %err, "failed to serialize rewritten inspect response; passing through");
+            return Ok(Response::from_parts(parts, Body::from(body_bytes)));
+        }
+    };
+
+    parts.headers.remove(CONTENT_LENGTH);
+    parts.headers.insert(
+        CONTENT_LENGTH,
+        hyper::header::HeaderValue::from_str(&rewritten.len().to_string())
+            .map_err(|err| DockerApiError::Internal(format!("set inspect response body length: {err}")))?,
+    );
+
+    Ok(Response::from_parts(parts, Body::from(rewritten)))
+}
+
+async fn intercept_container_list(
+    state: ProxyState,
+    req: Request,
+) -> crate::Result<Response> {
+    let backend_resp = forward_request(&state, req).await?;
+    let (mut parts, body_bytes) = collect_response(backend_resp).await?;
+
+    let mut json: serde_json::Value = match serde_json::from_slice(&body_bytes) {
+        Ok(v) => v,
+        Err(err) => {
+            tracing::warn!(error = %err, "failed to parse list response for IP rewrite; passing through");
+            return Ok(Response::from_parts(parts, Body::from(body_bytes)));
+        }
+    };
+
+    let published_ids: std::collections::HashSet<String> = {
+        let published = state.published_ports.lock().expect("published ports lock poisoned");
+        published.by_id.keys().cloned().collect()
+    };
+
+    if let Some(arr) = json.as_array_mut() {
+        for item in arr {
+            let has_ports = item
+                .get("Id")
+                .and_then(|v| v.as_str())
+                .map(|id| published_ids.contains(id))
+                .unwrap_or(false);
+            if has_ports
+                && let Some(ports) = item.get_mut("Ports").and_then(|p| p.as_array_mut())
+            {
+                for port in ports {
+                    if let Some(obj) = port.as_object_mut() {
+                        obj.insert("IP".to_string(), serde_json::Value::String("127.0.0.1".to_string()));
+                    }
+                }
+            }
+        }
+    }
+
+    let rewritten = match serde_json::to_vec(&json) {
+        Ok(v) => v,
+        Err(err) => {
+            tracing::warn!(error = %err, "failed to serialize rewritten list response; passing through");
+            return Ok(Response::from_parts(parts, Body::from(body_bytes)));
+        }
+    };
+
+    parts.headers.remove(CONTENT_LENGTH);
+    parts.headers.insert(
+        CONTENT_LENGTH,
+        hyper::header::HeaderValue::from_str(&rewritten.len().to_string())
+            .map_err(|err| DockerApiError::Internal(format!("set list response body length: {err}")))?,
+    );
+
+    Ok(Response::from_parts(parts, Body::from(rewritten)))
 }
 
 async fn forward_plain(state: &ProxyState, req: Request) -> crate::Result<Response> {

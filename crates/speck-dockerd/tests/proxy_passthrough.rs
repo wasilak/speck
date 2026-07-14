@@ -39,6 +39,7 @@ impl RecordedRequest {
 enum FakeScript {
     Canned(Vec<u8>),
     UpgradeEcho,
+    Sequential(Arc<Mutex<Vec<Vec<u8>>>>),
 }
 
 static NEXT_DIR_ID: AtomicU32 = AtomicU32::new(0);
@@ -192,6 +193,21 @@ fn spawn_fake_dockerd(path: &Path, script: FakeScript) -> Arc<Mutex<Vec<Recorded
                             }
                             stream.write_all(&echo[..n]).await.expect("echo write");
                         }
+                    }
+                    FakeScript::Sequential(responses) => {
+                        let bytes = {
+                            let mut vec = responses.lock().expect("sequential responses lock");
+                            if vec.is_empty() {
+                                panic!("sequential fake dockerd ran out of responses");
+                            }
+                            vec.remove(0)
+                        };
+                        stream
+                            .write_all(&bytes)
+                            .await
+                            .expect("write sequential response");
+                        let mut sink = [0u8; 1];
+                        let _ = stream.read(&mut sink).await;
                     }
                 }
             });
@@ -393,9 +409,9 @@ async fn create_uses_distinct_bind_namespaces_for_same_container_path() {
             .await
             .expect("write create request");
 
-        let (status, _headers, body) = read_response(&mut client).await;
-        assert_eq!(status, 201);
-        assert_eq!(body, br#"{"Id":"ctr-123"}"#);
+    let (status, _headers, body) = read_response(&mut client).await;
+    assert_eq!(status, 201);
+    assert_eq!(body, br#"{"Id":"ctr-123"}"#);
     }
 
     let reqs = recorded.lock().expect("recorded requests lock");
@@ -794,5 +810,301 @@ async fn proxy_returns_503_while_restarting() {
     assert_eq!(status, 503);
     assert!(
         headers.iter().any(|(n, v)| n == "retry-after" && !v.is_empty())
+    );
+}
+
+// ---- Inspect HostIp rewriting (MW-03) ----
+
+#[tokio::test]
+async fn inspect_rewrites_published_port_host_ip() {
+    let dir = unique_dir();
+    let backend_sock = dir.join("backend.sock");
+    let proxy_sock = dir.join("proxy.sock");
+
+    let inspect_response = serde_json::json!({
+        "Id": "ctr-abc",
+        "NetworkSettings": {
+            "Ports": {
+                "80/tcp": [
+                    {"HostIp": "0.0.0.0", "HostPort": "18081"}
+                ]
+            }
+        }
+    });
+    let inspect_response_bytes = inspect_response.to_string().into_bytes();
+
+    let _recorded = spawn_fake_dockerd(
+        &backend_sock,
+        FakeScript::Sequential(Arc::new(Mutex::new(vec![
+            b"HTTP/1.1 201 CREATED\r\n\
+              Content-Type: application/json\r\n\
+              Content-Length: 16\r\n\r\n\
+              {\"Id\":\"ctr-abc\"}"
+                .to_vec(),
+            format!(
+                "HTTP/1.1 200 OK\r\n\
+                 Content-Type: application/json\r\n\
+                 Content-Length: {}\r\n\r\n{}",
+                inspect_response_bytes.len(),
+                String::from_utf8_lossy(&inspect_response_bytes)
+            )
+            .into_bytes(),
+        ]))),
+    );
+    spawn_proxy(build_proxy_router(backend_sock, None, running_state()), &proxy_sock);
+
+    // Step 1: create container with published port to register it in proxy state
+    let create_body = serde_json::json!({
+        "Image": "nginx:alpine",
+        "HostConfig": {
+            "PortBindings": {
+                "80/tcp": [{"HostIp": "", "HostPort": "18081"}]
+            }
+        }
+    })
+    .to_string();
+
+    let mut client = UnixStream::connect(&proxy_sock)
+        .await
+        .expect("connect to proxy socket");
+    client
+        .write_all(
+            format!(
+                "POST /v1.55/containers/create?name=inspect-rewrite HTTP/1.1\r\n\
+                 Host: docker\r\n\
+                 Content-Type: application/json\r\n\
+                 Content-Length: {}\r\n\r\n{}",
+                create_body.len(),
+                create_body
+            )
+            .as_bytes(),
+        )
+        .await
+        .expect("write create request");
+
+    let (status, _headers, body) = read_response(&mut client).await;
+    assert_eq!(status, 201);
+    assert_eq!(body, br#"{"Id":"ctr-abc"}"#);
+
+    // Step 2: inspect the container — proxy should rewrite HostIp to 127.0.0.1
+    let mut client = UnixStream::connect(&proxy_sock)
+        .await
+        .expect("connect to proxy socket for inspect");
+    client
+        .write_all(b"GET /v1.55/containers/ctr-abc/json HTTP/1.1\r\nHost: docker\r\n\r\n")
+        .await
+        .expect("write inspect request");
+
+    let (status, _headers, body) = read_response(&mut client).await;
+    assert_eq!(status, 200);
+    let json: serde_json::Value = serde_json::from_slice(&body).expect("inspect response as json");
+    let host_ip = json["NetworkSettings"]["Ports"]["80/tcp"][0]["HostIp"]
+        .as_str()
+        .expect("HostIp string");
+    assert_eq!(host_ip, "127.0.0.1", "HostIp must be rewritten to 127.0.0.1");
+    let host_port = json["NetworkSettings"]["Ports"]["80/tcp"][0]["HostPort"]
+        .as_str()
+        .expect("HostPort string");
+    assert_eq!(host_port, "18081", "HostPort must be preserved");
+}
+
+#[tokio::test]
+async fn inspect_passthrough_without_published_ports() {
+    let dir = unique_dir();
+    let backend_sock = dir.join("backend.sock");
+    let proxy_sock = dir.join("proxy.sock");
+
+    let inspect_response = serde_json::json!({
+        "Id": "ctr-no-ports",
+        "NetworkSettings": {
+            "Ports": {}
+        }
+    });
+    let inspect_response_bytes = inspect_response.to_string().into_bytes();
+
+    let _recorded = spawn_fake_dockerd(
+        &backend_sock,
+        FakeScript::Canned(
+            format!(
+                "HTTP/1.1 200 OK\r\n\
+                 Content-Type: application/json\r\n\
+                 Content-Length: {}\r\n\r\n{}",
+                inspect_response_bytes.len(),
+                String::from_utf8_lossy(&inspect_response_bytes)
+            )
+            .into_bytes(),
+        ),
+    );
+    spawn_proxy(build_proxy_router(backend_sock, None, running_state()), &proxy_sock);
+
+    let mut client = UnixStream::connect(&proxy_sock)
+        .await
+        .expect("connect to proxy socket");
+    client
+        .write_all(b"GET /v1.55/containers/ctr-no-ports/json HTTP/1.1\r\nHost: docker\r\n\r\n")
+        .await
+        .expect("write inspect request");
+
+    let (status, _headers, body) = read_response(&mut client).await;
+    assert_eq!(status, 200);
+    let json: serde_json::Value = serde_json::from_slice(&body).expect("inspect response as json");
+    assert_eq!(
+        json, inspect_response,
+        "inspect for container without published ports must pass through untouched"
+    );
+}
+
+#[tokio::test]
+async fn list_rewrites_published_port_ip() {
+    let dir = unique_dir();
+    let backend_sock = dir.join("backend.sock");
+    let proxy_sock = dir.join("proxy.sock");
+
+    let list_response = serde_json::json!([
+        {
+            "Id": "ctr-with-ports",
+            "Names": ["/web"],
+            "Ports": [
+                {"PrivatePort": 80, "PublicPort": 18081, "Type": "tcp", "IP": "0.0.0.0"}
+            ]
+        },
+        {
+            "Id": "ctr-no-ports",
+            "Names": ["/db"],
+            "Ports": []
+        }
+    ]);
+    let list_response_bytes = list_response.to_string().into_bytes();
+
+    let create_response = b"{\"Id\":\"ctr-with-ports\"}";
+    let _recorded = spawn_fake_dockerd(
+        &backend_sock,
+        FakeScript::Sequential(Arc::new(Mutex::new(vec![
+            format!(
+                "HTTP/1.1 201 CREATED\r\n\
+                 Content-Type: application/json\r\n\
+                 Content-Length: {}\r\n\r\n{}",
+                create_response.len(),
+                String::from_utf8_lossy(create_response)
+            )
+            .into_bytes(),
+            format!(
+                "HTTP/1.1 200 OK\r\n\
+                 Content-Type: application/json\r\n\
+                 Content-Length: {}\r\n\r\n{}",
+                list_response_bytes.len(),
+                String::from_utf8_lossy(&list_response_bytes)
+            )
+            .into_bytes(),
+        ]))),
+    );
+    spawn_proxy(build_proxy_router(backend_sock, None, running_state()), &proxy_sock);
+
+    // Step 1: create container with published port
+    let create_body = serde_json::json!({
+        "Image": "nginx:alpine",
+        "HostConfig": {
+            "PortBindings": {
+                "80/tcp": [{"HostIp": "", "HostPort": "18081"}]
+            }
+        }
+    })
+    .to_string();
+
+    let mut client = UnixStream::connect(&proxy_sock)
+        .await
+        .expect("connect to proxy socket");
+    client
+        .write_all(
+            format!(
+                "POST /v1.55/containers/create?name=list-rewrite HTTP/1.1\r\n\
+                 Host: docker\r\n\
+                 Content-Type: application/json\r\n\
+                 Content-Length: {}\r\n\r\n{}",
+                create_body.len(),
+                create_body
+            )
+            .as_bytes(),
+        )
+        .await
+        .expect("write create request");
+
+    let (status, _headers, _body) = read_response(&mut client).await;
+    assert_eq!(status, 201);
+
+    // Step 2: list containers — proxy should rewrite IP for ctr-with-ports only
+    let mut client = UnixStream::connect(&proxy_sock)
+        .await
+        .expect("connect to proxy socket for list");
+    client
+        .write_all(b"GET /v1.55/containers/json HTTP/1.1\r\nHost: docker\r\n\r\n")
+        .await
+        .expect("write list request");
+
+    let (status, _headers, body) = read_response(&mut client).await;
+    assert_eq!(status, 200);
+    let json: serde_json::Value = serde_json::from_slice(&body).expect("list response as json");
+    let arr = json.as_array().expect("list response array");
+    assert_eq!(arr.len(), 2);
+
+    let with_ports = &arr[0];
+    assert_eq!(with_ports["Id"], "ctr-with-ports");
+    let ports = with_ports["Ports"].as_array().expect("ports array");
+    assert_eq!(ports[0]["IP"], "127.0.0.1", "IP must be rewritten to 127.0.0.1");
+    assert_eq!(ports[0]["PublicPort"], 18081, "PublicPort must be preserved");
+
+    let no_ports = &arr[1];
+    assert_eq!(no_ports["Id"], "ctr-no-ports");
+    assert_eq!(
+        no_ports["Ports"],
+        serde_json::json!([]),
+        "container without published ports must pass through untouched"
+    );
+}
+
+#[tokio::test]
+async fn list_passthrough_without_published_ports() {
+    let dir = unique_dir();
+    let backend_sock = dir.join("backend.sock");
+    let proxy_sock = dir.join("proxy.sock");
+
+    let list_response = serde_json::json!([
+        {
+            "Id": "ctr-no-ports",
+            "Names": ["/db"],
+            "Ports": []
+        }
+    ]);
+    let list_response_bytes = list_response.to_string().into_bytes();
+
+    let _recorded = spawn_fake_dockerd(
+        &backend_sock,
+        FakeScript::Canned(
+            format!(
+                "HTTP/1.1 200 OK\r\n\
+                 Content-Type: application/json\r\n\
+                 Content-Length: {}\r\n\r\n{}",
+                list_response_bytes.len(),
+                String::from_utf8_lossy(&list_response_bytes)
+            )
+            .into_bytes(),
+        ),
+    );
+    spawn_proxy(build_proxy_router(backend_sock, None, running_state()), &proxy_sock);
+
+    let mut client = UnixStream::connect(&proxy_sock)
+        .await
+        .expect("connect to proxy socket");
+    client
+        .write_all(b"GET /v1.55/containers/json HTTP/1.1\r\nHost: docker\r\n\r\n")
+        .await
+        .expect("write list request");
+
+    let (status, _headers, body) = read_response(&mut client).await;
+    assert_eq!(status, 200);
+    let json: serde_json::Value = serde_json::from_slice(&body).expect("list response as json");
+    assert_eq!(
+        json, list_response,
+        "list for containers without published ports must pass through untouched"
     );
 }
