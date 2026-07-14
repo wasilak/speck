@@ -552,6 +552,19 @@ mod linux {
         None
     }
 
+    /// Parse `speck_bind_root=PATH` from the kernel cmdline.
+    fn parse_cmdline_bind_root(path: &str) -> Option<String> {
+        let content = std::fs::read_to_string(path).ok()?;
+        for word in content.split_whitespace() {
+            if let Some(val) = word.strip_prefix("speck_bind_root=").filter(|v| !v.is_empty()) {
+                if val.starts_with('/') && !val.split('/').any(|segment| segment == "..") {
+                    return Some(val.to_string());
+                }
+            }
+        }
+        None
+    }
+
     /// Mount VirtioFS volumes for user-specified bind mounts.
     ///
     /// Parses `speck_vol_tags=` from the kernel cmdline and for each
@@ -561,6 +574,32 @@ mod linux {
     /// Mount failures are non-fatal — a container simply won't see its
     /// bind mount if the tag is invalid.
     fn mount_virtiofs_volumes(cmdline_path: &str) {
+        if let Some(bind_root) = parse_cmdline_bind_root(cmdline_path) {
+            let target = format!("/rootfs{bind_root}");
+            let _ = std::fs::create_dir_all(&target);
+
+            let tag_c = std::ffi::CString::new("virtiofs-binds").unwrap_or_default();
+            let target_c = std::ffi::CString::new(target.as_str()).unwrap_or_default();
+
+            let ret = unsafe {
+                libc::mount(
+                    tag_c.as_ptr(),
+                    target_c.as_ptr(),
+                    c"virtiofs".as_ptr(),
+                    0,
+                    std::ptr::null(),
+                )
+            };
+            if ret < 0 {
+                eprintln!(
+                    "vminitd: failed to mount VirtioFS virtiofs-binds at {target}: {:?}",
+                    io::Error::last_os_error()
+                );
+            } else {
+                eprintln!("vminitd: mounted VirtioFS virtiofs-binds at {target}");
+            }
+        }
+
         let tags = parse_cmdline_volume_tags(cmdline_path);
         for (tag, container_path) in &tags {
             let target = format!("/rootfs{container_path}");

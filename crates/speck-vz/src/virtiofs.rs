@@ -36,6 +36,10 @@ pub const CA_CERTS_TAG: &str = "speck-ca-certs";
 /// NOT allow adding new devices after the VM starts — hence the pre-provision.
 pub const BIND_MOUNTS_TAG: &str = "virtiofs-binds";
 
+/// Guest-visible runtime root where the pre-provisioned bind-mount VirtioFS
+/// device is mounted before dockerd consumes rewritten bind sources.
+pub const BIND_MOUNTS_GUEST_ROOT: &str = "/run/speck/binds";
+
 /// Convert a container-path to a safe `VZMultipleDirectoryShare` directory name.
 ///
 /// VirtioFS share names appear as directory entries in the guest, so they must
@@ -50,6 +54,16 @@ pub const BIND_MOUNTS_TAG: &str = "virtiofs-binds";
 /// vminitd reconstructs the original path by reversing the substitution.
 pub fn container_path_to_share_name(path: &Path) -> String {
     path.to_string_lossy().replace('/', "..")
+}
+
+/// Convert a validated absolute container path into the guest-visible bind
+/// source path dockerd must see after host-side create-body rewriting.
+pub fn bind_mount_guest_source_path(path: &Path) -> PathBuf {
+    assert!(
+        path.is_absolute(),
+        "bind mount guest source paths require absolute container paths"
+    );
+    Path::new(BIND_MOUNTS_GUEST_ROOT).join(container_path_to_share_name(path))
 }
 
 /// Derive a stable VirtioFS tag for an identity mount path.
@@ -89,7 +103,7 @@ pub fn validate_virtiofs_tag(tag: &str) -> bool {
 /// Generate the kernel cmdline fragment for VirtioFS mounts.
 ///
 /// Returns a string like:
-/// `speck_vol_tags=speck-vol-0:/app speck_home_tag=speck-home speck_home_path=/path speck_identity_tags=speck-id-users:/Users`
+/// `speck_vol_tags=speck-vol-0:/app speck_bind_root=/run/speck/binds speck_home_tag=speck-home speck_home_path=/path speck_identity_tags=speck-id-users:/Users`
 ///
 /// The `speck_home` entry is always appended for Ryuk Docker socket access.
 /// Identity mounts (`identity_roots`) are appended as `speck_identity_tags=tag:path,...`
@@ -115,6 +129,8 @@ pub fn cmdline_virtiofs_arg(
     } else {
         format!("speck_vol_tags={}", vol_pairs.join(","))
     };
+
+    result.push_str(&format!(" speck_bind_root={BIND_MOUNTS_GUEST_ROOT}"));
 
     result.push_str(&format!(
         " speck_home_tag={SPECK_HOME_TAG} speck_home_path={}",
