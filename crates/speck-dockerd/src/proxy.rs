@@ -51,10 +51,19 @@ struct PublishedPortEntry {
     forwards: Vec<HostPortForward>,
 }
 
-#[derive(Debug)]
 struct HostPortForward {
     host_port: u16,
     stop: Arc<AtomicBool>,
+    join: std::thread::JoinHandle<()>,
+}
+
+impl std::fmt::Debug for HostPortForward {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HostPortForward")
+            .field("host_port", &self.host_port)
+            .field("stop", &self.stop.load(Ordering::SeqCst))
+            .finish()
+    }
 }
 
 #[derive(Default)]
@@ -613,6 +622,9 @@ fn stop_host_port_forwards(state: &ProxyState, id_or_name: &str) {
             tracing::info!(host_port = forward.host_port, container = %id_or_name, "stopping published port forwarder");
             forward.stop.store(true, Ordering::SeqCst);
             let _ = std::net::TcpStream::connect(("127.0.0.1", forward.host_port));
+            if let Err(err) = forward.join.join() {
+                tracing::debug!(?err, host_port = forward.host_port, container = %id_or_name, "published port forwarder thread panicked during shutdown");
+            }
         }
     }
 }
@@ -634,13 +646,16 @@ fn spawn_host_port_forward(guest: Arc<speck_vz::Guest>, config: PortMapConfig) -
     let stop = Arc::new(AtomicBool::new(false));
     let stop_for_thread = Arc::clone(&stop);
 
-    std::thread::spawn(move || {
+    let join = std::thread::spawn(move || {
         loop {
             if stop_for_thread.load(Ordering::SeqCst) {
                 break;
             }
             match listener.accept() {
                 Ok((stream, _)) => {
+                    if stop_for_thread.load(Ordering::SeqCst) {
+                        break;
+                    }
                     let guest = Arc::clone(&guest);
                     std::thread::spawn(move || {
                         if let Err(err) = bridge_host_to_guest_tcp(guest, target_ip, config.container_port, stream) {
@@ -662,6 +677,7 @@ fn spawn_host_port_forward(guest: Arc<speck_vz::Guest>, config: PortMapConfig) -
     Ok(HostPortForward {
         host_port: config.host_port,
         stop,
+        join,
     })
 }
 
@@ -694,10 +710,18 @@ fn bridge_host_to_guest_tcp(
 
 fn resolve_container_id(published: &PublishedPortsState, id_or_name: &str) -> Option<String> {
     if published.by_id.contains_key(id_or_name) {
-        Some(id_or_name.to_owned())
-    } else {
-        published.aliases.get(id_or_name).cloned()
+        return Some(id_or_name.to_owned());
     }
+    if let Some(id) = published.aliases.get(id_or_name) {
+        return Some(id.clone());
+    }
+
+    let mut matches = published.by_id.keys().filter(|id| id.starts_with(id_or_name));
+    let first = matches.next()?;
+    if matches.next().is_some() {
+        return None;
+    }
+    Some(first.clone())
 }
 
 async fn inspect_container_ip(state: &ProxyState, id: &str) -> crate::Result<Option<Ipv4Addr>> {
