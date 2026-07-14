@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Transparent Proxy Restoration
 status: executing
-stopped_at: Planned 22-02-PLAN.md
-last_updated: "2026-07-14T11:30:00.000Z"
-last_activity: 2026-07-14 -- Planned Phase 22 (2 plans)
+stopped_at: Completed 22-02-PLAN.md (code); live verification pending
+last_updated: "2026-07-14T12:30:00.000Z"
+last_activity: 2026-07-14 -- Completed Phase 22 Plans 01 + 02 (code)
 progress:
   total_phases: 5
   completed_phases: 2
   total_plans: 8
-  completed_plans: 6
-  percent: 75
+  completed_plans: 8
+  percent: 87
 ---
 
 # State — Milestone v1.3 Transparent Proxy Restoration
@@ -25,12 +25,12 @@ See: .planning/PROJECT.md (updated 2026-07-09)
 
 ## Current Position
 
-Phase: 22 (response-rewriting-restart-gate) — PLANNED
-Plan: 2 planned (22-01, 22-02)
-Status: Phase 22 research + planning complete; ready for execution
-Last activity: 2026-07-14 -- Planned Phase 22 (2 plans)
+Phase: 22 (response-rewriting-restart-gate) — IN PROGRESS
+Plan: 2 complete (22-01, 22-02 code)
+Status: All Plan 22 code complete; live verification pending (requires `spk up`)
+Last activity: 2026-07-14 -- Completed Phase 22 Plans 01 + 02
 
-Progress: [███████░░░] 75%
+Progress: [████████░░] 87%
 
 ## Milestone v1.3 Phase Overview
 
@@ -38,9 +38,17 @@ Progress: [███████░░░] 75%
 |-------|------|--------------|--------|
 | 20 | Transparent Proxy Cutover | PROXY-01, PROXY-02, PROXY-03 | Complete |
 | 21 | Create Interception Middleware | MW-01, MW-02 | Complete |
-| 22 | Response Rewriting & Restart Gate | MW-03, MW-04 | Not started |
+| 22 | Response Rewriting & Restart Gate | MW-03, MW-04 | In progress (code complete, live verification pending) |
 | 23 | SpeckDockerd Retirement | PROXY-04 | Not started |
 | 24 | Conformance Exit Gate | GATE-01, GATE-02, GATE-03 | Not started |
+
+## Live Verification Pending
+
+Run when `spk up` is active:
+```bash
+SPECK_TEST_INTEGRATION=1 cargo test -p speck-dockerd --test api_conformance test_inspect_host_ip_live test_port_command_live test_restart_gate_live -- --ignored
+./scripts/conformance-smoke.sh
+```
 
 **Exit gate:** `scripts/conformance-smoke.sh` 18/18 (baseline 2026-07-11: 8/18) + intact `spk down/up` launchd cycle.
 

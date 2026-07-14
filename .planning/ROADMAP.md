@@ -52,7 +52,7 @@ Full details: `.planning/milestones/v1.2-ROADMAP.md`
 
 - [x] **Phase 20: Transparent Proxy Cutover** - `speck.sock` served by the byte proxy to guest dockerd; core Docker lifecycle + hijacked streams answered by real dockerd (completed 2026-07-13)
 - [x] **Phase 21: Create Interception Middleware** - HTTP-aware allowlist layer intercepts container create: `-v` binds translated to VirtioFS, `-p` ports registered with the host netstack (completed 2026-07-14)
-- [ ] **Phase 22: Response Rewriting & Restart Gate** - `HostIp` rewritten to host-reachable values in inspect/port responses; 503/Retry-After restart gate rides in front of the proxy (2 plans planned)
+- [ ] **Phase 22: Response Rewriting & Restart Gate** - `HostIp` rewritten to host-reachable values in inspect/port responses; 503/Retry-After restart gate rides in front of the proxy (2/2 plans complete, live verification pending)
 - [ ] **Phase 23: SpeckDockerd Retirement** - containerd-based endpoint handlers deleted; guest dockerd is the single source of container/image/volume/network truth
 - [ ] **Phase 24: Conformance Exit Gate** - conformance-smoke 18/18, intact `spk down/up` launchd cycle, and `docker build`+`push` round-trip against a local registry
 
@@ -116,8 +116,8 @@ Plans:
 
 Plans:
 
-- [ ] 22-01-PLAN.md — Implement HostIp response rewriting for inspect and list containers endpoints (Wave 1)
-- [ ] 22-02-PLAN.md — Live verification of HostIp rewriting and restart gate endurance (Wave 2)
+- [x] 22-01-PLAN.md — Implement HostIp response rewriting for inspect and list containers endpoints (Wave 1)
+- [x] 22-02-PLAN.md — Live verification of HostIp rewriting and restart gate endurance (Wave 2, code complete — live run pending)
 
 ### Phase 23: SpeckDockerd Retirement
 
