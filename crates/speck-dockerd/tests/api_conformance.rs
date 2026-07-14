@@ -999,6 +999,82 @@ async fn test_bind_mount_host_path() {
     );
 }
 
+#[tokio::test]
+#[ignore = "requires signed binary + spk up running + live bind rewrite coverage for host edits after container start"]
+async fn test_bind_mount_host_path_live_updates() {
+    let tmp_dir = std::env::temp_dir().join("speck-bind-live-updates");
+    std::fs::create_dir_all(&tmp_dir).expect("create bind source dir");
+    let tmp_file = tmp_dir.join("live-update.txt");
+    std::fs::write(&tmp_file, "before-update\n").expect("write initial bind file");
+
+    let docker = speck_docker();
+    let config = ContainerCreateBody {
+        image: Some("alpine".to_string()),
+        cmd: Some(vec!["sleep".to_string(), "30".to_string()]),
+        host_config: Some(HostConfig {
+            binds: Some(vec![format!("{}:/bind:rw", tmp_dir.display())]),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let options = CreateContainerOptionsBuilder::default()
+        .name("test-bind-mount-live-updates")
+        .build();
+    let response = docker
+        .create_container(Some(options), config)
+        .await
+        .expect("create container with bind mount");
+    let container_id = response.id;
+
+    docker
+        .start_container(&container_id, None::<StartContainerOptions>)
+        .await
+        .expect("start container");
+
+    std::fs::write(&tmp_file, "after-update\n").expect("update bind file after start");
+
+    let exec = docker
+        .create_exec(
+            &container_id,
+            ExecConfig {
+                cmd: Some(vec!["cat".to_string(), "/bind/live-update.txt".to_string()]),
+                attach_stdout: Some(true),
+                attach_stderr: Some(true),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("create exec");
+
+    let output = docker.start_exec(&exec.id, None).await.expect("start exec");
+    let output_text = match output {
+        StartExecResults::Attached { output, .. } => {
+            let lines: Vec<_> = output.try_collect().await.expect("exec output stream");
+            lines.iter().map(|l| l.to_string()).collect::<String>()
+        }
+        StartExecResults::Detached => String::new(),
+    };
+
+    docker
+        .remove_container(
+            &container_id,
+            Some(RemoveContainerOptions {
+                force: true,
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("remove container");
+
+    let _ = std::fs::remove_file(&tmp_file);
+    let _ = std::fs::remove_dir_all(&tmp_dir);
+
+    assert!(
+        output_text.contains("after-update"),
+        "running container should observe host file updates after start, got: {output_text:?}"
+    );
+}
+
 /// Verify that a port-published container starts without error and the binding
 /// is negotiated through the Speck proxy without reintroducing VZNATNetworkDeviceAttachment.
 #[tokio::test]

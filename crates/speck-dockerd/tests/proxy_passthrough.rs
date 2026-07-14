@@ -14,6 +14,7 @@ use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::server::conn::auto::Builder;
 use speck_core::VmState;
 use speck_dockerd::proxy::build_proxy_router;
+use speck_vz::bind_mount_guest_source_path;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
 use tower::ServiceExt;
@@ -268,6 +269,85 @@ async fn proxy_forwards_request_verbatim_d21() {
     assert_eq!(req.path_and_query, "/v1.55/containers/json?all=1");
     assert_eq!(req.header("x-speck-test"), Some("42"));
     assert_eq!(req.header("host"), Some("docker"));
+}
+
+#[tokio::test]
+async fn create_rewrites_bind_sources_for_guest_path() {
+    let dir = unique_dir();
+    let backend_sock = dir.join("backend.sock");
+    let proxy_sock = dir.join("proxy.sock");
+    let host_dir = std::env::temp_dir().join(format!("spk-bind-src-{}", std::process::id()));
+    std::fs::create_dir_all(&host_dir).expect("create host bind source");
+
+    let recorded = spawn_fake_dockerd(
+        &backend_sock,
+        FakeScript::Canned(
+            b"HTTP/1.1 201 CREATED\r\n\
+              Content-Type: application/json\r\n\
+              Content-Length: 16\r\n\r\n\
+              {\"Id\":\"ctr-123\"}"
+                .to_vec(),
+        ),
+    );
+    spawn_proxy(build_proxy_router(backend_sock, None, running_state()), &proxy_sock);
+
+    let create_body = serde_json::json!({
+        "Image": "alpine",
+        "HostConfig": {
+            "Binds": [
+                format!("{}:/var/data:ro", host_dir.display()),
+                format!("{}:/var/cache:rw", host_dir.display()),
+            ]
+        }
+    })
+    .to_string();
+
+    let mut client = UnixStream::connect(&proxy_sock)
+        .await
+        .expect("connect to proxy socket");
+    client
+        .write_all(
+            format!(
+                "POST /v1.55/containers/create?name=bind-rewrite HTTP/1.1\r\n\
+                 Host: docker\r\n\
+                 Content-Type: application/json\r\n\
+                 Content-Length: {}\r\n\r\n{}",
+                create_body.len(),
+                create_body
+            )
+            .as_bytes(),
+        )
+        .await
+        .expect("write create request");
+
+    let (status, _headers, body) = read_response(&mut client).await;
+    assert_eq!(status, 201);
+    assert_eq!(body, br#"{"Id":"ctr-123"}"#);
+
+    let reqs = recorded.lock().expect("recorded requests lock");
+    assert_eq!(reqs.len(), 1);
+    let req = &reqs[0];
+    assert_eq!(req.method, "POST");
+    assert_eq!(req.path_and_query, "/v1.55/containers/create?name=bind-rewrite");
+
+    let forwarded: serde_json::Value =
+        serde_json::from_slice(&req.body).expect("forwarded create body as json");
+    let binds = forwarded["HostConfig"]["Binds"]
+        .as_array()
+        .expect("forwarded binds array");
+    assert_eq!(
+        binds,
+        &vec![
+            serde_json::Value::String(format!(
+                "{}:/var/data:ro",
+                bind_mount_guest_source_path(Path::new("/var/data")).display()
+            )),
+            serde_json::Value::String(format!(
+                "{}:/var/cache:rw",
+                bind_mount_guest_source_path(Path::new("/var/cache")).display()
+            )),
+        ]
+    );
 }
 
 #[tokio::test]
