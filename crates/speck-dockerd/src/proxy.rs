@@ -22,12 +22,12 @@ use axum::http::StatusCode;
 use axum::response::Response;
 use http_body_util::BodyExt;
 use hyper::body::{Bytes, Incoming};
-use hyper::header::UPGRADE;
+use hyper::header::{CONTENT_LENGTH, UPGRADE};
 use hyper::upgrade;
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use speck_core::VmState;
-use speck_vz::{PortMapConfig, VolumeMountConfig};
+use speck_vz::{PortMapConfig, VolumeMountConfig, bind_mount_guest_source_path};
 use tokio::net::UnixStream;
 use tower::Service;
 
@@ -209,7 +209,20 @@ async fn intercept_container_create(
         "intercepted container create"
     );
 
-    let forward_req = Request::from_parts(parts, Body::from(body_bytes));
+    let forward_body_bytes = if bind_mounts.is_empty() {
+        body_bytes
+    } else {
+        Bytes::from(rewrite_create_body_bind_mounts(&body_bytes, &bind_mounts)?)
+    };
+
+    let mut parts = parts;
+    parts.headers.insert(
+        CONTENT_LENGTH,
+        hyper::header::HeaderValue::from_str(&forward_body_bytes.len().to_string())
+            .map_err(|err| DockerApiError::Internal(format!("set create body length: {err}")))?,
+    );
+
+    let forward_req = Request::from_parts(parts, Body::from(forward_body_bytes));
     let backend_resp = forward_request(&state, forward_req).await?;
     let (parts, body_bytes) = collect_response(backend_resp).await?;
 
@@ -228,6 +241,46 @@ async fn intercept_container_create(
     }
 
     Ok(Response::from_parts(parts, Body::from(body_bytes)))
+}
+
+fn rewrite_create_body_bind_mounts(
+    body_bytes: &[u8],
+    bind_mounts: &[VolumeMountConfig],
+) -> crate::Result<Vec<u8>> {
+    let mut create_value: serde_json::Value = serde_json::from_slice(body_bytes)
+        .map_err(|err| DockerApiError::Internal(format!("parse create body for rewrite: {err}")))?;
+
+    let host_config = create_value
+        .get_mut("HostConfig")
+        .and_then(|value| value.as_object_mut())
+        .ok_or_else(|| {
+            DockerApiError::Internal(
+                "container create interception missing HostConfig during bind rewrite".into(),
+            )
+        })?;
+
+    host_config.insert(
+        "Binds".to_string(),
+        serde_json::Value::Array(
+            bind_mounts
+                .iter()
+                .map(|bind| serde_json::Value::String(render_rewritten_bind_mount(bind)))
+                .collect(),
+        ),
+    );
+
+    serde_json::to_vec(&create_value)
+        .map_err(|err| DockerApiError::Internal(format!("serialize rewritten create body: {err}")))
+}
+
+fn render_rewritten_bind_mount(bind: &VolumeMountConfig) -> String {
+    let guest_source = bind_mount_guest_source_path(&bind.container_path);
+    let mode = if bind.read_only { "ro" } else { "rw" };
+    format!(
+        "{}:{}:{mode}",
+        guest_source.display(),
+        bind.container_path.display()
+    )
 }
 
 async fn intercept_container_start(

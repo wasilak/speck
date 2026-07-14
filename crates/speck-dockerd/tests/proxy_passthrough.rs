@@ -351,6 +351,136 @@ async fn create_rewrites_bind_sources_for_guest_path() {
 }
 
 #[tokio::test]
+async fn create_rejects_missing_bind_host_path_before_forwarding() {
+    let dir = unique_dir();
+    let backend_sock = dir.join("backend.sock");
+    let proxy_sock = dir.join("proxy.sock");
+    let missing_host_dir = dir.join("missing-host-dir");
+
+    let recorded = spawn_fake_dockerd(
+        &backend_sock,
+        FakeScript::Canned(b"HTTP/1.1 500 INTERNAL SERVER ERROR\r\nContent-Length: 0\r\n\r\n".to_vec()),
+    );
+    spawn_proxy(build_proxy_router(backend_sock, None, running_state()), &proxy_sock);
+
+    let create_body = serde_json::json!({
+        "Image": "alpine",
+        "HostConfig": {
+            "Binds": [format!("{}:/var/data:ro", missing_host_dir.display())]
+        }
+    })
+    .to_string();
+
+    let mut client = UnixStream::connect(&proxy_sock)
+        .await
+        .expect("connect to proxy socket");
+    client
+        .write_all(
+            format!(
+                "POST /v1.55/containers/create HTTP/1.1\r\n\
+                 Host: docker\r\n\
+                 Content-Type: application/json\r\n\
+                 Content-Length: {}\r\n\r\n{}",
+                create_body.len(),
+                create_body
+            )
+            .as_bytes(),
+        )
+        .await
+        .expect("write create request");
+
+    let (status, _headers, body) = read_response(&mut client).await;
+    let body_text = String::from_utf8(body).expect("error body utf8");
+    assert_eq!(status, 400);
+    assert!(body_text.contains("bind host path invalid"));
+
+    let reqs = recorded.lock().expect("recorded requests lock");
+    assert!(reqs.is_empty(), "invalid bind create must not be forwarded");
+}
+
+#[tokio::test]
+async fn create_rejects_invalid_bind_specs_with_400() {
+    let dir = unique_dir();
+    let backend_sock = dir.join("backend.sock");
+    let proxy_sock = dir.join("proxy.sock");
+    let valid_host_dir = std::env::temp_dir().join(format!("spk-bind-valid-{}", std::process::id()));
+    std::fs::create_dir_all(&valid_host_dir).expect("create valid host bind source");
+
+    let recorded = spawn_fake_dockerd(
+        &backend_sock,
+        FakeScript::Canned(b"HTTP/1.1 500 INTERNAL SERVER ERROR\r\nContent-Length: 0\r\n\r\n".to_vec()),
+    );
+    spawn_proxy(build_proxy_router(backend_sock, None, running_state()), &proxy_sock);
+
+    let cases = vec![
+        (
+            "relative host path",
+            "relative-host:/var/data:ro".to_string(),
+            "bind host path invalid",
+        ),
+        (
+            "relative container path",
+            format!("{}:var/data:ro", valid_host_dir.display()),
+            "bind container path invalid",
+        ),
+        (
+            "container path traversal",
+            format!("{}:/var/../data:ro", valid_host_dir.display()),
+            "bind container path invalid",
+        ),
+        (
+            "invalid mode",
+            format!("{}:/var/data:read-only", valid_host_dir.display()),
+            "invalid bind mount mode",
+        ),
+    ];
+
+    for (index, (name, bind, expected_error)) in cases.into_iter().enumerate() {
+        let create_body = serde_json::json!({
+            "Image": "alpine",
+            "HostConfig": {
+                "Binds": [bind]
+            }
+        })
+        .to_string();
+
+        let mut client = UnixStream::connect(&proxy_sock)
+            .await
+            .expect("connect to proxy socket");
+        client
+            .write_all(
+                format!(
+                    "POST /v1.55/containers/create?case={index} HTTP/1.1\r\n\
+                     Host: docker\r\n\
+                     Content-Type: application/json\r\n\
+                     Content-Length: {}\r\n\r\n{}",
+                    create_body.len(),
+                    create_body
+                )
+                .as_bytes(),
+            )
+            .await
+            .expect("write create request");
+
+        let (status, _headers, body) = read_response(&mut client).await;
+        let body_text = String::from_utf8(body).expect("error body utf8");
+        assert_eq!(status, 400, "case {name} should be rejected");
+        assert!(
+            body_text.contains(expected_error),
+            "case {name} expected error containing {expected_error:?}, got {body_text:?}"
+        );
+    }
+
+    let reqs = recorded.lock().expect("recorded requests lock");
+    assert!(
+        reqs.is_empty(),
+        "invalid bind create requests must never reach the backend"
+    );
+
+    let _ = std::fs::remove_dir_all(&valid_host_dir);
+}
+
+#[tokio::test]
 async fn proxy_streams_body_larger_than_2mb() {
     const BODY_LEN: usize = 3 * 1024 * 1024;
 
