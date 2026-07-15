@@ -69,7 +69,8 @@ mod linux {
         let ready_port = parse_cmdline_ready_vsock_port("/proc/cmdline").unwrap_or(9000);
         let containerd_port = parse_cmdline_containerd_vsock_port("/proc/cmdline").unwrap_or(9001);
         let docker_port = parse_cmdline_docker_vsock_port("/proc/cmdline").unwrap_or(9003);
-        let tcp_forwarder_port = parse_cmdline_tcp_forwarder_vsock_port("/proc/cmdline").unwrap_or(9006);
+        let tcp_forwarder_port =
+            parse_cmdline_tcp_forwarder_vsock_port("/proc/cmdline").unwrap_or(9006);
         let log_relay_port = parse_cmdline_log_relay_vsock_port("/proc/cmdline");
         let guest_ip = parse_cmdline_guest_ip("/proc/cmdline");
         let gateway = parse_cmdline_gateway("/proc/cmdline");
@@ -556,7 +557,10 @@ mod linux {
     fn parse_cmdline_bind_root(path: &str) -> Option<String> {
         let content = std::fs::read_to_string(path).ok()?;
         for word in content.split_whitespace() {
-            if let Some(val) = word.strip_prefix("speck_bind_root=").filter(|v| !v.is_empty()) {
+            if let Some(val) = word
+                .strip_prefix("speck_bind_root=")
+                .filter(|v| !v.is_empty())
+            {
                 if val.starts_with('/') && !val.split('/').any(|segment| segment == "..") {
                     return Some(val.to_string());
                 }

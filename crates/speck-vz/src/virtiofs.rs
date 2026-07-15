@@ -431,10 +431,8 @@ pub fn update_virtiofs_bind_mounts(
         NSMutableDictionary::<NSString, VZSharedDirectory>::init(NSMutableDictionary::alloc());
 
     for bind in binds {
-        let share_name = bind_mount_share_name(
-            bind.runtime_namespace.as_deref(),
-            &bind.container_path,
-        );
+        let share_name =
+            bind_mount_share_name(bind.runtime_namespace.as_deref(), &bind.container_path);
 
         // Validate the share name using Apple's own canonicalization.
         let name_ns = NSString::from_str(&share_name);

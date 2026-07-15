@@ -250,8 +250,7 @@ impl ReoriginBridge {
 
         for (handle, endpoint) in new_connections {
             let addr = format!("{}:{}", endpoint.addr, endpoint.port);
-            let (tx, rx) =
-                oneshot::channel::<std::io::Result<tokio::net::TcpStream>>();
+            let (tx, rx) = oneshot::channel::<std::io::Result<tokio::net::TcpStream>>();
 
             tokio::spawn(async move {
                 let result = async {

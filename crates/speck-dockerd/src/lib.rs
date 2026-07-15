@@ -42,7 +42,9 @@ impl SpeckDockerd {
             .docker_api_unix_proxy(internal_sock_path.clone())
             .map_err(|err| DockerApiError::Internal(err.to_string()))?;
         std::fs::set_permissions(&internal_sock_path, std::fs::Permissions::from_mode(0o600))
-            .map_err(|e| DockerApiError::Internal(format!("chmod internal dockerd proxy socket 0600: {e}")))?;
+            .map_err(|e| {
+                DockerApiError::Internal(format!("chmod internal dockerd proxy socket 0600: {e}"))
+            })?;
 
         tracing::info!(
             public_sock = %sock_path.display(),

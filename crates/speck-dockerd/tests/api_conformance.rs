@@ -439,7 +439,10 @@ async fn test_inspect_host_ip_live() {
             .expect("remove container");
     })
     .await;
-    assert!(result.is_ok(), "test_inspect_host_ip_live timed out after 30s");
+    assert!(
+        result.is_ok(),
+        "test_inspect_host_ip_live timed out after 30s"
+    );
 }
 
 #[tokio::test]
@@ -544,10 +547,7 @@ async fn test_restart_gate_live() {
 
         // Discover speck binary
         let speck_bin = std::env::var("SPECK_BIN").unwrap_or_else(|_| {
-            let candidates = [
-                "target/release/spk",
-                "target/debug/spk",
-            ];
+            let candidates = ["target/release/spk", "target/debug/spk"];
             for c in &candidates {
                 if std::path::Path::new(c).exists() {
                     return c.to_string();
@@ -559,9 +559,7 @@ async fn test_restart_gate_live() {
         // Spawn spk restart in the background
         let mut restart_cmd = tokio::process::Command::new(&speck_bin);
         restart_cmd.arg("restart");
-        let mut restart_child = restart_cmd
-            .spawn()
-            .expect("spawn spk restart");
+        let mut restart_child = restart_cmd.spawn().expect("spawn spk restart");
 
         // Poll Docker API during restart window — expect either 503 (VmState gate)
         // or connection errors (daemon is down during restart). Both are acceptable
@@ -608,7 +606,10 @@ async fn test_restart_gate_live() {
             }
             tokio::time::sleep(Duration::from_millis(500)).await;
         }
-        assert!(recovered, "Docker API must recover after spk restart completes");
+        assert!(
+            recovered,
+            "Docker API must recover after spk restart completes"
+        );
     })
     .await;
     assert!(result.is_ok(), "test_restart_gate_live timed out after 60s");
@@ -1511,7 +1512,11 @@ async fn test_port_publish_stale_listener_cleanup() {
 
     let primary_id = docker
         .create_container(
-            Some(CreateContainerOptionsBuilder::default().name(primary_name).build()),
+            Some(
+                CreateContainerOptionsBuilder::default()
+                    .name(primary_name)
+                    .build(),
+            ),
             config,
         )
         .await
@@ -1566,7 +1571,11 @@ async fn test_port_publish_stale_listener_cleanup() {
 
     let rebound_id = docker
         .create_container(
-            Some(CreateContainerOptionsBuilder::default().name(rebound_name).build()),
+            Some(
+                CreateContainerOptionsBuilder::default()
+                    .name(rebound_name)
+                    .build(),
+            ),
             ContainerCreateBody {
                 image: Some("nginx:alpine".to_string()),
                 host_config: Some(HostConfig {

@@ -1,8 +1,8 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-pub use speck_net::{PortMapConfig, PortMapUpdate};
 use speck_net::config::NetworkConfig;
+pub use speck_net::{PortMapConfig, PortMapUpdate};
 
 /// Configuration for a single VirtioFS volume mount.
 #[derive(Debug, Clone, PartialEq, Eq)]

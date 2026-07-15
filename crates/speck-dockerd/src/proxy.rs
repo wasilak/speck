@@ -21,10 +21,10 @@ use axum::extract::{DefaultBodyLimit, Request, State};
 use axum::http::StatusCode;
 use axum::response::Response;
 use http_body_util::BodyExt;
+use hyper::Method;
 use hyper::body::{Bytes, Incoming};
 use hyper::header::{CONTENT_LENGTH, UPGRADE};
 use hyper::upgrade;
-use hyper::Method;
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use speck_core::VmState;
@@ -36,8 +36,8 @@ use tokio::net::UnixStream;
 use tower::Service;
 
 use crate::DockerApiError;
-use crate::middleware::strip_api_version::strip_version_prefix;
 use crate::middleware::restart_503::RestartCheckLayer;
+use crate::middleware::strip_api_version::strip_version_prefix;
 
 #[derive(Clone)]
 struct ProxyState {
@@ -180,7 +180,8 @@ async fn passthrough(State(state): State<ProxyState>, mut req: Request) -> crate
         ))
     })?;
 
-    let backend_upgrade = (wants_upgrade && backend_resp.status() == StatusCode::SWITCHING_PROTOCOLS)
+    let backend_upgrade = (wants_upgrade
+        && backend_resp.status() == StatusCode::SWITCHING_PROTOCOLS)
         .then(|| upgrade::on(&mut backend_resp));
     let response = response_from_backend(backend_resp);
 
@@ -212,10 +213,7 @@ async fn passthrough(State(state): State<ProxyState>, mut req: Request) -> crate
     Ok(response)
 }
 
-async fn intercept_container_create(
-    state: ProxyState,
-    req: Request,
-) -> crate::Result<Response> {
+async fn intercept_container_create(state: ProxyState, req: Request) -> crate::Result<Response> {
     let query_name = query_value(req.uri().query(), "name");
     let (parts, body) = req.into_parts();
     let body_bytes = to_bytes(body, usize::MAX)
@@ -337,9 +335,7 @@ fn rewrite_create_body_bind_mounts(
         serde_json::Value::Array(
             bind_mounts
                 .iter()
-                .map(|bind| {
-                    serde_json::Value::String(render_rewritten_bind_mount(bind, namespace))
-                })
+                .map(|bind| serde_json::Value::String(render_rewritten_bind_mount(bind, namespace)))
                 .collect(),
         ),
     );
@@ -359,7 +355,11 @@ fn render_rewritten_bind_mount(bind: &DockerMountSpec, namespace: Option<&str>) 
                     .unwrap_or_else(|| bind_mount_guest_source_path(&bind.container_path))
             });
             if bind.suffix.is_empty() {
-                format!("{}:{}", guest_source.display(), bind.container_path.display())
+                format!(
+                    "{}:{}",
+                    guest_source.display(),
+                    bind.container_path.display()
+                )
             } else {
                 format!(
                     "{}:{}:{}",
@@ -393,7 +393,9 @@ async fn intercept_container_start(
     let response = forward_plain(&state, req).await?;
     tracing::info!(container = %id_or_name, "intercept container start after forward");
     tracing::info!(status = %response.status(), container = %id_or_name, "intercepted container start response");
-    if response.status() == StatusCode::NO_CONTENT && let Some(guest) = state.guest.as_ref() {
+    if response.status() == StatusCode::NO_CONTENT
+        && let Some(guest) = state.guest.as_ref()
+    {
         if !has_published_ports(&state, &id_or_name) {
             return Ok(response);
         }
@@ -464,7 +466,10 @@ async fn intercept_container_inspect(
     let (mut parts, body_bytes) = collect_response(backend_resp).await?;
 
     let should_rewrite = {
-        let published = state.published_ports.lock().expect("published ports lock poisoned");
+        let published = state
+            .published_ports
+            .lock()
+            .expect("published ports lock poisoned");
         resolve_container_id(&published, &id_or_name)
             .and_then(|id| published.by_id.get(&id))
             .map(|entry| !entry.ports.is_empty())
@@ -487,7 +492,10 @@ async fn intercept_container_inspect(
                         if let Some(arr) = bindings.as_array_mut() {
                             for binding in arr {
                                 if let Some(obj) = binding.as_object_mut() {
-                                    obj.insert("HostIp".to_string(), serde_json::Value::String("127.0.0.1".to_string()));
+                                    obj.insert(
+                                        "HostIp".to_string(),
+                                        serde_json::Value::String("127.0.0.1".to_string()),
+                                    );
                                 }
                             }
                         }
@@ -512,24 +520,25 @@ async fn intercept_container_inspect(
     parts.headers.remove("transfer-encoding");
     parts.headers.insert(
         CONTENT_LENGTH,
-        hyper::header::HeaderValue::from_str(&response_bytes.len().to_string())
-            .map_err(|err| DockerApiError::Internal(format!("set inspect response body length: {err}")))?,
+        hyper::header::HeaderValue::from_str(&response_bytes.len().to_string()).map_err(|err| {
+            DockerApiError::Internal(format!("set inspect response body length: {err}"))
+        })?,
     );
 
     Ok(Response::from_parts(parts, Body::from(response_bytes)))
 }
 
-async fn intercept_container_list(
-    state: ProxyState,
-    req: Request,
-) -> crate::Result<Response> {
+async fn intercept_container_list(state: ProxyState, req: Request) -> crate::Result<Response> {
     let backend_resp = forward_request(&state, req).await?;
     let (mut parts, body_bytes) = collect_response(backend_resp).await?;
 
     let response_bytes = match serde_json::from_slice::<serde_json::Value>(&body_bytes) {
         Ok(mut json) => {
             let published_ids: std::collections::HashSet<String> = {
-                let published = state.published_ports.lock().expect("published ports lock poisoned");
+                let published = state
+                    .published_ports
+                    .lock()
+                    .expect("published ports lock poisoned");
                 published.by_id.keys().cloned().collect()
             };
 
@@ -545,7 +554,10 @@ async fn intercept_container_list(
                     {
                         for port in ports {
                             if let Some(obj) = port.as_object_mut() {
-                                obj.insert("IP".to_string(), serde_json::Value::String("127.0.0.1".to_string()));
+                                obj.insert(
+                                    "IP".to_string(),
+                                    serde_json::Value::String("127.0.0.1".to_string()),
+                                );
                             }
                         }
                     }
@@ -570,8 +582,9 @@ async fn intercept_container_list(
     parts.headers.remove("transfer-encoding");
     parts.headers.insert(
         CONTENT_LENGTH,
-        hyper::header::HeaderValue::from_str(&response_bytes.len().to_string())
-            .map_err(|err| DockerApiError::Internal(format!("set list response body length: {err}")))?,
+        hyper::header::HeaderValue::from_str(&response_bytes.len().to_string()).map_err(|err| {
+            DockerApiError::Internal(format!("set list response body length: {err}"))
+        })?,
     );
 
     Ok(Response::from_parts(parts, Body::from(response_bytes)))
@@ -582,7 +595,10 @@ async fn forward_plain(state: &ProxyState, req: Request) -> crate::Result<Respon
     Ok(response_from_backend(backend_resp))
 }
 
-async fn forward_request(state: &ProxyState, mut req: Request) -> crate::Result<hyper::Response<Incoming>> {
+async fn forward_request(
+    state: &ProxyState,
+    mut req: Request,
+) -> crate::Result<hyper::Response<Incoming>> {
     rewrite_proxy_uri(&mut req)?;
     let client = Client::builder(TokioExecutor::new())
         .build(UnixConnector::new((*state.internal_sock_path).clone()));
@@ -626,7 +642,11 @@ fn response_from_backend(resp: hyper::Response<Incoming>) -> Response {
 
 async fn best_effort_remove_container(state: &ProxyState, id: &str) {
     let uri = format!("http://localhost/containers/{id}?force=1");
-    let request = match Request::builder().method(Method::DELETE).uri(uri).body(Body::empty()) {
+    let request = match Request::builder()
+        .method(Method::DELETE)
+        .uri(uri)
+        .body(Body::empty())
+    {
         Ok(request) => request,
         Err(err) => {
             tracing::warn!(error = %err, container = %id, "failed to build cleanup remove request");
@@ -634,7 +654,8 @@ async fn best_effort_remove_container(state: &ProxyState, id: &str) {
         }
     };
     match forward_request(state, request).await {
-        Ok(response) if response.status().is_success() || response.status() == StatusCode::NOT_FOUND => {}
+        Ok(response)
+            if response.status().is_success() || response.status() == StatusCode::NOT_FOUND => {}
         Ok(response) => {
             tracing::warn!(status = %response.status(), container = %id, "cleanup remove request failed");
         }
@@ -646,7 +667,11 @@ async fn best_effort_remove_container(state: &ProxyState, id: &str) {
 
 async fn best_effort_stop_container(state: &ProxyState, id_or_name: &str) {
     let uri = format!("http://localhost/containers/{id_or_name}/stop?t=0");
-    let request = match Request::builder().method(Method::POST).uri(uri).body(Body::empty()) {
+    let request = match Request::builder()
+        .method(Method::POST)
+        .uri(uri)
+        .body(Body::empty())
+    {
         Ok(request) => request,
         Err(err) => {
             tracing::warn!(error = %err, container = %id_or_name, "failed to build cleanup stop request");
@@ -747,7 +772,10 @@ fn extract_bind_mounts(binds: Option<Vec<String>>) -> crate::Result<Vec<DockerMo
     let Some(binds) = binds else {
         return Ok(Vec::new());
     };
-    binds.into_iter().map(|bind| parse_docker_bind(&bind)).collect()
+    binds
+        .into_iter()
+        .map(|bind| parse_docker_bind(&bind))
+        .collect()
 }
 
 fn parse_docker_bind(s: &str) -> crate::Result<DockerMountSpec> {
@@ -763,7 +791,9 @@ fn parse_docker_bind(s: &str) -> crate::Result<DockerMountSpec> {
     };
 
     if host.is_empty() || container.is_empty() {
-        return Err(DockerApiError::BadRequest("bind mount paths cannot be empty".into()));
+        return Err(DockerApiError::BadRequest(
+            "bind mount paths cannot be empty".into(),
+        ));
     }
     let container_path = PathBuf::from(container);
     if !container_path.is_absolute() || container.contains("..") {
@@ -774,12 +804,16 @@ fn parse_docker_bind(s: &str) -> crate::Result<DockerMountSpec> {
     let host_path = PathBuf::from(host);
     if !host_path.is_absolute() {
         if host.contains('/') || host.starts_with('.') {
-            return Err(DockerApiError::BadRequest(format!("bind host path invalid: {host}")));
+            return Err(DockerApiError::BadRequest(format!(
+                "bind host path invalid: {host}"
+            )));
         }
         return Ok(DockerMountSpec::Passthrough(s.to_owned()));
     }
     if !host_path.exists() {
-        return Err(DockerApiError::BadRequest(format!("bind host path invalid: {host}")));
+        return Err(DockerApiError::BadRequest(format!(
+            "bind host path invalid: {host}"
+        )));
     }
     let read_only = suffix.split(',').any(|option| option == "ro");
 
@@ -792,9 +826,11 @@ fn parse_docker_bind(s: &str) -> crate::Result<DockerMountSpec> {
 }
 
 fn query_value(query: Option<&str>, key: &str) -> Option<String> {
-    query?
-        .split('&')
-        .find_map(|pair| pair.split_once('=').filter(|(k, _)| *k == key).map(|(_, v)| v.to_string()))
+    query?.split('&').find_map(|pair| {
+        pair.split_once('=')
+            .filter(|(k, _)| *k == key)
+            .map(|(_, v)| v.to_string())
+    })
 }
 
 fn extract_container_id<'a>(path: &'a str, prefix: &str, suffix: &str) -> Option<&'a str> {
@@ -813,7 +849,10 @@ fn remember_published_ports(
     ports: Vec<PortMapConfig>,
     active: bool,
 ) {
-    let mut published = state.published_ports.lock().expect("published ports lock poisoned");
+    let mut published = state
+        .published_ports
+        .lock()
+        .expect("published ports lock poisoned");
     published.by_id.insert(
         id.clone(),
         PublishedPortEntry {
@@ -841,7 +880,10 @@ fn remember_bind_mounts(
 }
 
 fn has_published_ports(state: &ProxyState, id_or_name: &str) -> bool {
-    let published = state.published_ports.lock().expect("published ports lock poisoned");
+    let published = state
+        .published_ports
+        .lock()
+        .expect("published ports lock poisoned");
     resolve_container_id(&published, id_or_name)
         .and_then(|id| published.by_id.get(&id))
         .map(|entry| !entry.ports.is_empty())
@@ -853,7 +895,10 @@ fn activate_published_ports(
     id_or_name: &str,
     container_ip: Ipv4Addr,
 ) -> Vec<PortMapConfig> {
-    let mut published = state.published_ports.lock().expect("published ports lock poisoned");
+    let mut published = state
+        .published_ports
+        .lock()
+        .expect("published ports lock poisoned");
     let Some(id) = resolve_container_id(&published, id_or_name) else {
         return Vec::new();
     };
@@ -888,7 +933,10 @@ fn activate_published_ports(
 }
 
 fn forget_published_ports(state: &ProxyState, id_or_name: &str) -> Vec<PortMapConfig> {
-    let mut published = state.published_ports.lock().expect("published ports lock poisoned");
+    let mut published = state
+        .published_ports
+        .lock()
+        .expect("published ports lock poisoned");
     let Some(id) = resolve_container_id(&published, id_or_name) else {
         return Vec::new();
     };
@@ -910,7 +958,10 @@ fn forget_bind_mounts(state: &ProxyState, id_or_name: &str) -> Vec<VolumeMountCo
 }
 
 fn stop_host_port_forwards(state: &ProxyState, id_or_name: &str) {
-    let published = &mut *state.published_ports.lock().expect("published ports lock poisoned");
+    let published = &mut *state
+        .published_ports
+        .lock()
+        .expect("published ports lock poisoned");
     let Some(id) = resolve_container_id(published, id_or_name) else {
         return;
     };
@@ -928,7 +979,10 @@ fn stop_host_port_forwards(state: &ProxyState, id_or_name: &str) {
 }
 
 fn register_host_port_forward(state: &ProxyState, id_or_name: &str, forward: HostPortForward) {
-    let published = &mut *state.published_ports.lock().expect("published ports lock poisoned");
+    let published = &mut *state
+        .published_ports
+        .lock()
+        .expect("published ports lock poisoned");
     let Some(id) = resolve_container_id(published, id_or_name) else {
         return;
     };
@@ -937,8 +991,13 @@ fn register_host_port_forward(state: &ProxyState, id_or_name: &str, forward: Hos
     }
 }
 
-fn spawn_host_port_forward(guest: Arc<speck_vz::Guest>, config: PortMapConfig) -> std::io::Result<HostPortForward> {
-    let target_ip = config.target_ip.expect("activated port map must have target_ip");
+fn spawn_host_port_forward(
+    guest: Arc<speck_vz::Guest>,
+    config: PortMapConfig,
+) -> std::io::Result<HostPortForward> {
+    let target_ip = config
+        .target_ip
+        .expect("activated port map must have target_ip");
     let listener = TcpListener::bind(("127.0.0.1", config.host_port))?;
     listener.set_nonblocking(true)?;
     let stop = Arc::new(AtomicBool::new(false));
@@ -956,7 +1015,12 @@ fn spawn_host_port_forward(guest: Arc<speck_vz::Guest>, config: PortMapConfig) -
                     }
                     let guest = Arc::clone(&guest);
                     std::thread::spawn(move || {
-                        if let Err(err) = bridge_host_to_guest_tcp(guest, target_ip, config.container_port, stream) {
+                        if let Err(err) = bridge_host_to_guest_tcp(
+                            guest,
+                            target_ip,
+                            config.container_port,
+                            stream,
+                        ) {
                             tracing::warn!(error = %err, host_port = config.host_port, target_ip = %target_ip, target_port = config.container_port, "published port connection failed");
                         }
                     });
@@ -1010,7 +1074,10 @@ fn resolve_container_id(published: &PublishedPortsState, id_or_name: &str) -> Op
     resolve_registered_container_id(&published.by_id, &published.aliases, id_or_name)
 }
 
-fn resolve_bind_mount_container_id(bind_mounts: &BindMountState, id_or_name: &str) -> Option<String> {
+fn resolve_bind_mount_container_id(
+    bind_mounts: &BindMountState,
+    id_or_name: &str,
+) -> Option<String> {
     resolve_registered_container_id(&bind_mounts.by_id, &bind_mounts.aliases, id_or_name)
 }
 
@@ -1035,7 +1102,10 @@ fn resolve_registered_container_id<T>(
 }
 
 fn allocate_bind_namespace(state: &ProxyState) -> String {
-    format!("b{:x}", state.next_bind_namespace.fetch_add(1, Ordering::Relaxed))
+    format!(
+        "b{:x}",
+        state.next_bind_namespace.fetch_add(1, Ordering::Relaxed)
+    )
 }
 
 async fn inspect_container_ip(state: &ProxyState, id: &str) -> crate::Result<Option<Ipv4Addr>> {

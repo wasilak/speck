@@ -157,12 +157,14 @@ fn spawn_fake_dockerd(path: &Path, script: FakeScript) -> Arc<Mutex<Vec<Recorded
                     body.extend_from_slice(&chunk[..n]);
                 }
                 body.truncate(want);
-                rec.lock().expect("recorded requests lock").push(RecordedRequest {
-                    method,
-                    path_and_query,
-                    headers,
-                    body,
-                });
+                rec.lock()
+                    .expect("recorded requests lock")
+                    .push(RecordedRequest {
+                        method,
+                        path_and_query,
+                        headers,
+                        body,
+                    });
                 match script {
                     FakeScript::Canned(bytes) => {
                         stream
@@ -251,10 +253,13 @@ async fn proxy_forwards_request_verbatim_d21() {
               Content-Type: application/json\r\n\
               Content-Length: 2\r\n\r\n\
               []"
-                .to_vec(),
+            .to_vec(),
         ),
     );
-    spawn_proxy(build_proxy_router(backend_sock, None, running_state()), &proxy_sock);
+    spawn_proxy(
+        build_proxy_router(backend_sock, None, running_state()),
+        &proxy_sock,
+    );
 
     let mut client = UnixStream::connect(&proxy_sock)
         .await
@@ -304,7 +309,10 @@ async fn create_rewrites_bind_sources_for_guest_path() {
                 .to_vec(),
         ),
     );
-    spawn_proxy(build_proxy_router(backend_sock, None, running_state()), &proxy_sock);
+    spawn_proxy(
+        build_proxy_router(backend_sock, None, running_state()),
+        &proxy_sock,
+    );
 
     let create_body = serde_json::json!({
         "Image": "alpine",
@@ -343,7 +351,10 @@ async fn create_rewrites_bind_sources_for_guest_path() {
     assert_eq!(reqs.len(), 1);
     let req = &reqs[0];
     assert_eq!(req.method, "POST");
-    assert_eq!(req.path_and_query, "/v1.55/containers/create?name=bind-rewrite");
+    assert_eq!(
+        req.path_and_query,
+        "/v1.55/containers/create?name=bind-rewrite"
+    );
 
     let forwarded: serde_json::Value =
         serde_json::from_slice(&req.body).expect("forwarded create body as json");
@@ -356,8 +367,14 @@ async fn create_rewrites_bind_sources_for_guest_path() {
         .collect();
     let canonical_host_dir = std::fs::canonicalize(&host_dir).expect("canonical host bind source");
     assert_eq!(bind_specs.len(), 2);
-    assert_eq!(bind_specs[0], format!("{}:/var/data:ro", canonical_host_dir.display()));
-    assert_eq!(bind_specs[1], format!("{}:/var/cache:rw", canonical_host_dir.display()));
+    assert_eq!(
+        bind_specs[0],
+        format!("{}:/var/data:ro", canonical_host_dir.display())
+    );
+    assert_eq!(
+        bind_specs[1],
+        format!("{}:/var/cache:rw", canonical_host_dir.display())
+    );
 }
 
 #[tokio::test]
@@ -380,7 +397,10 @@ async fn create_uses_distinct_bind_namespaces_for_same_container_path() {
                 .to_vec(),
         ),
     );
-    spawn_proxy(build_proxy_router(backend_sock, None, running_state()), &proxy_sock);
+    spawn_proxy(
+        build_proxy_router(backend_sock, None, running_state()),
+        &proxy_sock,
+    );
 
     for (index, host_dir) in [host_a, host_b].into_iter().enumerate() {
         let create_body = serde_json::json!({
@@ -409,26 +429,39 @@ async fn create_uses_distinct_bind_namespaces_for_same_container_path() {
             .await
             .expect("write create request");
 
-    let (status, _headers, body) = read_response(&mut client).await;
-    assert_eq!(status, 201);
-    assert_eq!(body, br#"{"Id":"ctr-123"}"#);
+        let (status, _headers, body) = read_response(&mut client).await;
+        assert_eq!(status, 201);
+        assert_eq!(body, br#"{"Id":"ctr-123"}"#);
     }
 
     let reqs = recorded.lock().expect("recorded requests lock");
     assert_eq!(reqs.len(), 2);
-    let canonical_host_a = std::fs::canonicalize(dir.join("host-a")).expect("canonical first host bind source");
-    let canonical_host_b = std::fs::canonicalize(dir.join("host-b")).expect("canonical second host bind source");
-    let first: serde_json::Value = serde_json::from_slice(&reqs[0].body).expect("first create body");
-    let second: serde_json::Value = serde_json::from_slice(&reqs[1].body).expect("second create body");
+    let canonical_host_a =
+        std::fs::canonicalize(dir.join("host-a")).expect("canonical first host bind source");
+    let canonical_host_b =
+        std::fs::canonicalize(dir.join("host-b")).expect("canonical second host bind source");
+    let first: serde_json::Value =
+        serde_json::from_slice(&reqs[0].body).expect("first create body");
+    let second: serde_json::Value =
+        serde_json::from_slice(&reqs[1].body).expect("second create body");
     let first_bind = first["HostConfig"]["Binds"][0]
         .as_str()
         .expect("first bind string");
     let second_bind = second["HostConfig"]["Binds"][0]
         .as_str()
         .expect("second bind string");
-    assert_ne!(first_bind, second_bind, "same container target must not reuse a global bind share name");
-    assert_eq!(first_bind, format!("{}:/var/data:ro", canonical_host_a.display()));
-    assert_eq!(second_bind, format!("{}:/var/data:ro", canonical_host_b.display()));
+    assert_ne!(
+        first_bind, second_bind,
+        "same container target must not reuse a global bind share name"
+    );
+    assert_eq!(
+        first_bind,
+        format!("{}:/var/data:ro", canonical_host_a.display())
+    );
+    assert_eq!(
+        second_bind,
+        format!("{}:/var/data:ro", canonical_host_b.display())
+    );
 }
 
 #[tokio::test]
@@ -449,7 +482,10 @@ async fn create_preserves_bind_suffix_options_during_rewrite() {
                 .to_vec(),
         ),
     );
-    spawn_proxy(build_proxy_router(backend_sock, None, running_state()), &proxy_sock);
+    spawn_proxy(
+        build_proxy_router(backend_sock, None, running_state()),
+        &proxy_sock,
+    );
 
     let create_body = serde_json::json!({
         "Image": "alpine",
@@ -514,7 +550,10 @@ async fn create_preserves_named_volume_bind_specs_while_rewriting_host_binds() {
                 .to_vec(),
         ),
     );
-    spawn_proxy(build_proxy_router(backend_sock, None, running_state()), &proxy_sock);
+    spawn_proxy(
+        build_proxy_router(backend_sock, None, running_state()),
+        &proxy_sock,
+    );
 
     let create_body = serde_json::json!({
         "Image": "alpine",
@@ -558,7 +597,10 @@ async fn create_preserves_named_volume_bind_specs_while_rewriting_host_binds() {
     assert_eq!(binds[0].as_str(), Some("cache:/var/cache:rw"));
     let canonical_host_dir = std::fs::canonicalize(&host_dir).expect("canonical host bind source");
     let rewritten = binds[1].as_str().expect("rewritten host bind string");
-    assert_eq!(rewritten, format!("{}:/var/data:ro,z", canonical_host_dir.display()));
+    assert_eq!(
+        rewritten,
+        format!("{}:/var/data:ro,z", canonical_host_dir.display())
+    );
 }
 
 #[tokio::test]
@@ -570,9 +612,14 @@ async fn create_rejects_missing_bind_host_path_before_forwarding() {
 
     let recorded = spawn_fake_dockerd(
         &backend_sock,
-        FakeScript::Canned(b"HTTP/1.1 500 INTERNAL SERVER ERROR\r\nContent-Length: 0\r\n\r\n".to_vec()),
+        FakeScript::Canned(
+            b"HTTP/1.1 500 INTERNAL SERVER ERROR\r\nContent-Length: 0\r\n\r\n".to_vec(),
+        ),
     );
-    spawn_proxy(build_proxy_router(backend_sock, None, running_state()), &proxy_sock);
+    spawn_proxy(
+        build_proxy_router(backend_sock, None, running_state()),
+        &proxy_sock,
+    );
 
     let create_body = serde_json::json!({
         "Image": "alpine",
@@ -614,14 +661,20 @@ async fn create_rejects_invalid_bind_specs_with_400() {
     let dir = unique_dir();
     let backend_sock = dir.join("backend.sock");
     let proxy_sock = dir.join("proxy.sock");
-    let valid_host_dir = std::env::temp_dir().join(format!("spk-bind-valid-{}", std::process::id()));
+    let valid_host_dir =
+        std::env::temp_dir().join(format!("spk-bind-valid-{}", std::process::id()));
     std::fs::create_dir_all(&valid_host_dir).expect("create valid host bind source");
 
     let recorded = spawn_fake_dockerd(
         &backend_sock,
-        FakeScript::Canned(b"HTTP/1.1 500 INTERNAL SERVER ERROR\r\nContent-Length: 0\r\n\r\n".to_vec()),
+        FakeScript::Canned(
+            b"HTTP/1.1 500 INTERNAL SERVER ERROR\r\nContent-Length: 0\r\n\r\n".to_vec(),
+        ),
     );
-    spawn_proxy(build_proxy_router(backend_sock, None, running_state()), &proxy_sock);
+    spawn_proxy(
+        build_proxy_router(backend_sock, None, running_state()),
+        &proxy_sock,
+    );
 
     let cases = vec![
         (
@@ -698,7 +751,10 @@ async fn proxy_streams_body_larger_than_2mb() {
         &backend_sock,
         FakeScript::Canned(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n".to_vec()),
     );
-    spawn_proxy(build_proxy_router(backend_sock, None, running_state()), &proxy_sock);
+    spawn_proxy(
+        build_proxy_router(backend_sock, None, running_state()),
+        &proxy_sock,
+    );
 
     let mut client = UnixStream::connect(&proxy_sock)
         .await
@@ -748,7 +804,10 @@ async fn proxy_joins_upgrade_bidirectionally() {
     let proxy_sock = dir.join("proxy.sock");
 
     let _recorded = spawn_fake_dockerd(&backend_sock, FakeScript::UpgradeEcho);
-    spawn_proxy(build_proxy_router(backend_sock, None, running_state()), &proxy_sock);
+    spawn_proxy(
+        build_proxy_router(backend_sock, None, running_state()),
+        &proxy_sock,
+    );
 
     let mut client = UnixStream::connect(&proxy_sock)
         .await
@@ -796,7 +855,10 @@ async fn proxy_returns_503_while_restarting() {
     let proxy_sock = dir.join("proxy.sock");
 
     let vm_state = Arc::new(RwLock::new(VmState::Restarting));
-    spawn_proxy(build_proxy_router(backend_sock, None, vm_state), &proxy_sock);
+    spawn_proxy(
+        build_proxy_router(backend_sock, None, vm_state),
+        &proxy_sock,
+    );
 
     let mut client = UnixStream::connect(&proxy_sock)
         .await
@@ -809,7 +871,9 @@ async fn proxy_returns_503_while_restarting() {
     let (status, headers, _body) = read_response(&mut client).await;
     assert_eq!(status, 503);
     assert!(
-        headers.iter().any(|(n, v)| n == "retry-after" && !v.is_empty())
+        headers
+            .iter()
+            .any(|(n, v)| n == "retry-after" && !v.is_empty())
     );
 }
 
@@ -851,7 +915,10 @@ async fn inspect_rewrites_published_port_host_ip() {
             .into_bytes(),
         ]))),
     );
-    spawn_proxy(build_proxy_router(backend_sock, None, running_state()), &proxy_sock);
+    spawn_proxy(
+        build_proxy_router(backend_sock, None, running_state()),
+        &proxy_sock,
+    );
 
     // Step 1: create container with published port to register it in proxy state
     let create_body = serde_json::json!({
@@ -901,7 +968,10 @@ async fn inspect_rewrites_published_port_host_ip() {
     let host_ip = json["NetworkSettings"]["Ports"]["80/tcp"][0]["HostIp"]
         .as_str()
         .expect("HostIp string");
-    assert_eq!(host_ip, "127.0.0.1", "HostIp must be rewritten to 127.0.0.1");
+    assert_eq!(
+        host_ip, "127.0.0.1",
+        "HostIp must be rewritten to 127.0.0.1"
+    );
     let host_port = json["NetworkSettings"]["Ports"]["80/tcp"][0]["HostPort"]
         .as_str()
         .expect("HostPort string");
@@ -935,7 +1005,10 @@ async fn inspect_passthrough_without_published_ports() {
             .into_bytes(),
         ),
     );
-    spawn_proxy(build_proxy_router(backend_sock, None, running_state()), &proxy_sock);
+    spawn_proxy(
+        build_proxy_router(backend_sock, None, running_state()),
+        &proxy_sock,
+    );
 
     let mut client = UnixStream::connect(&proxy_sock)
         .await
@@ -998,7 +1071,10 @@ async fn list_rewrites_published_port_ip() {
             .into_bytes(),
         ]))),
     );
-    spawn_proxy(build_proxy_router(backend_sock, None, running_state()), &proxy_sock);
+    spawn_proxy(
+        build_proxy_router(backend_sock, None, running_state()),
+        &proxy_sock,
+    );
 
     // Step 1: create container with published port
     let create_body = serde_json::json!({
@@ -1050,8 +1126,14 @@ async fn list_rewrites_published_port_ip() {
     let with_ports = &arr[0];
     assert_eq!(with_ports["Id"], "ctr-with-ports");
     let ports = with_ports["Ports"].as_array().expect("ports array");
-    assert_eq!(ports[0]["IP"], "127.0.0.1", "IP must be rewritten to 127.0.0.1");
-    assert_eq!(ports[0]["PublicPort"], 18081, "PublicPort must be preserved");
+    assert_eq!(
+        ports[0]["IP"], "127.0.0.1",
+        "IP must be rewritten to 127.0.0.1"
+    );
+    assert_eq!(
+        ports[0]["PublicPort"], 18081,
+        "PublicPort must be preserved"
+    );
 
     let no_ports = &arr[1];
     assert_eq!(no_ports["Id"], "ctr-no-ports");
@@ -1090,7 +1172,10 @@ async fn list_passthrough_without_published_ports() {
             .into_bytes(),
         ),
     );
-    spawn_proxy(build_proxy_router(backend_sock, None, running_state()), &proxy_sock);
+    spawn_proxy(
+        build_proxy_router(backend_sock, None, running_state()),
+        &proxy_sock,
+    );
 
     let mut client = UnixStream::connect(&proxy_sock)
         .await

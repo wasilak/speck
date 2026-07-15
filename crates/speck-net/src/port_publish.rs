@@ -101,7 +101,7 @@ impl PortPublishBridge {
         for (listener, config) in &self.listeners {
             loop {
                 match listener.accept() {
-                Ok((stream, _addr)) => accepted.push((stream, *config)),
+                    Ok((stream, _addr)) => accepted.push((stream, *config)),
                     Err(e) if e.kind() == ErrorKind::WouldBlock => break,
                     Err(e) => {
                         tracing::warn!(host_port = config.host_port, error = %e, "port publish accept failed");
@@ -142,10 +142,7 @@ impl PortPublishBridge {
             match socket.connect(
                 cx,
                 (
-                    config
-                        .target_ip
-                        .map(IpAddress::from)
-                        .unwrap_or(GUEST_IP),
+                    config.target_ip.map(IpAddress::from).unwrap_or(GUEST_IP),
                     config.container_port,
                 ),
                 (
@@ -199,7 +196,8 @@ impl PortPublishBridge {
                             Ok(0) => Some(true),
                             Ok(n) => {
                                 tracing::info!(bytes = n, state = ?socket.state(), "read host bytes for published port");
-                                let send_avail = socket.send_capacity().saturating_sub(socket.send_queue());
+                                let send_avail =
+                                    socket.send_capacity().saturating_sub(socket.send_queue());
                                 let to_send = n.min(send_avail);
                                 if to_send > 0 {
                                     tracing::info!(bytes = to_send, state = ?socket.state(), "forwarding host bytes into guest published-port socket");

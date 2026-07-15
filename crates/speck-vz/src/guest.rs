@@ -816,7 +816,11 @@ mod tests {
             .read_exact(&mut buf)
             .expect("fake guest did not receive the client's bytes");
         assert_eq!(&buf, b"PING");
-        assert_eq!(attempts.load(Ordering::SeqCst), 3, "expected exactly 3 attempts");
+        assert_eq!(
+            attempts.load(Ordering::SeqCst),
+            3,
+            "expected exactly 3 attempts"
+        );
 
         let _ = std::fs::remove_file(&sock_path);
     }

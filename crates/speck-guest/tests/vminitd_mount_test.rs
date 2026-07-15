@@ -154,7 +154,9 @@ fn phase21_vminitd_mounts_runtime_bind_root_before_dockerd_start() {
     let mount_helper = VMINITD_SOURCE[bind_root_parser..]
         .find("fn mount_virtiofs_volumes(cmdline_path: &str)")
         .map(|offset| bind_root_parser + offset)
-        .expect("Phase 21 requires mount_virtiofs_volumes to consume the runtime bind-root contract");
+        .expect(
+            "Phase 21 requires mount_virtiofs_volumes to consume the runtime bind-root contract",
+        );
     let binds_mount = VMINITD_SOURCE[mount_helper..]
         .find("virtiofs-binds")
         .map(|offset| mount_helper + offset)

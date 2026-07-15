@@ -42,9 +42,13 @@ pub fn serve(vsock_port: u32) -> io::Result<()> {
     }
 
     loop {
-        let vsock_fd = unsafe { libc::accept(listen_fd, std::ptr::null_mut(), std::ptr::null_mut()) };
+        let vsock_fd =
+            unsafe { libc::accept(listen_fd, std::ptr::null_mut(), std::ptr::null_mut()) };
         if vsock_fd < 0 {
-            eprintln!("tcp_forwarder: accept failed: {}", io::Error::last_os_error());
+            eprintln!(
+                "tcp_forwarder: accept failed: {}",
+                io::Error::last_os_error()
+            );
             continue;
         }
 
@@ -104,20 +108,30 @@ fn read_target_line(fd: libc::c_int) -> io::Result<SocketAddrV4> {
             return Err(io::Error::last_os_error());
         }
         if n == 0 {
-            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "EOF before target line"));
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "EOF before target line",
+            ));
         }
         if byte[0] == b'\n' {
             break;
         }
         buf.push(byte[0]);
         if buf.len() > 128 {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "target line too long"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "target line too long",
+            ));
         }
     }
     let line = std::str::from_utf8(&buf)
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "target line not utf-8"))?;
-    SocketAddrV4::from_str(line)
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, format!("invalid target: {line}")))
+    SocketAddrV4::from_str(line).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("invalid target: {line}"),
+        )
+    })
 }
 
 fn proxy_copy(read_fd: libc::c_int, write_fd: libc::c_int) {

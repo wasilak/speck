@@ -1224,13 +1224,7 @@ impl VmThread {
 
     pub fn add_port_map_config(&self, config: PortMapConfig) -> std::result::Result<(), Error> {
         let (tx, rx) = mpsc::channel();
-        self.send_blocking(
-            VmCommand::AddPortMap {
-                config,
-                reply: tx,
-            },
-            rx,
-        )?
+        self.send_blocking(VmCommand::AddPortMap { config, reply: tx }, rx)?
     }
 
     /// Register a tokio channel that receives `PortMapConfig` entries as the netstack wires them.
@@ -1247,13 +1241,7 @@ impl VmThread {
 
     pub fn remove_port_map_config(&self, config: PortMapConfig) -> std::result::Result<(), Error> {
         let (tx, rx) = mpsc::channel();
-        self.send_blocking(
-            VmCommand::RemovePortMap {
-                config,
-                reply: tx,
-            },
-            rx,
-        )?
+        self.send_blocking(VmCommand::RemovePortMap { config, reply: tx }, rx)?
     }
 
     /// Accumulate Docker bind mounts and update the pre-provisioned
@@ -1315,7 +1303,10 @@ impl Drop for VmThread {
 /// and close the live connection on drop.
 fn raise_socket_buffers(fd: RawFd) {
     let size: libc::c_int = 4 * 1024 * 1024;
-    for (opt, name) in [(libc::SO_RCVBUF, "SO_RCVBUF"), (libc::SO_SNDBUF, "SO_SNDBUF")] {
+    for (opt, name) in [
+        (libc::SO_RCVBUF, "SO_RCVBUF"),
+        (libc::SO_SNDBUF, "SO_SNDBUF"),
+    ] {
         let ret = unsafe {
             libc::setsockopt(
                 fd,
