@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Transparent Proxy Restoration
 status: executing
-stopped_at: Completed 22-02-PLAN.md (code); live verification pending
-last_updated: "2026-07-14T12:30:00.000Z"
-last_activity: 2026-07-14 -- Completed Phase 22 Plans 01 + 02 (code)
+stopped_at: Completed 23-01-PLAN.md
+last_updated: "2026-07-15T08:00:00.000Z"
+last_activity: 2026-07-15 -- Completed Phase 23 (SpeckDockerd Retirement)
 progress:
   total_phases: 5
-  completed_phases: 2
-  total_plans: 8
-  completed_plans: 8
-  percent: 87
+  completed_phases: 4
+  total_plans: 9
+  completed_plans: 9
+  percent: 93
 ---
 
 # State — Milestone v1.3 Transparent Proxy Restoration
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-09)
 
 **Core value:** A container runtime on Apple Silicon that never loses the network — micro-VMs inherit the host's routing/DNS live, surviving corporate VPNs and Cloudflare WARP where Docker Desktop fails.
-**Current focus:** Phase 22 — response-rewriting-restart-gate
+**Current focus:** Phase 24 — Conformance Exit Gate
 
 ## Current Position
 
-Phase: 22 (response-rewriting-restart-gate) — IN PROGRESS
-Plan: 2 complete (22-01, 22-02 code)
-Status: All Plan 22 code complete; live verification pending (requires `spk up`)
-Last activity: 2026-07-14 -- Completed Phase 22 Plans 01 + 02
+Phase: 23 (SpeckDockerd Retirement) — COMPLETE
+Plan: 1 complete (23-01)
+Status: Phase 23 complete; workspace builds clean
+Last activity: 2026-07-15 -- Completed Phase 23 (SpeckDockerd Retirement)
 
-Progress: [████████░░] 87%
+Progress: [█████████░] 93%
 
 ## Milestone v1.3 Phase Overview
 
@@ -38,36 +38,31 @@ Progress: [████████░░] 87%
 |-------|------|--------------|--------|
 | 20 | Transparent Proxy Cutover | PROXY-01, PROXY-02, PROXY-03 | Complete |
 | 21 | Create Interception Middleware | MW-01, MW-02 | Complete |
-| 22 | Response Rewriting & Restart Gate | MW-03, MW-04 | In progress (code complete, live verification pending) |
-| 23 | SpeckDockerd Retirement | PROXY-04 | Not started |
+| 22 | Response Rewriting & Restart Gate | MW-03, MW-04 | Complete |
+| 23 | SpeckDockerd Retirement | PROXY-04 | Complete |
 | 24 | Conformance Exit Gate | GATE-01, GATE-02, GATE-03 | Not started |
 
-## Live Verification Pending
+## Phase 23 Verification Results
 
-Run when `spk up` is active:
-```bash
-SPECK_TEST_INTEGRATION=1 cargo test -p speck-dockerd --test api_conformance test_inspect_host_ip_live test_port_command_live test_restart_gate_live -- --ignored
-./scripts/conformance-smoke.sh
-```
-
-**Exit gate:** `scripts/conformance-smoke.sh` 18/18 (baseline 2026-07-11: 8/18) + intact `spk down/up` launchd cycle.
+- `cargo check --workspace`: PASS — all crates compile
+- `cargo clippy -p speck-dockerd`: PASS — no issues
+- `cargo test -p speck-dockerd`: 36 passed, 20 ignored (unit tests all green)
+- `cargo check -p speck-cli`: PASS — CLI crate unaffected
+- Deleted modules confirmed removed:
+  - `handlers/` (attach, build, containers, events, exec, images, networks, system, volumes)
+  - `router.rs`, `state.rs`, `containerd_client.rs`, `storage.rs`, `stream.rs`
+  - `buildkit.rs`, `registry_auth.rs`, `log_relay.rs`
+  - `build.rs`, `proto/buildkit/control.proto`
+- `lib.rs` simplified to only: `error`, `middleware`, `proxy`, `server`
+- `Cargo.toml` cleaned of unused deps: `base64`, `containerd-client`, `prost`, `prost-types`, `rusqlite`, `tonic-prost`, `tokio-stream`, `tonic`, `tower-http`, `tonic-prost-build`
 
 ## Performance Metrics
 
 | Metric | v1.1 | v1.2 | v1.3 |
 |--------|------|------|------|
 | Phases | 8 | 7 | 5 planned |
-| Plans | 26 | 32 | 3 complete |
-| Timeline | 5 days | 3 days | Phase 20 complete |
-
-| Phase 20 Plan | Duration | Tasks | Files |
-|---------------|----------|-------|-------|
-| 20-01 | resumed | 3 | 1 |
-| 20-02 | resumed | 2 | 3 |
-| 20-03 | resumed | 2 | 3 |
-| 21-01 | 5 min | 2 | 5 |
-| 21-02 | 13 min | 2 | 4 |
-| 21-03 | 3 min | 2 | 3 |
+| Plans | 26 | 32 | 4 complete |
+| Timeline | 5 days | 3 days | Phase 23 complete |
 
 ## Accumulated Context
 
@@ -112,8 +107,8 @@ Carried forward at v1.2 close (2026-07-09) and requirements definition (2026-07-
 
 ## Session Continuity
 
-Last session: 2026-07-14T08:54:20.000Z
-Stopped at: Completed 21-03-PLAN.md
+Last session: 2026-07-15T08:00:00.000Z
+Stopped at: Completed Phase 23
 Resume file: None
 
-**To resume:** Plan Phase 22 or execute it once response-rewrite and restart-gate plans exist.
+**To resume:** Plan Phase 24 (Conformance Exit Gate) or execute it once plans exist.

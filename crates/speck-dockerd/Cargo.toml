@@ -8,31 +8,19 @@ license.workspace = true
 
 [dependencies]
 axum = "0.8.9"
-base64 = "0.22"
-containerd-client = "0.9.0"
 http-body-util = "0.1"
 hyper = { version = "1.10.1", features = ["full"] }
 hyper-util = { version = "0.1.20", features = ["server-auto", "client-legacy", "tokio", "service"] }
-prost = "0.14.4"
-prost-types = "0.14.4"
-rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 speck-core = { path = "../speck-core" }
 speck-vz = { path = "../speck-vz" }
 thiserror = "2"
 tokio = { version = "1.52.3", features = ["full", "net"] }
-tonic-prost = "0.14.6"
-tokio-stream = { version = "0.1", features = ["sync"] }
-tonic = "0.14.6"
 tower = { version = "0.5", features = ["util"] }
-tower-http = { version = "0.7.0", features = ["trace"] }
 tracing = "0.1.44"
 
 [dev-dependencies]
 bollard = "0.21.0"
 futures-util = "0.3"
 tokio-test = "0.4"
-
-[build-dependencies]
-tonic-prost-build = { version = "0.14", default-features = false }

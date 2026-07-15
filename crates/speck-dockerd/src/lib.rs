@@ -9,19 +9,10 @@ use std::sync::RwLock;
 
 use speck_core::VmState;
 
-pub mod buildkit;
-pub mod containerd_client;
 pub mod error;
-pub mod handlers;
-pub mod log_relay;
 pub mod middleware;
 pub mod proxy;
-pub mod registry_auth;
-pub mod router;
 pub mod server;
-pub mod state;
-pub mod storage;
-pub mod stream;
 
 pub use error::{DockerApiError, Result};
 
