@@ -9,8 +9,7 @@
 #![cfg(target_os = "linux")]
 
 use std::io;
-use std::io::{Read, Write};
-use std::net::{Shutdown, SocketAddrV4, TcpStream};
+use std::net::{SocketAddrV4, TcpStream};
 use std::os::fd::IntoRawFd;
 use std::str::FromStr;
 
