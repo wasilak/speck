@@ -54,7 +54,7 @@ Full details: `.planning/milestones/v1.2-ROADMAP.md`
 - [x] **Phase 21: Create Interception Middleware** - HTTP-aware allowlist layer intercepts container create: `-v` binds translated to VirtioFS, `-p` ports registered with the host netstack (completed 2026-07-14)
 - [x] **Phase 22: Response Rewriting & Restart Gate** - `HostIp` rewritten to host-reachable values in inspect/port responses; 503/Retry-After restart gate rides in front of the proxy (2/2 plans complete, live verified)
 - [x] **Phase 23: SpeckDockerd Retirement** - containerd-based endpoint handlers deleted; guest dockerd is the single source of container/image/volume/network truth
-- [ ] **Phase 24: Conformance Exit Gate** - conformance-smoke 18/18, intact `spk down/up` launchd cycle, and `docker build`+`push` round-trip against a local registry
+- [x] **Phase 24: Conformance Exit Gate** - conformance-smoke 20/20 + build/push/pull round-trip, intact `spk down/up` launchd cycle
 
 ## Phase Details
 
@@ -181,4 +181,4 @@ Plans:
 | 21. Create Interception Middleware | v1.3 | 3/3 | Complete | 2026-07-14 |
 | 22. Response Rewriting & Restart Gate | v1.3 | 2/2 | Complete | 2026-07-14 |
 | 23. SpeckDockerd Retirement | v1.3 | 1/1 | Complete | 2026-07-15 |
-| 24. Conformance Exit Gate | v1.3 | 0/TBD | Not started | - |
+| 24. Conformance Exit Gate | v1.3 | 1/1 | Complete | 2026-07-15 |

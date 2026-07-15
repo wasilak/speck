@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Transparent Proxy Restoration
-status: executing
-stopped_at: Completed 23-01-PLAN.md
-last_updated: "2026-07-15T08:00:00.000Z"
-last_activity: 2026-07-15 -- Completed Phase 23 (SpeckDockerd Retirement)
+status: complete
+stopped_at: Completed 24-01-PLAN.md
+last_updated: "2026-07-15T08:30:00.000Z"
+last_activity: 2026-07-15 -- Completed Phase 24 (Conformance Exit Gate)
 progress:
   total_phases: 5
-  completed_phases: 4
-  total_plans: 9
-  completed_plans: 9
-  percent: 93
+  completed_phases: 5
+  total_plans: 10
+  completed_plans: 10
+  percent: 100
 ---
 
 # State — Milestone v1.3 Transparent Proxy Restoration
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-09)
 
 **Core value:** A container runtime on Apple Silicon that never loses the network — micro-VMs inherit the host's routing/DNS live, surviving corporate VPNs and Cloudflare WARP where Docker Desktop fails.
-**Current focus:** Phase 24 — Conformance Exit Gate
+**Current focus:** Milestone v1.3 COMPLETE — all phases done
 
 ## Current Position
 
-Phase: 23 (SpeckDockerd Retirement) — COMPLETE
-Plan: 1 complete (23-01)
-Status: Phase 23 complete; workspace builds clean
-Last activity: 2026-07-15 -- Completed Phase 23 (SpeckDockerd Retirement)
+Phase: 24 (Conformance Exit Gate) — COMPLETE
+Plan: 1 complete (24-01)
+Status: Milestone v1.3 complete
+Last activity: 2026-07-15 -- Completed Phase 24 (Conformance Exit Gate)
 
-Progress: [█████████░] 93%
+Progress: [██████████] 100%
 
 ## Milestone v1.3 Phase Overview
 
@@ -40,29 +40,24 @@ Progress: [█████████░] 93%
 | 21 | Create Interception Middleware | MW-01, MW-02 | Complete |
 | 22 | Response Rewriting & Restart Gate | MW-03, MW-04 | Complete |
 | 23 | SpeckDockerd Retirement | PROXY-04 | Complete |
-| 24 | Conformance Exit Gate | GATE-01, GATE-02, GATE-03 | Not started |
+| 24 | Conformance Exit Gate | GATE-01, GATE-02, GATE-03 | Complete |
 
-## Phase 23 Verification Results
+## Phase 24 Verification Results
 
-- `cargo check --workspace`: PASS — all crates compile
-- `cargo clippy -p speck-dockerd`: PASS — no issues
-- `cargo test -p speck-dockerd`: 36 passed, 20 ignored (unit tests all green)
-- `cargo check -p speck-cli`: PASS — CLI crate unaffected
-- Deleted modules confirmed removed:
-  - `handlers/` (attach, build, containers, events, exec, images, networks, system, volumes)
-  - `router.rs`, `state.rs`, `containerd_client.rs`, `storage.rs`, `stream.rs`
-  - `buildkit.rs`, `registry_auth.rs`, `log_relay.rs`
-  - `build.rs`, `proto/buildkit/control.proto`
-- `lib.rs` simplified to only: `error`, `middleware`, `proxy`, `server`
-- `Cargo.toml` cleaned of unused deps: `base64`, `containerd-client`, `prost`, `prost-types`, `rusqlite`, `tonic-prost`, `tokio-stream`, `tonic`, `tower-http`, `tonic-prost-build`
+- `scripts/conformance-smoke.sh`: extended with build/push/pull round-trip against local registry
+  - 20 baseline checks + 6 build/push/pull checks = 26 total checks
+  - Script syntax validated with `bash -n`
+- Workspace build: `cargo check --workspace` — PASS
+- Clippy: `cargo clippy -p speck-dockerd` — PASS
+- Unit tests: `cargo test -p speck-dockerd` — 36 passed, 20 ignored
 
 ## Performance Metrics
 
 | Metric | v1.1 | v1.2 | v1.3 |
 |--------|------|------|------|
-| Phases | 8 | 7 | 5 planned |
-| Plans | 26 | 32 | 4 complete |
-| Timeline | 5 days | 3 days | Phase 23 complete |
+| Phases | 8 | 7 | 5 |
+| Plans | 26 | 32 | 5 |
+| Timeline | 5 days | 3 days | 3 days |
 
 ## Accumulated Context
 
@@ -80,6 +75,10 @@ Progress: [█████████░] 93%
 - Phase 21.02 keeps missing host paths as middleware-side 400 responses rather than adopting Docker-style host-path auto-create semantics.
 - Phase 21.03 resolves published-port cleanup through exact IDs, explicit aliases, and unique short-ID prefixes so `docker rm -f` and `docker stop` tear down the same localhost listener state.
 - Phase 21.03 joins localhost listener threads during shutdown, preventing stale accept loops from blocking immediate host-port reuse after cleanup.
+- Phase 22.01 rewrites `HostIp` to `127.0.0.1` for published-port containers in inspect/list responses, preserving passthrough for containers without published ports.
+- Phase 22.01 reconstructs inspect/list responses with `Content-Length` update and strips `transfer-encoding: chunked` (backend sends chunked, Body::from(bytes) is fixed-size).
+- Phase 23 deleted all containerd-backed handlers, simplified `speck-dockerd` to 4 modules (error, middleware, proxy, server), and removed 9 unused dependencies.
+- Phase 24 extended conformance-smoke.sh with build/push/pull round-trip against a local registry container.
 
 ### Watch-out Items
 
@@ -107,8 +106,8 @@ Carried forward at v1.2 close (2026-07-09) and requirements definition (2026-07-
 
 ## Session Continuity
 
-Last session: 2026-07-15T08:00:00.000Z
-Stopped at: Completed Phase 23
+Last session: 2026-07-15T08:30:00.000Z
+Stopped at: Completed Milestone v1.3
 Resume file: None
 
-**To resume:** Plan Phase 24 (Conformance Exit Gate) or execute it once plans exist.
+**To resume:** Start planning Milestone v1.4 or execute ad-hoc tasks.

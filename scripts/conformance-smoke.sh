@@ -45,7 +45,24 @@ check "events (2s window)"        sh -c 'timeout 2 docker events; [ $? -eq 124 -
 check "volume create/ls/rm"       sh -c 'docker volume create smokevol && docker volume ls | grep -q smokevol && docker volume rm smokevol'
 check "network ls"                docker network ls
 
-docker rm -f smoke1 smoke2 smokew >/dev/null 2>&1
+# Build / push / pull round-trip against a local registry (de-risks ECR workflow)
+check "build local registry"      sh -c '
+    docker rm -f smokereg >/dev/null 2>&1
+    docker run -d -p 15000:5000 --name smokereg registry:2
+    sleep 3
+'
+check "build image"               sh -c '
+    docker build -t localhost:15000/smoke-test:latest -f- . <<EOF
+FROM alpine
+RUN echo "built-by-speck" > /build-marker
+EOF
+'
+check "push to registry"          docker push localhost:15000/smoke-test:latest
+check "rmi local"                 docker rmi localhost:15000/smoke-test:latest
+check "pull from registry"        docker pull localhost:15000/smoke-test:latest
+check "verify pulled image"       sh -c 'docker run --rm localhost:15000/smoke-test:latest cat /build-marker | grep -q built-by-speck'
+
+docker rm -f smoke1 smoke2 smokew smokereg >/dev/null 2>&1
 
 echo
 echo "── conformance smoke: ${PASS} passed, ${FAIL} failed"
