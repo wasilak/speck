@@ -80,11 +80,15 @@ pub fn daemonize(speck_home: &Path, binary: &Path) -> anyhow::Result<()> {
 
     // A stale launchd job can remain loaded after a previous daemon crash.
     // Boot it out first so repeated `spk up` runs are idempotent.
-    let _ = std::process::Command::new("launchctl")
+    let bootout = std::process::Command::new("launchctl")
         .args(["bootout", &format!("gui/{uid_str}/{LAUNCHD_LABEL}")])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status();
+    if bootout.is_ok_and(|s| s.success()) {
+        // Give launchd a moment to fully tear down the old job before bootstrap.
+        std::thread::sleep(Duration::from_millis(500));
+    }
 
     let plist = format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -119,20 +123,40 @@ pub fn daemonize(speck_home: &Path, binary: &Path) -> anyhow::Result<()> {
     std::fs::write(&plist_path, &plist)
         .with_context(|| format!("failed to write plist {}", plist_path.display()))?;
 
-    let output = std::process::Command::new("launchctl")
-        .args([
-            "bootstrap",
-            &format!("gui/{uid_str}"),
-            &plist_path.to_string_lossy(),
-        ])
-        .output()
-        .context("launchctl bootstrap exec failed")?;
+    // Retry bootstrap up to 3 times: a stale job may need a moment to fully
+    // tear down after bootout, causing EIO (exit 5) on the first attempt.
+    let mut output = None;
+    for attempt in 1..=3 {
+        let o = std::process::Command::new("launchctl")
+            .args([
+                "bootstrap",
+                &format!("gui/{uid_str}"),
+                &plist_path.to_string_lossy(),
+            ])
+            .output()
+            .context("launchctl bootstrap exec failed")?;
+        if o.status.success() {
+            output = Some(o);
+            break;
+        }
+        if attempt < 3 {
+            tracing::info!(
+                attempt,
+                "launchctl bootstrap failed (exit {}), retrying in 500ms...",
+                o.status
+            );
+            std::thread::sleep(Duration::from_millis(500));
+        } else {
+            output = Some(o);
+        }
+    }
 
+    let output = output.expect("bootstrap output set in retry loop");
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stdout = String::from_utf8_lossy(&output.stdout);
         anyhow::bail!(
-            "launchctl bootstrap failed (exit {}).\nstdout: {}\nstderr: {}\n\nCommon causes:\n1. Not in a GUI session (SSH without reattach)\n2. The binary path '{}' is not accessible\n3. launchd is not running",
+            "launchctl bootstrap failed after 3 attempts (exit {}).\nstdout: {}\nstderr: {}\n\nCommon causes:\n1. Not in a GUI session (SSH without reattach)\n2. The binary path '{}' is not accessible\n3. launchd is not running",
             output.status,
             stdout.trim(),
             stderr.trim(),
