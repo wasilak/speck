@@ -19,6 +19,22 @@ Speck routes raw L2 frames through a user-space TCP/IP stack that re-originates 
 
 ## Install
 
+### Download pre-built release
+
+GitHub Releases include a signed `spk` binary plus guest assets (kernel, initrd, rootfs):
+
+```bash
+# Download latest release
+curl -fsL -o spk.tar.gz "https://github.com/wasilak/speck/releases/latest/download/spk-$(curl -s https://api.github.com/repos/wasilak/speck/releases/latest | grep tag_name | cut -d'"' -f4)-aarch64-apple-darwin.tar.gz"
+tar -xzf spk.tar.gz
+sudo mv spk /usr/local/bin/
+sudo chmod +x /usr/local/bin/spk
+```
+
+Or download manually from [GitHub Releases](https://github.com/wasilak/speck/releases).
+
+### Build from source
+
 Requires Rust stable and Xcode Command Line Tools:
 
 ```bash

@@ -9,12 +9,62 @@ permissions:
   contents: write
 
 jobs:
-  create-release:
-    runs-on: ubuntu-latest
+  build-and-release:
+    runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: |
+          cargo build --release --package speck-cli --target aarch64-apple-darwin
+
+      - name: Sign binary with ad-hoc entitlement
+        run: |
+          codesign --sign - \
+            --entitlements speck.entitlements \
+            --options runtime \
+            --force \
+            target/aarch64-apple-darwin/release/spk
+
+      - name: Verify entitlement
+        run: |
+          codesign -d --entitlements - target/aarch64-apple-darwin/release/spk | grep -q "com.apple.security.virtualization"
+
+      - name: Stage package payload
+        run: |
+          mkdir -p packaging/pkg-root/usr/local/bin
+          cp target/aarch64-apple-darwin/release/spk packaging/pkg-root/usr/local/bin/
+
+      - name: Build .pkg installer
+        run: |
+          mkdir -p dist
+          productbuild \
+            --root packaging/pkg-root / \
+            --identifier io.speck.spk.dev \
+            --version "${GITHUB_REF_NAME#v}" \
+            dist/spk-development.pkg
+
+      - name: Create binary archive
+        run: |
+          tar -czf "dist/spk-${GITHUB_REF_NAME}-aarch64-apple-darwin.tar.gz" \
+            -C target/aarch64-apple-darwin/release spk
+
+      - name: Create full distribution archive
+        run: |
+          echo "Speck ${GITHUB_REF_NAME} development build" > dist/README.txt
+          echo "Ad-hoc signed, non-notarized" >> dist/README.txt
+          tar -czf "dist/spk-${GITHUB_REF_NAME}-aarch64-apple-darwin-full.tar.gz" \
+            -C dist spk-development.pkg README.txt
 
       - name: Generate release notes
         id: notes
@@ -28,6 +78,51 @@ jobs:
             echo "changes=Initial release" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Extract guest asset versions from source
+        id: versions
+        run: |
+          INITRD_VERSION=$(grep 'const INITRD_VERSION' crates/speck-cli/src/commands/up.rs | sed 's/.*"\(.*\)".*/\1/')
+          ROOTFS_VERSION=$(grep 'const ROOTFS_VERSION' crates/speck-cli/src/commands/up.rs | sed 's/.*"\(.*\)".*/\1/')
+          ROOTFS_BACKEND=$(grep 'const ROOTFS_BACKEND' crates/speck-cli/src/commands/up.rs | sed 's/.*"\(.*\)".*/\1/')
+          echo "initrd_version=$INITRD_VERSION" >> "$GITHUB_OUTPUT"
+          echo "rootfs_version=$ROOTFS_VERSION" >> "$GITHUB_OUTPUT"
+          echo "rootfs_backend=$ROOTFS_BACKEND" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch guest assets from existing releases
+        run: |
+          mkdir -p dist/assets
+          cd dist/assets
+
+          # Kernel + base initrd from Kata Containers
+          KATA_VERSION="3.32.0"
+          echo "Fetching Kata Containers ${KATA_VERSION} kernel + initrd..."
+          curl -sL "https://github.com/kata-containers/kata-containers/releases/download/${KATA_VERSION}/kata-static-${KATA_VERSION}-arm64.tar.zst" | \
+            zstdcat -c | tar --strip-components=5 -xf - \
+            ./opt/kata/share/kata-containers/vmlinux-6.18.35-197 \
+            ./opt/kata/share/kata-containers/kata-alpine-3.22.initrd
+          mv kata-alpine-3.22.initrd kata-initrd-base-${KATA_VERSION}.initrd
+
+          # Custom initrd from speck initrd release
+          INITRD_VERSION="${{ steps.versions.outputs.initrd_version }}"
+          echo "Fetching speck initrd ${INITRD_VERSION}..."
+          curl -fsL -o "speck-initrd-${INITRD_VERSION}-arm64.cpio.gz" \
+            "https://github.com/wasilak/speck/releases/download/initrd-${INITRD_VERSION}/speck-initrd-${INITRD_VERSION}-arm64.cpio.gz"
+
+          # Rootfs from speck rootfs release
+          ROOTFS_VERSION="${{ steps.versions.outputs.rootfs_version }}"
+          ROOTFS_BACKEND="${{ steps.versions.outputs.rootfs_backend }}"
+          echo "Fetching speck rootfs ${ROOTFS_VERSION} (${ROOTFS_BACKEND})..."
+          curl -fsL -o "speck-rootfs-${ROOTFS_VERSION}-${ROOTFS_BACKEND}-arm64.img.gz" \
+            "https://github.com/wasilak/speck/releases/download/rootfs-${ROOTFS_VERSION}/speck-rootfs-${ROOTFS_VERSION}-${ROOTFS_BACKEND}-arm64.img.gz"
+          curl -fsL -o "speck-rootfs-${ROOTFS_VERSION}-${ROOTFS_BACKEND}-arm64.img.sha256" \
+            "https://github.com/wasilak/speck/releases/download/rootfs-${ROOTFS_VERSION}/speck-rootfs-${ROOTFS_VERSION}-${ROOTFS_BACKEND}-arm64.img.sha256"
+
+          cd ../..
+
+      - name: Create guest assets archive
+        run: |
+          tar -czf "dist/speck-guest-assets-${GITHUB_REF_NAME}.tar.gz" -C dist/assets .
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
@@ -37,8 +132,35 @@ jobs:
 
             ${{ steps.notes.outputs.changes }}
 
+            ## Artifacts
+
+            | File | Description |
+            |------|-------------|
+            | `spk-${TAG}-aarch64-apple-darwin.tar.gz` | Signed `spk` binary only |
+            | `spk-${TAG}-aarch64-apple-darwin-full.tar.gz` | Signed binary + .pkg installer |
+            | `speck-guest-assets-${TAG}.tar.gz` | Kernel, initrd, and rootfs for VM boot |
+
+            ## Guest Assets Included
+
+            - **Kernel**: Kata Containers v6.18.35 (from kata-containers/kata-containers)
+            - **Base Initrd**: kata-alpine-3.22.initrd (from Kata Containers)
+            - **Speck Initrd**: v${{ steps.versions.outputs.initrd_version }} (custom initrd with vminitd)
+            - **Rootfs**: v${{ steps.versions.outputs.rootfs_version }} (${{ steps.versions.outputs.rootfs_backend }} backend)
+
             ## Notes
 
-            This is an Apple Silicon (`aarch64-apple-darwin`) only release. The signed binary requires `com.apple.security.virtualization` entitlement and must be built locally with an Apple Developer ID certificate for production use.
+            This is an Apple Silicon (`aarch64-apple-darwin`) only release. The binary is ad-hoc signed with the `com.apple.security.virtualization` entitlement.
 
-            For development ad-hoc signing: `cargo xtask codesign-dev`
+            For production use, re-sign with your Apple Developer ID:
+            ```bash
+            codesign --sign "Developer ID Application: Your Name" \
+              --entitlements speck.entitlements \
+              --options runtime \
+              --force spk
+            ```
+
+            Guest assets are downloaded automatically by `spk up` on first run, or you can extract them manually from the guest assets archive.
+          files: |
+            dist/spk-${{ github.ref_name }}-aarch64-apple-darwin.tar.gz
+            dist/spk-${{ github.ref_name }}-aarch64-apple-darwin-full.tar.gz
+            dist/speck-guest-assets-${{ github.ref_name }}.tar.gz
