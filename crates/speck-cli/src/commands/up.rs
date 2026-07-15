@@ -57,6 +57,27 @@ pub fn daemonize(speck_home: &Path, binary: &Path) -> anyhow::Result<()> {
         .trim()
         .to_owned();
 
+    // Detect non-GUI sessions (SSH, tmux without reattach, etc.) where launchctl
+    // bootstrap gui/… will fail with "not privileged".
+    let has_gui_session = std::process::Command::new("launchctl")
+        .args(["print", &format!("gui/{uid_str}")])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success());
+
+    if !has_gui_session {
+        anyhow::bail!(
+            "no GUI session detected for uid {uid_str}. \
+\
+            spk up uses launchd to run the VM in the background, which requires an active macOS GUI session. \
+            Possible fixes:\
+            1. Run from a Terminal.app / iTerm2 window (not SSH).\
+            2. If using tmux/screen, start the session from a GUI terminal first.\
+            3. Use `spk up --foreground` to run in the current terminal (blocks until Ctrl-C).",
+        );
+    }
+
     // A stale launchd job can remain loaded after a previous daemon crash.
     // Boot it out first so repeated `spk up` runs are idempotent.
     let _ = std::process::Command::new("launchctl")
@@ -98,19 +119,26 @@ pub fn daemonize(speck_home: &Path, binary: &Path) -> anyhow::Result<()> {
     std::fs::write(&plist_path, &plist)
         .with_context(|| format!("failed to write plist {}", plist_path.display()))?;
 
-    let status = std::process::Command::new("launchctl")
+    let output = std::process::Command::new("launchctl")
         .args([
             "bootstrap",
             &format!("gui/{uid_str}"),
             &plist_path.to_string_lossy(),
         ])
-        .status()
+        .output()
         .context("launchctl bootstrap exec failed")?;
 
-    anyhow::ensure!(
-        status.success(),
-        "launchctl bootstrap failed - check that launchd is running (macOS only)"
-    );
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        anyhow::bail!(
+            "launchctl bootstrap failed (exit {}).\nstdout: {}\nstderr: {}\n\nCommon causes:\n1. Not in a GUI session (SSH without reattach)\n2. The binary path '{}' is not accessible\n3. launchd is not running",
+            output.status,
+            stdout.trim(),
+            stderr.trim(),
+            binary.display()
+        );
+    }
     println!("{NEON_CYAN}Speck daemon registered — VM is starting in the background.{RESET}");
     println!("  Follow boot:  spk logs --follow");
     println!("  Check status: spk status");
