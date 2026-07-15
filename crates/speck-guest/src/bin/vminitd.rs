@@ -560,7 +560,9 @@ mod linux {
             if let Some(val) = word
                 .strip_prefix("speck_bind_root=")
                 .filter(|v| !v.is_empty())
-                .filter(|val| val.starts_with('/') && !val.split('/').any(|segment| segment == ".."))
+                .filter(|val| {
+                    val.starts_with('/') && !val.split('/').any(|segment| segment == "..")
+                })
             {
                 return Some(val.to_string());
             }
