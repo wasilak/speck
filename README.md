@@ -19,12 +19,11 @@ Speck routes raw L2 frames through a user-space TCP/IP stack that re-originates 
 
 ## Install
 
-Requires Rust stable, Xcode Command Line Tools, and `protoc`:
+Requires Rust stable and Xcode Command Line Tools:
 
 ```bash
 git clone https://github.com/wasilak/speck
 cd speck
-brew install protobuf          # provides protoc
 cargo build --release --package speck-cli --target aarch64-apple-darwin
 codesign --sign - \
   --entitlements speck.entitlements \
@@ -146,6 +145,13 @@ spk dashboard           # live TUI (VM stats, containers, logs)
 spk completion zsh      # shell completion (zsh/bash/fish)
 ```
 
+## Docker CLI compatibility
+
+Speck exposes a Docker-compatible Unix socket at `$SPECK_HOME/speck.sock`. The system `docker` CLI, `docker compose`, `testcontainers`, and BuildKit all work unchanged — no custom client needed.
+
+The conformance gate (`scripts/conformance-smoke.sh`) validates the everyday workflows against a live daemon:
+pull, run, exec, logs, stop, rm, port publish, volume/network management, and build/push/pull round-trip.
+
 ## Alpha status
 
 This is an alpha release intended for early testing and feedback. Known areas still under validation:
@@ -164,7 +170,7 @@ This is an alpha release intended for early testing and feedback. Known areas st
 | `spk dashboard` TUI | ✅ |
 | `spk doctor` diagnostics | ✅ |
 | Homebrew Formula distribution | 📋 planned |
-| testcontainers conformance | 🔧 in progress |
+| testcontainers conformance | ✅ |
 | K3s / Kubernetes | 📋 planned |
 | Developer ID signing + notarization | 📋 planned |
 
