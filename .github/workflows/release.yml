@@ -2,69 +2,43 @@ name: Release
 
 on:
   push:
-    tags: ["v*"]
-
-env:
-  CARGO_TERM_COLOR: always
-  RUSTFLAGS: "-Dwarnings"
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
 
 permissions:
   contents: write
 
 jobs:
-  release:
-    runs-on: macos-latest
+  create-release:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-darwin
-
-      - name: Cache dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target/
-          key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Install protoc
-        run: brew install protobuf
-
-      - name: Verify tag matches Cargo version
+      - name: Generate release notes
+        id: notes
         run: |
-          TAG_VERSION="${GITHUB_REF_NAME#v}"
-          CARGO_VERSION="$(cargo metadata --no-deps --format-version 1 | ruby -rjson -e 'metadata = JSON.parse(STDIN.read); puts metadata.fetch("packages").find { |pkg| pkg.fetch("name") == "xtask" }.fetch("version")')"
-          test "$TAG_VERSION" = "$CARGO_VERSION" || {
-            echo "tag v$TAG_VERSION does not match Cargo version $CARGO_VERSION" >&2
-            exit 1
-          }
-
-      - name: Build ad-hoc development distribution artifacts
-        run: cargo xtask dist
-
-      - name: List release artifacts
-        run: |
-          VERSION="${{ github.ref_name }}"
-          VERSION="${VERSION#v}"
-          test -f "dist/spk-development-non-notarized.pkg"
-          test -f "dist/spk-${VERSION}-aarch64-apple-darwin-development-non-notarized.tar.gz"
-          test -f "dist/spk-${VERSION}-aarch64-apple-darwin-development-non-notarized-binary.tar.gz"
-          ls -la dist/
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD~1 2>/dev/null || echo "")
+          if [ -n "$PREV_TAG" ]; then
+            echo "changes<<EOF" >> "$GITHUB_OUTPUT"
+            git log --oneline --no-decorate "$PREV_TAG..HEAD" >> "$GITHUB_OUTPUT"
+            echo "EOF" >> "$GITHUB_OUTPUT"
+          else
+            echo "changes=Initial release" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Create GitHub Release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          VERSION="${{ github.ref_name }}"
-          VERSION="${VERSION#v}"
-          gh release create "v${VERSION}" --generate-notes \
-            "dist/spk-development-non-notarized.pkg" \
-            "dist/spk-${VERSION}-aarch64-apple-darwin-development-non-notarized.tar.gz" \
-            "dist/spk-${VERSION}-aarch64-apple-darwin-development-non-notarized-binary.tar.gz" \
-            "dist/DEVELOPMENT-NON-NOTARIZED.txt"
+        uses: softprops/action-gh-release@v1
+        with:
+          generate_release_notes: true
+          body: |
+            ## Changes since last release
+
+            ${{ steps.notes.outputs.changes }}
+
+            ## Notes
+
+            This is an Apple Silicon (`aarch64-apple-darwin`) only release. The signed binary requires `com.apple.security.virtualization` entitlement and must be built locally with an Apple Developer ID certificate for production use.
+
+            For development ad-hoc signing: `cargo xtask codesign-dev`
