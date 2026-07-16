@@ -227,9 +227,9 @@ fn validate_container_id(container_id: &str) -> io::Result<()> {
 }
 
 fn create_fifos(conn_fd: libc::c_int, buffers: &LogBuffers, container_id: &str) -> io::Result<()> {
-    std::fs::create_dir_all("/rootfs/tmp/speck-logs/")?;
-    let stdout_path = format!("/rootfs/tmp/speck-logs/{container_id}.stdout");
-    let stderr_path = format!("/rootfs/tmp/speck-logs/{container_id}.stderr");
+    std::fs::create_dir_all("/tmp/speck-logs/")?;
+    let stdout_path = format!("/tmp/speck-logs/{container_id}.stdout");
+    let stderr_path = format!("/tmp/speck-logs/{container_id}.stderr");
     mkfifo_if_needed(&stdout_path)?;
     mkfifo_if_needed(&stderr_path)?;
 
@@ -305,7 +305,7 @@ fn reader_thread(fifo_path: String, buffer: Arc<Mutex<RetainedLogBuffer>>) {
 /// blocked reader steals bytes from the new one.
 fn remove_fifos(container_id: &str) {
     for suffix in ["stdout", "stderr"] {
-        let path = format!("/rootfs/tmp/speck-logs/{container_id}.{suffix}");
+        let path = format!("/tmp/speck-logs/{container_id}.{suffix}");
         if let Err(err) = std::fs::remove_file(&path)
             && err.kind() != io::ErrorKind::NotFound
         {

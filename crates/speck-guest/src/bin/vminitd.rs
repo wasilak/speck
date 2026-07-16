@@ -41,7 +41,7 @@ fn parse_cmdline_containerd_vsock_port() {
         "guest PID 1 must restore the dedicated containerd socket forwarder"
     );
     assert!(
-        SOURCE.contains("/rootfs/run/docker/containerd/containerd.sock"),
+        SOURCE.contains("/run/docker/containerd/containerd.sock"),
         "dockerd-managed guests must forward the managed containerd socket path"
     );
 }
@@ -51,7 +51,7 @@ mod linux {
 
     use speck_guest::LibcSyscalls;
     use speck_guest::mount::{
-        chroot_into_rootfs, configure_sysctl_params, mount_disks, mount_early_filesystems,
+        configure_sysctl_params, mount_disks, mount_early_filesystems,
         mount_rootfs_runtime_filesystems,
     };
     use std::io;
@@ -138,6 +138,14 @@ mod linux {
             eprintln!("vminitd: failed to create /rootfs/run/speck: {e}");
         }
 
+        // Switch root: move /rootfs to / so it becomes the system root.
+        // After this, all /rootfs/... paths are accessible at /... directly.
+        if let Err(e) = speck_guest::mount::switch_root_to_rootfs(&libc_syscalls) {
+            eprintln!("vminitd: switch_root failed: {e}");
+            std::process::exit(1);
+        }
+        eprintln!("vminitd: switched root to /rootfs");
+
         // Install CA certificates and configure containerd before starting
         // the container runtime (CERT-02, CERT-03).
         install_ca_certs();
@@ -150,8 +158,8 @@ mod linux {
             eprintln!("vminitd: sysctl configuration failed: {e}");
         }
 
-        let dockerd_bin = detect_dockerd_bin_in_chroot();
-        eprintln!("vminitd: using dockerd at chroot-relative path {dockerd_bin}");
+        let dockerd_bin = detect_dockerd_bin();
+        eprintln!("vminitd: using dockerd at {dockerd_bin}");
         spawn_dockerd_with_restart(dockerd_bin);
 
         if !wait_for_dockerd_socket(150) {
@@ -193,7 +201,7 @@ mod linux {
         // Forward dockerd's Unix socket over vsock port 9003.
         std::thread::spawn(move || {
             if let Err(e) =
-                speck_guest::sock_forwarder::serve(docker_port, "/rootfs/run/speck/dockerd.sock")
+                speck_guest::sock_forwarder::serve(docker_port, "/run/speck/dockerd.sock")
             {
                 eprintln!("vminitd: dockerd forwarder error: {e}");
             }
@@ -290,9 +298,9 @@ mod linux {
     }
 
     fn detect_containerd_socket_path() -> &'static str {
-        const PRIMARY: &str = "/rootfs/run/containerd/containerd.sock";
-        const DOCKER_MANAGED: &str = "/rootfs/run/docker/containerd/containerd.sock";
-        const DOCKER_MANAGED_VAR_RUN: &str = "/rootfs/var/run/docker/containerd/containerd.sock";
+        const PRIMARY: &str = "/run/containerd/containerd.sock";
+        const DOCKER_MANAGED: &str = "/run/docker/containerd/containerd.sock";
+        const DOCKER_MANAGED_VAR_RUN: &str = "/var/run/docker/containerd/containerd.sock";
 
         if std::path::Path::new(PRIMARY).exists() {
             eprintln!("vminitd: using containerd socket at {PRIMARY}");
@@ -355,13 +363,13 @@ mod linux {
     // Docker Engine socket readiness
     // ---------------------------------------------------------------------------
 
-    /// Poll `/rootfs/run/speck/dockerd.sock` until dockerd accepts connections.
+    /// Poll `/run/speck/dockerd.sock` until dockerd accepts connections.
     ///
     /// Returns `true` if the socket became reachable within `max_attempts`
     /// (200 ms interval). Returns `false` if all attempts are exhausted.
     fn wait_for_dockerd_socket(max_attempts: u32) -> bool {
         for attempt in 0..max_attempts {
-            if unix_connect_once("/rootfs/run/speck/dockerd.sock") {
+            if unix_connect_once("/run/speck/dockerd.sock") {
                 eprintln!("vminitd: dockerd socket ready after {attempt} attempts");
                 return true;
             }
@@ -800,7 +808,10 @@ mod linux {
     }
 
     /// Mount the CA cert VirtioFS share (tag from `ca_certs_tag=` cmdline param)
-    /// at `/var/lib/speck/ca-certs/` inside the guest (CERT-02).
+    /// at `/rootfs/var/lib/speck/ca-certs/` inside the guest (CERT-02).
+    ///
+    /// Mounts under `/rootfs` so the share survives `switch_root` and becomes
+    /// `/var/lib/speck/ca-certs/` once `/rootfs` is moved to `/`.
     ///
     /// Mount failures are non-fatal: logged and skipped.
     fn mount_ca_certs(cmdline_path: &str) {
@@ -811,7 +822,7 @@ mod linux {
                 return;
             }
         };
-        let target = "/var/lib/speck/ca-certs/";
+        let target = "/rootfs/var/lib/speck/ca-certs/";
         if let Err(e) = std::fs::create_dir_all(target) {
             eprintln!("vminitd: create_dir_all {target} failed: {e}");
             return;
@@ -841,9 +852,8 @@ mod linux {
     /// store (CERT-02).
     ///
     /// Reads all `.pem` files from `/var/lib/speck/ca-certs/` and appends them
-    /// to `/rootfs/etc/ssl/certs/ca-certificates.crt`, then runs
-    /// `update-ca-certificates` inside the chroot so the system trust store
-    /// picks them up.
+    /// to `/etc/ssl/certs/ca-certificates.crt`, then runs
+    /// `update-ca-certificates` so the system trust store picks them up.
     fn install_ca_certs() {
         let ca_dir = "/var/lib/speck/ca-certs/";
         let ca_dir_path = std::path::Path::new(ca_dir);
@@ -871,11 +881,11 @@ mod linux {
                     continue;
                 }
             };
-            // Append to the system CA bundle inside the chroot.
+            // Append to the system CA bundle.
             if let Err(e) = std::fs::OpenOptions::new()
                 .create(true)
                 .append(true)
-                .open("/rootfs/etc/ssl/certs/ca-certificates.crt")
+                .open("/etc/ssl/certs/ca-certificates.crt")
                 .and_then(|mut f| {
                     use std::io::Write;
                     // Write a header comment for traceability, then the PEM content.
@@ -898,10 +908,9 @@ mod linux {
         }
         if cert_count > 0 {
             eprintln!("vminitd: installed {cert_count} CA cert(s) into trust bundle");
-            // Run update-ca-certificates inside the chroot so the system picks
-            // them up immediately.
-            let status = std::process::Command::new("chroot")
-                .args(["/rootfs", "update-ca-certificates", "--fresh"])
+            // Run update-ca-certificates so the system picks them up immediately.
+            let status = std::process::Command::new("update-ca-certificates")
+                .args(["--fresh"])
                 .status();
             match status {
                 Ok(s) if s.success() => {
@@ -919,12 +928,12 @@ mod linux {
 
     /// Write containerd hosts.toml for private registry TLS trust (CERT-03).
     ///
-    /// Creates `/rootfs/etc/containerd/certs.d/` (if absent) and writes a
+    /// Creates `/etc/containerd/certs.d/` (if absent) and writes a
     /// catch-all `hosts.toml` that trusts the system CA bundle.  This ensures
     /// containerd can pull images from registries signed by corporate/internal
     /// CAs without requiring per-registry config.
     fn write_containerd_hosts_toml() {
-        let certs_d_dir = "/rootfs/etc/containerd/certs.d/";
+        let certs_d_dir = "/etc/containerd/certs.d/";
         if let Err(e) = std::fs::create_dir_all(certs_d_dir) {
             eprintln!("vminitd: failed to create {certs_d_dir}: {e}");
             return;
@@ -947,25 +956,22 @@ mod linux {
     // Docker Engine backend
     // ---------------------------------------------------------------------------
 
-    /// Return the dockerd binary path as it appears INSIDE the chroot (/rootfs).
-    fn detect_dockerd_bin_in_chroot() -> &'static str {
-        if std::path::Path::new("/rootfs/usr/bin/dockerd").exists() {
+    /// Return the dockerd binary path.
+    fn detect_dockerd_bin() -> &'static str {
+        if std::path::Path::new("/usr/bin/dockerd").exists() {
             "/usr/bin/dockerd"
         } else {
             "/usr/local/bin/dockerd"
         }
     }
 
-    /// Spawn dockerd inside a chroot rooted at `/rootfs`, with automatic restart.
+    /// Spawn dockerd with automatic restart.
     ///
-    /// Equivalent shell command:
-    ///   chroot /rootfs <dockerd_bin> --host unix:///run/speck/dockerd.sock \
-    ///       --data-root /var/lib/docker
-    fn spawn_dockerd_with_restart(dockerd_bin_in_chroot: &'static str) {
+    /// dockerd now runs directly in the switched root (/) — no chroot needed.
+    fn spawn_dockerd_with_restart(dockerd_bin: &'static str) {
         std::thread::spawn(move || {
-            use std::os::unix::process::CommandExt as _;
             loop {
-                let mut cmd = std::process::Command::new(dockerd_bin_in_chroot);
+                let mut cmd = std::process::Command::new(dockerd_bin);
                 cmd.args([
                     "--host",
                     "unix:///run/speck/dockerd.sock",
@@ -973,15 +979,9 @@ mod linux {
                     "/var/lib/containerd",
                     "--iptables=false",
                     "--userland-proxy=false",
+                    "--insecure-registry=172.16.0.0/12",
                 ]);
                 cmd.env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin");
-
-                unsafe {
-                    cmd.pre_exec(|| {
-                        let sc = speck_guest::LibcSyscalls;
-                        chroot_into_rootfs(&sc)
-                    });
-                }
 
                 match cmd.spawn() {
                     Ok(mut child) => {

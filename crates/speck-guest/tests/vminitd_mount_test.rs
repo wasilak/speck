@@ -12,7 +12,7 @@ use mockall::Sequence;
 use speck_guest::Syscalls;
 use speck_guest::mount::{
     chroot_into_rootfs, configure_sysctl_params, mount_disks, mount_early_filesystems,
-    mount_rootfs_runtime_filesystems,
+    mount_rootfs_runtime_filesystems, switch_root_to_rootfs,
 };
 
 const VMINITD_SOURCE: &str = include_str!("../src/bin/vminitd.rs");
@@ -238,6 +238,67 @@ fn chroot_into_rootfs_returns_error_when_chdir_fails() {
         .returning(|_| -1);
 
     let result = chroot_into_rootfs(&mock);
+    assert!(result.is_err());
+}
+
+// ---------------------------------------------------------------------------
+// Switch root (chroot) tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn switch_root_to_rootfs_calls_chroot_then_chdir() {
+    let mut mock = MockSyscallProxy::new();
+    let mut seq = Sequence::new();
+
+    // Expect chroot(/rootfs) first
+    mock.expect_chroot()
+        .withf(|path| path == b"/rootfs\0")
+        .times(1)
+        .in_sequence(&mut seq)
+        .returning(|_| 0);
+
+    // Expect chdir(/) second
+    mock.expect_chdir()
+        .withf(|path| path == b"/\0")
+        .times(1)
+        .in_sequence(&mut seq)
+        .returning(|_| 0);
+
+    let result = switch_root_to_rootfs(&mock);
+    assert!(result.is_ok());
+}
+
+#[test]
+fn switch_root_to_rootfs_returns_error_when_chroot_fails() {
+    let mut mock = MockSyscallProxy::new();
+
+    mock.expect_chroot()
+        .withf(|path| path == b"/rootfs\0")
+        .times(1)
+        .returning(|_| -1);
+
+    // chdir should never be called if chroot fails
+    mock.expect_chdir().never();
+
+    let result = switch_root_to_rootfs(&mock);
+    assert!(result.is_err());
+}
+
+#[test]
+fn switch_root_to_rootfs_returns_error_when_chdir_fails() {
+    let mut mock = MockSyscallProxy::new();
+
+    mock.expect_chroot()
+        .withf(|path| path == b"/rootfs\0")
+        .times(1)
+        .returning(|_| 0);
+
+    mock.expect_chdir()
+        .withf(|path| path == b"/\0")
+        .times(1)
+        .returning(|_| -1);
+
+    let result = switch_root_to_rootfs(&mock);
     assert!(result.is_err());
 }
 

@@ -46,21 +46,36 @@ check "volume create/ls/rm"       sh -c 'docker volume create smokevol && docker
 check "network ls"                docker network ls
 
 # Build / push / pull round-trip against a local registry (de-risks ECR workflow)
+#
+# Architecture note: the Docker daemon runs INSIDE the guest VM, but
+# Speck's port-publish middleware maps ports on the macOS host — there is
+# no docker-proxy inside the VM.  That means:
+#   • localhost:15000 has no listener inside the VM
+#   • Docker's embedded DNS (127.0.0.11) only serves *containers*, not the daemon
+#   • Container IPs on a bridge network ARE reachable from the daemon
+# So we capture the registry's IP and push/pull via IP.
 check "build local registry"      sh -c '
     docker rm -f smokereg >/dev/null 2>&1
-    docker run -d -p 15000:5000 --name smokereg registry:2
+    docker network create smoke-net >/dev/null 2>&1 || true
+    docker run -d --network smoke-net --name smokereg registry:2
     sleep 3
 '
+REGISTRY_IP=$(docker inspect -f "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}" smokereg)
+if [ -z "$REGISTRY_IP" ]; then
+    echo "SKIP (registry IP not resolved)" && return 2>/dev/null || exit 77
+fi
+REGISTRY="$REGISTRY_IP:5000"
+
 check "build image"               sh -c '
-    docker build -t localhost:15000/smoke-test:latest -f- . <<EOF
+    docker build -t '"$REGISTRY"'/smoke-test:latest -f- . <<EOF
 FROM alpine
 RUN echo "built-by-speck" > /build-marker
 EOF
 '
-check "push to registry"          docker push localhost:15000/smoke-test:latest
-check "rmi local"                 docker rmi localhost:15000/smoke-test:latest
-check "pull from registry"        docker pull localhost:15000/smoke-test:latest
-check "verify pulled image"       sh -c 'docker run --rm localhost:15000/smoke-test:latest cat /build-marker | grep -q built-by-speck'
+check "push to registry"          docker push "$REGISTRY"/smoke-test:latest
+check "rmi local"                 docker rmi "$REGISTRY"/smoke-test:latest
+check "pull from registry"        docker pull "$REGISTRY"/smoke-test:latest
+check "verify pulled image"       sh -c 'docker run --rm '"$REGISTRY"'/smoke-test:latest cat /build-marker | grep -q built-by-speck'
 
 docker rm -f smoke1 smoke2 smokew smokereg >/dev/null 2>&1
 

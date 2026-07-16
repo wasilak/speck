@@ -165,6 +165,41 @@ pub fn chroot_into_rootfs(syscalls: &dyn Syscalls) -> Result<(), io::Error> {
 }
 
 // ---------------------------------------------------------------------------
+// Switch root (MS_MOVE)
+// ---------------------------------------------------------------------------
+
+/// Switch the process root to `/rootfs` and change cwd to `/`.
+///
+/// Uses `chroot(/rootfs)` + `chdir(/)` rather than the traditional
+/// `mount(MS_MOVE, /rootfs, /)` pattern. The chroot approach is more
+/// reliable: it directly changes the process's root directory without
+/// requiring the kernel to move the mount tree, which can fail on the
+/// root mount in some environments.
+///
+/// After this call succeeds, all paths that previously started with
+/// `/rootfs/` are valid at `/` — e.g. `/rootfs/etc` becomes `/etc`.
+///
+/// # Errors
+///
+/// Returns an error if the `chroot` or `chdir` syscall fails.
+/// Fatal errors should cause the caller to exit — the guest cannot
+/// function without a valid root.
+pub fn switch_root_to_rootfs(syscalls: &dyn Syscalls) -> Result<(), io::Error> {
+    // Use chroot to switch the process root to /rootfs, then chdir to /.
+    // This avoids MS_MOVE which may not work reliably when moving onto
+    // the kernel's root mount.
+    let ret = syscalls.chroot(b"/rootfs\0");
+    if ret < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let ret = syscalls.chdir(b"/\0");
+    if ret < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Sysctl initialization
 // ---------------------------------------------------------------------------
 
