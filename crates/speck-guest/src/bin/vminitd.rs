@@ -985,6 +985,35 @@ mod linux {
                     "--iptables=false",
                     "--userland-proxy=false",
                     "--insecure-registry=172.16.0.0/12",
+                    // Containers on Docker's legacy default "bridge" network
+                    // (e.g. buildx's docker-container driver, which creates
+                    // its buildkitd container without a user-defined
+                    // network) don't get Docker's embedded per-network DNS
+                    // server — dockerd instead derives their resolv.conf
+                    // from the host's own /etc/resolv.conf, filtering out
+                    // loopback nameservers. Since vminitd's own
+                    // /etc/resolv.conf is exactly "nameserver 127.0.0.1"
+                    // (the guest-local DNS forwarder, D-09: never bind host
+                    // :53), filtering leaves zero nameservers, and dockerd
+                    // falls back to hardcoded public DNS (8.8.8.8/8.8.4.4)
+                    // — unreachable in Speck's host-inheriting network
+                    // model (found live during Phase 25 Plan 02 Task 3's
+                    // D-08 buildx verification: docker-container driver
+                    // builds timed out resolving registry-1.docker.io).
+                    // Passing --dns explicitly overrides this fallback for
+                    // every container, matching the same resolver every
+                    // other container already reaches via Docker's embedded
+                    // DNS on user-defined networks.
+                    //
+                    // Use the docker0 bridge gateway (172.17.0.1), NOT
+                    // 127.0.0.1: dns_forwarder binds 0.0.0.0:53 in the
+                    // guest's root network namespace, which IS reachable
+                    // from container network namespaces via the bridge
+                    // gateway, but 127.0.0.1 inside a container's own netns
+                    // is the container's private loopback and has nothing
+                    // listening there (confirmed live: "connection refused"
+                    // with --dns=127.0.0.1, fixed by using the bridge IP).
+                    "--dns=172.17.0.1",
                 ]);
                 cmd.env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin");
 
