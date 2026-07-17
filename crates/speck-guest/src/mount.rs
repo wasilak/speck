@@ -24,6 +24,8 @@ use std::path::Path;
 
 const MS_BIND: u64 = 4096;
 const MS_RELATIME: u64 = 2097152;
+const MS_MOVE: u64 = 8192;
+const MNT_DETACH: i32 = 2;
 
 // ---------------------------------------------------------------------------
 // Early filesystem mounts
@@ -168,34 +170,98 @@ pub fn chroot_into_rootfs(syscalls: &dyn Syscalls) -> Result<(), io::Error> {
 // Switch root (MS_MOVE)
 // ---------------------------------------------------------------------------
 
-/// Switch the process root to `/rootfs` and change cwd to `/`.
+/// Switch the process root to `/rootfs` via a canonical `MS_MOVE`-based
+/// `switch_root`, matching the sequence used by util-linux's own
+/// `switch_root(8)` (and busybox/systemd/dracut): `chdir(/rootfs)` ->
+/// `mount(/rootfs, "/", MS_MOVE)` -> `chroot(".")` -> `chdir("/")`.
 ///
-/// Uses `chroot(/rootfs)` + `chdir(/)` rather than the traditional
-/// `mount(MS_MOVE, /rootfs, /)` pattern. The chroot approach is more
-/// reliable: it directly changes the process's root directory without
-/// requiring the kernel to move the mount tree, which can fail on the
-/// root mount in some environments.
+/// This re-parents the `/rootfs` mount onto `/` in the mount namespace
+/// itself (not just the calling process's `fs_struct.root` pointer, which
+/// is all a chroot-only approach changes) — see D-22/BOOT-01.
+///
+/// After the move, a best-effort attempt is made to detach the orphaned
+/// old root (the initramfs "rootfs" pseudo-filesystem) per D-06: a file
+/// descriptor on the old root is captured before the move, then
+/// `fchdir` + `umount2(MNT_DETACH)` are attempted through it afterward —
+/// the only way to reference the old root once no path resolves to it
+/// anymore. This detach step is entirely non-fatal: canonical switch_root
+/// implementations don't guarantee it either, and a failed detach still
+/// leaves the guest at least as functional as a chroot-only baseline.
 ///
 /// After this call succeeds, all paths that previously started with
 /// `/rootfs/` are valid at `/` — e.g. `/rootfs/etc` becomes `/etc`.
 ///
 /// # Errors
 ///
-/// Returns an error if the `chroot` or `chdir` syscall fails.
-/// Fatal errors should cause the caller to exit — the guest cannot
-/// function without a valid root.
+/// Returns an error if the `chdir(/rootfs)`, `mount(MS_MOVE)`,
+/// `chroot(".")`, or post-move `chdir("/")` syscall fails. These four
+/// steps are fatal — the caller should exit, since the guest cannot
+/// function without a valid root. The old-root detach phase that follows
+/// is non-fatal and never returns an error from this function.
 pub fn switch_root_to_rootfs(syscalls: &dyn Syscalls) -> Result<(), io::Error> {
-    // Use chroot to switch the process root to /rootfs, then chdir to /.
-    // This avoids MS_MOVE which may not work reliably when moving onto
-    // the kernel's root mount.
-    let ret = syscalls.chroot(b"/rootfs\0");
+    // Capture an fd on the current (old) root before the move — best
+    // effort. A capture failure only skips the detach step below; it
+    // must never abort the switch_root itself.
+    let old_root = std::fs::File::open("/").ok();
+
+    // chdir into the new root before the move. After MS_MOVE re-parents
+    // /rootfs onto "/", the string "/rootfs" no longer resolves to
+    // anything meaningful — "." (this pre-established cwd) is the only
+    // valid way to reference the new root afterward.
+    let ret = syscalls.chdir(b"/rootfs\0");
     if ret < 0 {
         return Err(io::Error::last_os_error());
     }
+
+    let ret = syscalls.mount(b"/rootfs\0", b"/\0", b"\0", MS_MOVE);
+    if ret < 0 {
+        return Err(io::Error::last_os_error());
+    }
+
+    // Must be "." here, never "/rootfs" — see comment above.
+    let ret = syscalls.chroot(b".\0");
+    if ret < 0 {
+        return Err(io::Error::last_os_error());
+    }
+
     let ret = syscalls.chdir(b"/\0");
     if ret < 0 {
         return Err(io::Error::last_os_error());
     }
+
+    // Best-effort detach of the orphaned old root (D-06). Non-fatal.
+    match old_root {
+        Some(file) => {
+            use std::os::fd::AsRawFd;
+            let fd = file.as_raw_fd();
+            if syscalls.fchdir(fd) == 0 {
+                let ret = syscalls.umount2(b".\0", MNT_DETACH);
+                if ret < 0 {
+                    tracing::warn!(
+                        error = %io::Error::last_os_error(),
+                        "old-root detach failed"
+                    );
+                }
+                // Restore cwd to the new root regardless of detach outcome.
+                let ret = syscalls.chdir(b"/\0");
+                if ret < 0 {
+                    tracing::warn!(
+                        error = %io::Error::last_os_error(),
+                        "failed to restore cwd to new root after detach attempt"
+                    );
+                }
+            } else {
+                tracing::warn!(
+                    error = %io::Error::last_os_error(),
+                    "fchdir to old root failed; skipping detach"
+                );
+            }
+        }
+        None => {
+            tracing::warn!("failed to capture old-root fd before switch_root; skipping detach");
+        }
+    }
+
     Ok(())
 }
 
