@@ -17,6 +17,13 @@ use speck_guest::mount::{
 
 const VMINITD_SOURCE: &str = include_str!("../src/bin/vminitd.rs");
 
+// Mirrors the local constants defined in `crates/speck-guest/src/mount.rs`
+// (not re-exported — mount.rs deliberately avoids the `libc` crate's
+// Linux-only mount-flag constants so the crate still compiles its test
+// code on macOS; tests duplicate the same literal values for clarity).
+const MS_MOVE: u64 = 8192;
+const MNT_DETACH: i32 = 2;
+
 // ---------------------------------------------------------------------------
 // Mock syscall implementation
 // ---------------------------------------------------------------------------
@@ -244,22 +251,58 @@ fn chroot_into_rootfs_returns_error_when_chdir_fails() {
 }
 
 // ---------------------------------------------------------------------------
-// Switch root (chroot) tests
+// Switch root (MS_MOVE) tests
 // ---------------------------------------------------------------------------
 
 #[test]
-fn switch_root_to_rootfs_calls_chroot_then_chdir() {
+fn switch_root_to_rootfs_moves_then_chroots_then_detaches_in_order() {
     let mut mock = MockSyscallProxy::new();
     let mut seq = Sequence::new();
 
-    // Expect chroot(/rootfs) first
-    mock.expect_chroot()
+    // 1. chdir(/rootfs)
+    mock.expect_chdir()
         .withf(|path| path == b"/rootfs\0")
         .times(1)
         .in_sequence(&mut seq)
         .returning(|_| 0);
 
-    // Expect chdir(/) second
+    // 2. mount(source=/rootfs, target=/, flags=MS_MOVE)
+    mock.expect_mount()
+        .withf(|source, target, _fstype, flags| {
+            source == b"/rootfs\0" && target == b"/\0" && *flags == MS_MOVE
+        })
+        .times(1)
+        .in_sequence(&mut seq)
+        .returning(|_, _, _, _| 0);
+
+    // 3. chroot(".")
+    mock.expect_chroot()
+        .withf(|path| path == b".\0")
+        .times(1)
+        .in_sequence(&mut seq)
+        .returning(|_| 0);
+
+    // 4. chdir(/)
+    mock.expect_chdir()
+        .withf(|path| path == b"/\0")
+        .times(1)
+        .in_sequence(&mut seq)
+        .returning(|_| 0);
+
+    // 5. fchdir(old_root_fd)
+    mock.expect_fchdir()
+        .times(1)
+        .in_sequence(&mut seq)
+        .returning(|_| 0);
+
+    // 6. umount2(".", MNT_DETACH)
+    mock.expect_umount2()
+        .withf(|path, flags| path == b".\0" && *flags == MNT_DETACH)
+        .times(1)
+        .in_sequence(&mut seq)
+        .returning(|_, _| 0);
+
+    // 7. chdir(/) restore
     mock.expect_chdir()
         .withf(|path| path == b"/\0")
         .times(1)
@@ -271,34 +314,202 @@ fn switch_root_to_rootfs_calls_chroot_then_chdir() {
 }
 
 #[test]
-fn switch_root_to_rootfs_returns_error_when_chroot_fails() {
+fn switch_root_to_rootfs_detach_failure_is_non_fatal() {
+    let mut mock = MockSyscallProxy::new();
+    let mut seq = Sequence::new();
+
+    mock.expect_chdir()
+        .withf(|path| path == b"/rootfs\0")
+        .times(1)
+        .in_sequence(&mut seq)
+        .returning(|_| 0);
+    mock.expect_mount()
+        .withf(|source, target, _fstype, flags| {
+            source == b"/rootfs\0" && target == b"/\0" && *flags == MS_MOVE
+        })
+        .times(1)
+        .in_sequence(&mut seq)
+        .returning(|_, _, _, _| 0);
+    mock.expect_chroot()
+        .withf(|path| path == b".\0")
+        .times(1)
+        .in_sequence(&mut seq)
+        .returning(|_| 0);
+    mock.expect_chdir()
+        .withf(|path| path == b"/\0")
+        .times(1)
+        .in_sequence(&mut seq)
+        .returning(|_| 0);
+    mock.expect_fchdir()
+        .times(1)
+        .in_sequence(&mut seq)
+        .returning(|_| 0);
+
+    // umount2 fails — must be non-fatal
+    mock.expect_umount2()
+        .withf(|path, flags| path == b".\0" && *flags == MNT_DETACH)
+        .times(1)
+        .in_sequence(&mut seq)
+        .returning(|_, _| -1);
+
+    // The trailing restore chdir(/) must still happen
+    mock.expect_chdir()
+        .withf(|path| path == b"/\0")
+        .times(1)
+        .in_sequence(&mut seq)
+        .returning(|_| 0);
+
+    let result = switch_root_to_rootfs(&mock);
+    assert!(result.is_ok());
+}
+
+#[test]
+fn switch_root_to_rootfs_fchdir_failure_skips_detach_non_fatally() {
+    let mut mock = MockSyscallProxy::new();
+    let mut seq = Sequence::new();
+
+    mock.expect_chdir()
+        .withf(|path| path == b"/rootfs\0")
+        .times(1)
+        .in_sequence(&mut seq)
+        .returning(|_| 0);
+    mock.expect_mount()
+        .withf(|source, target, _fstype, flags| {
+            source == b"/rootfs\0" && target == b"/\0" && *flags == MS_MOVE
+        })
+        .times(1)
+        .in_sequence(&mut seq)
+        .returning(|_, _, _, _| 0);
+    mock.expect_chroot()
+        .withf(|path| path == b".\0")
+        .times(1)
+        .in_sequence(&mut seq)
+        .returning(|_| 0);
+    mock.expect_chdir()
+        .withf(|path| path == b"/\0")
+        .times(1)
+        .in_sequence(&mut seq)
+        .returning(|_| 0);
+
+    // fchdir to the old root fails — umount2 and the restore chdir must
+    // both be skipped entirely (cwd never moved away from the new root).
+    mock.expect_fchdir()
+        .times(1)
+        .in_sequence(&mut seq)
+        .returning(|_| -1);
+    mock.expect_umount2().never();
+
+    let result = switch_root_to_rootfs(&mock);
+    assert!(result.is_ok());
+}
+
+#[test]
+fn switch_root_to_rootfs_returns_error_when_initial_chdir_fails() {
     let mut mock = MockSyscallProxy::new();
 
-    mock.expect_chroot()
+    mock.expect_chdir()
         .withf(|path| path == b"/rootfs\0")
         .times(1)
         .returning(|_| -1);
 
-    // chdir should never be called if chroot fails
-    mock.expect_chdir().never();
+    mock.expect_mount().never();
+    mock.expect_chroot().never();
+    mock.expect_chdir().withf(|path| path == b"/\0").never();
+    mock.expect_fchdir().never();
+    mock.expect_umount2().never();
 
     let result = switch_root_to_rootfs(&mock);
     assert!(result.is_err());
 }
 
 #[test]
-fn switch_root_to_rootfs_returns_error_when_chdir_fails() {
+fn switch_root_to_rootfs_returns_error_when_move_mount_fails() {
     let mut mock = MockSyscallProxy::new();
+    let mut seq = Sequence::new();
 
-    mock.expect_chroot()
+    mock.expect_chdir()
         .withf(|path| path == b"/rootfs\0")
         .times(1)
+        .in_sequence(&mut seq)
         .returning(|_| 0);
+    mock.expect_mount()
+        .withf(|source, target, _fstype, flags| {
+            source == b"/rootfs\0" && target == b"/\0" && *flags == MS_MOVE
+        })
+        .times(1)
+        .in_sequence(&mut seq)
+        .returning(|_, _, _, _| -1);
 
+    mock.expect_chroot().never();
+    mock.expect_chdir().withf(|path| path == b"/\0").never();
+    mock.expect_fchdir().never();
+    mock.expect_umount2().never();
+
+    let result = switch_root_to_rootfs(&mock);
+    assert!(result.is_err());
+}
+
+#[test]
+fn switch_root_to_rootfs_returns_error_when_chroot_dot_fails() {
+    let mut mock = MockSyscallProxy::new();
+    let mut seq = Sequence::new();
+
+    mock.expect_chdir()
+        .withf(|path| path == b"/rootfs\0")
+        .times(1)
+        .in_sequence(&mut seq)
+        .returning(|_| 0);
+    mock.expect_mount()
+        .withf(|source, target, _fstype, flags| {
+            source == b"/rootfs\0" && target == b"/\0" && *flags == MS_MOVE
+        })
+        .times(1)
+        .in_sequence(&mut seq)
+        .returning(|_, _, _, _| 0);
+    mock.expect_chroot()
+        .withf(|path| path == b".\0")
+        .times(1)
+        .in_sequence(&mut seq)
+        .returning(|_| -1);
+
+    mock.expect_chdir().withf(|path| path == b"/\0").never();
+    mock.expect_fchdir().never();
+    mock.expect_umount2().never();
+
+    let result = switch_root_to_rootfs(&mock);
+    assert!(result.is_err());
+}
+
+#[test]
+fn switch_root_to_rootfs_returns_error_when_post_chroot_chdir_fails() {
+    let mut mock = MockSyscallProxy::new();
+    let mut seq = Sequence::new();
+
+    mock.expect_chdir()
+        .withf(|path| path == b"/rootfs\0")
+        .times(1)
+        .in_sequence(&mut seq)
+        .returning(|_| 0);
+    mock.expect_mount()
+        .withf(|source, target, _fstype, flags| {
+            source == b"/rootfs\0" && target == b"/\0" && *flags == MS_MOVE
+        })
+        .times(1)
+        .in_sequence(&mut seq)
+        .returning(|_, _, _, _| 0);
+    mock.expect_chroot()
+        .withf(|path| path == b".\0")
+        .times(1)
+        .in_sequence(&mut seq)
+        .returning(|_| 0);
     mock.expect_chdir()
         .withf(|path| path == b"/\0")
         .times(1)
+        .in_sequence(&mut seq)
         .returning(|_| -1);
+
+    mock.expect_fchdir().never();
+    mock.expect_umount2().never();
 
     let result = switch_root_to_rootfs(&mock);
     assert!(result.is_err());
