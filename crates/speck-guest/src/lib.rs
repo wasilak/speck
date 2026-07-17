@@ -29,6 +29,12 @@ pub trait Syscalls: Send + Sync + 'static {
     /// Change working directory.  Mirrors `libc::chdir`.
     fn chdir(&self, path: &[u8]) -> i32;
 
+    /// Detach a mount point. Mirrors `libc::umount2` (Linux `umount2(2)`).
+    fn umount2(&self, path: &[u8], flags: i32) -> i32;
+
+    /// Change working directory via an open file descriptor. Mirrors `libc::fchdir`.
+    fn fchdir(&self, fd: i32) -> i32;
+
     /// Write a kernel parameter via `sysctl`.  Mirrors `libc::sysctl` or
     /// `/proc/sys/` file write.
     fn sysctl_write(&self, name: &str, value: &str) -> Result<(), std::io::Error>;
@@ -66,6 +72,14 @@ impl Syscalls for LibcSyscalls {
 
     fn chdir(&self, path: &[u8]) -> i32 {
         unsafe { libc::chdir(path.as_ptr() as *const libc::c_char) }
+    }
+
+    fn umount2(&self, path: &[u8], flags: i32) -> i32 {
+        unsafe { libc::umount2(path.as_ptr() as *const libc::c_char, flags) }
+    }
+
+    fn fchdir(&self, fd: i32) -> i32 {
+        unsafe { libc::fchdir(fd) }
     }
 
     fn sysctl_write(&self, _name: &str, _value: &str) -> Result<(), std::io::Error> {

@@ -27,6 +27,8 @@ mockall::mock! {
         fn mount(&self, source: &[u8], target: &[u8], fstype: &[u8], flags: u64) -> i32;
         fn chroot(&self, path: &[u8]) -> i32;
         fn chdir(&self, path: &[u8]) -> i32;
+        fn umount2(&self, path: &[u8], flags: i32) -> i32;
+        fn fchdir(&self, fd: i32) -> i32;
         fn sysctl_write(&self, name: &str, value: &str) -> Result<(), std::io::Error>;
         fn grow_filesystem(&self, device: &str, mountpoint: &str) -> Result<(), std::io::Error>;
     }
