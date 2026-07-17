@@ -18,14 +18,47 @@ use std::io;
 use std::path::Path;
 
 // ---------------------------------------------------------------------------
-// Constants — raw Linux mount flags (MS_BIND and MS_RELATIME are not
-// available on macOS via the libc crate, so we define them locally).
+// Constants — raw Linux mount flags (not available on macOS via the libc
+// crate, so we define them locally).
 // ---------------------------------------------------------------------------
 
-const MS_BIND: u64 = 4096;
 const MS_RELATIME: u64 = 2097152;
 const MS_MOVE: u64 = 8192;
-const MNT_DETACH: i32 = 2;
+const MS_REC: u64 = 16384;
+const MS_PRIVATE: u64 = 262144;
+
+// ---------------------------------------------------------------------------
+// Mount propagation
+// ---------------------------------------------------------------------------
+
+/// Recursively mark the entire mount tree rooted at `/` as `MS_PRIVATE`.
+///
+/// This must run as the very first mount-related operation during boot,
+/// before any other mount (including `mount_early_filesystems`) — matching
+/// the first action every real init system (systemd, dracut, busybox)
+/// takes for exactly this reason: without it, `MS_MOVE`/propagation-related
+/// operations later in boot operate against the kernel's default (shared)
+/// propagation, which this project's own prior debug session
+/// (`.planning/debug/resolved/buildx-http2-frame-too-large.md`) already
+/// found pervasive throughout the guest's mount tree. Kept as a defensive,
+/// standard-practice measure even though the specific live-boot bug this
+/// plan root-caused (fresh vs. bind-mounted `/proc`/`/sys`/`/dev` surviving
+/// `switch_root_to_rootfs`'s old-root detach differently — see
+/// `mount_rootfs_runtime_filesystems`'s doc comment) turned out to be about
+/// bind-mount vs. fresh-mount ancestry, not propagation type — propagation
+/// was already private by the time that bug was isolated.
+///
+/// Non-fatal: logs the error and continues, matching the non-fatal posture
+/// of every other propagation-adjacent helper in this module.
+pub fn make_mount_tree_private(syscalls: &dyn Syscalls) {
+    let ret = syscalls.mount(b"none\0", b"/\0", b"\0", MS_REC | MS_PRIVATE);
+    if ret < 0 {
+        tracing::warn!(
+            error = %io::Error::last_os_error(),
+            "mount(MS_REC | MS_PRIVATE) on / failed"
+        );
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Early filesystem mounts
@@ -56,63 +89,62 @@ pub fn mount_early_filesystems(syscalls: &dyn Syscalls) {
 }
 
 // ---------------------------------------------------------------------------
-// Bind-mount helper
-// ---------------------------------------------------------------------------
-
-/// Bind-mount `source` onto `target` using MS_BIND.
-///
-/// Non-fatal: logs the error and returns.
-pub(crate) fn bind_mount(syscalls: &dyn Syscalls, source: &str, target: &str) {
-    use std::ffi::CString;
-    let src = CString::new(source).unwrap_or_default();
-    let tgt = CString::new(target).unwrap_or_default();
-
-    let ret = syscalls.mount(
-        src.as_bytes_with_nul(),
-        tgt.as_bytes_with_nul(),
-        b"\0",
-        MS_BIND,
-    );
-    if ret < 0 {
-        tracing::warn!(
-            source = %source,
-            target = %target,
-            error = %io::Error::last_os_error(),
-            "bind mount failed"
-        );
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Runtime filesystem mounts inside /rootfs
 // ---------------------------------------------------------------------------
 
-/// Bind-mount /proc, /sys, /dev from the initrd namespace into /rootfs,
-/// and mount a fresh tmpfs at /rootfs/run.
+/// Mount fresh /proc, /sys, /dev instances inside /rootfs, plus a fresh
+/// tmpfs at /rootfs/run.
 ///
 /// This is required before running dockerd (or any process) in a chroot
 /// rooted at /rootfs: the chroot'd process must be able to see proc, sys,
-/// and dev, which only exist in the outer namespace after
-/// `mount_early_filesystems()` runs.
+/// and dev.
+///
+/// These are deliberately FRESH mounts (matching the same `mount(2)` calls
+/// `mount_early_filesystems()` uses for the outer namespace), not bind
+/// mounts of the outer `/proc`/`/sys`/`/dev`. Bind-mounting them from the
+/// outer namespace was tried first and found to be **incompatible** with
+/// `switch_root_to_rootfs`'s old-root detach step (D-06): live-boot testing
+/// (2026-07-17, Phase 25 Plan 02 Task 2) showed that `umount2(old_root,
+/// MNT_DETACH)` on the anonymous initramfs root also silently took down
+/// every bind-mounted *copy* of a mount that was still live under that old
+/// root (`/proc`, `/sys`, `/dev`) — while mounts with no live alias
+/// elsewhere in the namespace (the `/rootfs/run` tmpfs, the
+/// `/rootfs/sys/fs/cgroup` cgroup2 mount, the VirtioFS shares) survived the
+/// same move+detach untouched. Mounting fresh here (same technique already
+/// proven to survive by the tmpfs/cgroup2 mounts below) sidesteps the
+/// interaction entirely and matches what real switch_root implementations
+/// (systemd, dracut) do: mount /proc, /sys, /dev anew after switching root,
+/// rather than carrying bind-mounted copies through the switch.
 ///
 /// Call order: must run AFTER `mount_disks()` so that /rootfs is a
-/// valid ext4 mount point, and AFTER `mount_early_filesystems()` so
-/// that the bind sources (/proc, /sys, /dev) themselves exist.
+/// valid ext4 mount point.
 ///
 /// Mount failures are non-fatal — errors are logged and execution
 /// continues.  A chroot'd process that cannot see /proc will typically
 /// fail to start on its own; the error log is sufficient for diagnosis.
 pub fn mount_rootfs_runtime_filesystems(syscalls: &dyn Syscalls) {
-    // /rootfs/proc — bind from /proc
+    // /rootfs/proc — fresh procfs mount
     let _ = std::fs::create_dir_all("/rootfs/proc");
-    bind_mount(syscalls, "/proc", "/rootfs/proc");
+    let ret = syscalls.mount(b"proc\0", b"/rootfs/proc\0", b"proc\0", 0);
+    if ret < 0 {
+        tracing::warn!(
+            error = %io::Error::last_os_error(),
+            "mount proc at /rootfs/proc failed"
+        );
+    }
 
-    // /rootfs/sys — bind from /sys
+    // /rootfs/sys — fresh sysfs mount
     let _ = std::fs::create_dir_all("/rootfs/sys");
-    bind_mount(syscalls, "/sys", "/rootfs/sys");
+    let ret = syscalls.mount(b"sysfs\0", b"/rootfs/sys\0", b"sysfs\0", 0);
+    if ret < 0 {
+        tracing::warn!(
+            error = %io::Error::last_os_error(),
+            "mount sysfs at /rootfs/sys failed"
+        );
+    }
 
     // /rootfs/sys/fs/cgroup — mount cgroup2 hierarchy.
-    // A plain MS_BIND of /sys does NOT carry cgroupv2 submounts;
+    // A plain sysfs mount does NOT carry cgroupv2 submounts;
     // crun sees sysfs type at /sys/fs/cgroup and rejects it with
     // "invalid file system type". Mount cgroup2 directly on top.
     let _ = std::fs::create_dir_all("/rootfs/sys/fs/cgroup");
@@ -126,9 +158,17 @@ pub fn mount_rootfs_runtime_filesystems(syscalls: &dyn Syscalls) {
         tracing::info!("mounted cgroup2 at /rootfs/sys/fs/cgroup");
     }
 
-    // /rootfs/dev — bind from /dev
+    // /rootfs/dev — fresh devtmpfs mount (devtmpfs has a single kernel-wide
+    // instance, so a second mount surfaces the same device nodes as the
+    // outer /dev, without needing to bind-mount the outer instance).
     let _ = std::fs::create_dir_all("/rootfs/dev");
-    bind_mount(syscalls, "/dev", "/rootfs/dev");
+    let ret = syscalls.mount(b"devtmpfs\0", b"/rootfs/dev\0", b"devtmpfs\0", 0);
+    if ret < 0 {
+        tracing::warn!(
+            error = %io::Error::last_os_error(),
+            "mount devtmpfs at /rootfs/dev failed"
+        );
+    }
 
     // /rootfs/run — fresh tmpfs (runtime sockets + pid files are ephemeral)
     let _ = std::fs::create_dir_all("/rootfs/run");
@@ -179,14 +219,40 @@ pub fn chroot_into_rootfs(syscalls: &dyn Syscalls) -> Result<(), io::Error> {
 /// itself (not just the calling process's `fs_struct.root` pointer, which
 /// is all a chroot-only approach changes) — see D-22/BOOT-01.
 ///
-/// After the move, a best-effort attempt is made to detach the orphaned
-/// old root (the initramfs "rootfs" pseudo-filesystem) per D-06: a file
-/// descriptor on the old root is captured before the move, then
-/// `fchdir` + `umount2(MNT_DETACH)` are attempted through it afterward —
-/// the only way to reference the old root once no path resolves to it
-/// anymore. This detach step is entirely non-fatal: canonical switch_root
-/// implementations don't guarantee it either, and a failed detach still
-/// leaves the guest at least as functional as a chroot-only baseline.
+/// # Old-root detach — deliberately NOT attempted
+///
+/// D-06 originally called for a best-effort `fchdir` + `umount2(MNT_DETACH)`
+/// detach of the orphaned old root (the initramfs "rootfs" pseudo-
+/// filesystem) after the move, captured via an fd taken before the move (the
+/// only way to reference the old root once no path resolves to it anymore).
+/// This was implemented and live-boot tested (2026-07-17, Phase 25 Plan 02
+/// Task 2) and found to be **actively harmful**, not merely
+/// occasionally-failing-and-therefore-harmless as D-06 anticipated: when the
+/// `umount2(MNT_DETACH)` call *succeeds* (returns 0, no error), it also
+/// silently detaches `/proc`, `/sys`, and `/dev` inside the new root —
+/// reproduced identically whether those were bind mounts of the outer
+/// namespace's `/proc`/`/sys`/`/dev` or freshly-mounted instances created
+/// directly under `/rootfs` (ruling out "bind mount" as the distinguishing
+/// factor; some property of how the kernel accounts for the old root's
+/// still-attached children survives the move and is disturbed by detaching
+/// it). This broke `dockerd`'s embedded containerd startup on every single
+/// boot (`open /proc/self/mountinfo: no such file or directory`, `open
+/// /dev/null: no such file or directory`), confirmed via an isolated A/B
+/// test: skipping only the `umount2` call (keeping everything else
+/// identical) fixed dockerd startup immediately (socket ready on the very
+/// first attempt, vs. an infinite crash-restart loop with it enabled).
+///
+/// Not attempting the detach matches busybox's own `switch_root.c`
+/// (quoted in `.planning/debug/resolved/buildx-http2-frame-too-large.md`,
+/// the prior debug session in this project): "Don't try to unmount the old
+/// '/', there's no way to do it." The leftover, permanently-unreachable old
+/// root mount is harmless — no path resolves to it after the move, it isn't
+/// carried into container mount namespaces at all (that's a structurally
+/// separate mount from `/rootfs`, which is what `unshare(CLONE_NEWNS)`
+/// clones for each container) — matching D-06's own original framing that
+/// a *non-executed* detach "leaves the guest at least as functional as a
+/// chroot-only baseline". This function therefore performs the move only;
+/// it does not attempt any old-root cleanup.
 ///
 /// After this call succeeds, all paths that previously started with
 /// `/rootfs/` are valid at `/` — e.g. `/rootfs/etc` becomes `/etc`.
@@ -194,16 +260,9 @@ pub fn chroot_into_rootfs(syscalls: &dyn Syscalls) -> Result<(), io::Error> {
 /// # Errors
 ///
 /// Returns an error if the `chdir(/rootfs)`, `mount(MS_MOVE)`,
-/// `chroot(".")`, or post-move `chdir("/")` syscall fails. These four
-/// steps are fatal — the caller should exit, since the guest cannot
-/// function without a valid root. The old-root detach phase that follows
-/// is non-fatal and never returns an error from this function.
+/// `chroot(".")`, or post-move `chdir("/")` syscall fails — the caller
+/// should exit, since the guest cannot function without a valid root.
 pub fn switch_root_to_rootfs(syscalls: &dyn Syscalls) -> Result<(), io::Error> {
-    // Capture an fd on the current (old) root before the move — best
-    // effort. A capture failure only skips the detach step below; it
-    // must never abort the switch_root itself.
-    let old_root = std::fs::File::open("/").ok();
-
     // chdir into the new root before the move. After MS_MOVE re-parents
     // /rootfs onto "/", the string "/rootfs" no longer resolves to
     // anything meaningful — "." (this pre-established cwd) is the only
@@ -227,39 +286,6 @@ pub fn switch_root_to_rootfs(syscalls: &dyn Syscalls) -> Result<(), io::Error> {
     let ret = syscalls.chdir(b"/\0");
     if ret < 0 {
         return Err(io::Error::last_os_error());
-    }
-
-    // Best-effort detach of the orphaned old root (D-06). Non-fatal.
-    match old_root {
-        Some(file) => {
-            use std::os::fd::AsRawFd;
-            let fd = file.as_raw_fd();
-            if syscalls.fchdir(fd) == 0 {
-                let ret = syscalls.umount2(b".\0", MNT_DETACH);
-                if ret < 0 {
-                    tracing::warn!(
-                        error = %io::Error::last_os_error(),
-                        "old-root detach failed"
-                    );
-                }
-                // Restore cwd to the new root regardless of detach outcome.
-                let ret = syscalls.chdir(b"/\0");
-                if ret < 0 {
-                    tracing::warn!(
-                        error = %io::Error::last_os_error(),
-                        "failed to restore cwd to new root after detach attempt"
-                    );
-                }
-            } else {
-                tracing::warn!(
-                    error = %io::Error::last_os_error(),
-                    "fchdir to old root failed; skipping detach"
-                );
-            }
-        }
-        None => {
-            tracing::warn!("failed to capture old-root fd before switch_root; skipping detach");
-        }
     }
 
     Ok(())

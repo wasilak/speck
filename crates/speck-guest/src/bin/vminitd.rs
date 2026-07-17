@@ -51,13 +51,18 @@ mod linux {
 
     use speck_guest::LibcSyscalls;
     use speck_guest::mount::{
-        configure_sysctl_params, mount_disks, mount_early_filesystems,
+        configure_sysctl_params, make_mount_tree_private, mount_disks, mount_early_filesystems,
         mount_rootfs_runtime_filesystems,
     };
     use std::io;
 
     pub(super) fn main() {
         let libc_syscalls = LibcSyscalls;
+
+        // Recursively mark the entire mount tree private before anything
+        // else mounts, matching real init systems' first boot action — see
+        // make_mount_tree_private's doc comment.
+        make_mount_tree_private(&libc_syscalls);
 
         // Mount early filesystems (/proc, /sys, /dev) before reading
         // /proc/cmdline — the kernel cmdline lives at /proc/cmdline and
