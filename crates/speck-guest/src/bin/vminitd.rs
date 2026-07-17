@@ -982,7 +982,37 @@ mod linux {
                     "unix:///run/speck/dockerd.sock",
                     "--data-root",
                     "/var/lib/containerd",
-                    "--iptables=false",
+                    // dockerd creates its default "docker0" bridge
+                    // (172.17.0.0/16) unconditionally at startup, regardless
+                    // of this flag — confirmed live (`ip addr show docker0`
+                    // inside the guest's real root netns) even with
+                    // --iptables=false. So --iptables=true does NOT create a
+                    // new subnet; it only lets dockerd populate NAT/
+                    // MASQUERADE + forwarding rules in the guest kernel's own
+                    // netfilter for that pre-existing, guest-internal bridge
+                    // — exactly what every real Linux Docker host, Colima,
+                    // and Lima already do. This does not touch, duplicate, or
+                    // reintroduce anything at the host<->VM boundary: the
+                    // VZFileHandleNetworkDeviceAttachment + smoltcp netstack
+                    // in crates/speck-net/ are completely unmodified, no
+                    // VZNATNetworkDeviceAttachment and no synthetic host<->VM
+                    // subnet is introduced, so CLAUDE.md's locked networking
+                    // invariant ("must never introduce synthetic
+                    // routers/subnets; must inherit host routing + DNS live")
+                    // is unaffected. Once correctly NAT'd/forwarded inside
+                    // the guest kernel, container egress traffic reaches
+                    // eth0 and is captured by the existing, unmodified
+                    // ReoriginBridge (crates/speck-net/src/reorigin.rs) — the
+                    // same host-inheriting transparent-proxy path dockerd's
+                    // own root-netns traffic (docker pull, in-daemon docker
+                    // build) already uses successfully, so container egress
+                    // still honors the host's live routing table and DNS.
+                    // Previously left as --iptables=false (see 25-02-
+                    // SUMMARY.md "Known Limitation"), which meant containers
+                    // (as opposed to dockerd itself) had zero outbound
+                    // network egress — the last gap blocking `docker buildx
+                    // build --load` (Phase 25 Plan 03 / 25-VERIFICATION.md).
+                    "--iptables=true",
                     "--userland-proxy=false",
                     "--insecure-registry=172.16.0.0/12",
                     // Containers on Docker's legacy default "bridge" network
