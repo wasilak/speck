@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 use std::future::Future;
-use std::io::Write;
+use std::io::ErrorKind;
 use std::net::Ipv4Addr;
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::path::PathBuf;
@@ -1053,21 +1053,107 @@ fn bridge_host_to_guest_tcp(
         .vsock_connect(TCP_FORWARDER_VSOCK_PORT)
         .map_err(|err| std::io::Error::other(err.to_string()))?
         .into_unix_stream();
-    guest_stream.write_all(format!("{target_ip}:{target_port}\n").as_bytes())?;
+    write_all_retrying_wouldblock(
+        &mut guest_stream,
+        format!("{target_ip}:{target_port}\n").as_bytes(),
+    )?;
 
     let mut host_reader = host_stream.try_clone()?;
     let mut host_writer = host_stream;
     let mut guest_writer = guest_stream.try_clone()?;
 
     let h2g = std::thread::spawn(move || {
-        let _ = std::io::copy(&mut host_reader, &mut guest_writer);
+        let _ = copy_retrying_wouldblock(&mut host_reader, &mut guest_writer);
         let _ = guest_writer.shutdown(Shutdown::Write);
     });
 
-    let _ = std::io::copy(&mut guest_stream, &mut host_writer);
+    let _ = copy_retrying_wouldblock(&mut guest_stream, &mut host_writer);
     let _ = host_writer.shutdown(Shutdown::Write);
     let _ = h2g.join();
     Ok(())
+}
+
+/// Copy bytes from `src` to `dst` until EOF, retrying `WouldBlock` on both
+/// reads and writes by waiting for fd readiness via `poll()` instead of
+/// treating it as fatal.
+///
+/// VZ's vsock connection fd (`VZVirtioSocketConnection.fileDescriptor`,
+/// reached here via `guest.vsock_connect()`) can return `EWOULDBLOCK` on
+/// `write()` even when `fcntl(F_GETFL)` reports no `O_NONBLOCK` — it does
+/// not behave like an ordinary blocking POSIX socket (confirmed directly:
+/// debug session buildx-http2-frame-too-large). `std::io::copy` treats any
+/// `WouldBlock` as a fatal error and aborts immediately without retrying,
+/// silently dropping whatever hadn't been written yet and triggering a
+/// premature half-close of the bridged connection — the same invariant
+/// (#4: "never let a blocking downstream write stall reads from a vsock
+/// fd... any new vsock consumer must drain eagerly into userspace memory")
+/// that `speck-vz::guest::write_chunk_blocking` already protects against
+/// for a different vsock consumer. This mirrors that established pattern.
+fn copy_retrying_wouldblock<R, W>(src: &mut R, dst: &mut W) -> std::io::Result<u64>
+where
+    R: std::io::Read + std::os::unix::io::AsRawFd,
+    W: std::io::Write + std::os::unix::io::AsRawFd,
+{
+    let mut buf = [0u8; 65536];
+    let mut total = 0u64;
+    loop {
+        let n = match src.read(&mut buf) {
+            Ok(0) => return Ok(total),
+            Ok(n) => n,
+            Err(e) if e.kind() == ErrorKind::WouldBlock => {
+                wait_for_fd(src.as_raw_fd(), libc::POLLIN)?;
+                continue;
+            }
+            Err(e) if e.kind() == ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        };
+        write_all_retrying_wouldblock(dst, &buf[..n])?;
+        total += n as u64;
+    }
+}
+
+/// Write `data` fully to `dst`, retrying on `WouldBlock` by waiting for
+/// writability via `poll()`. See [`copy_retrying_wouldblock`] for why this
+/// is required for VZ vsock fds.
+fn write_all_retrying_wouldblock<W: std::io::Write + std::os::unix::io::AsRawFd>(
+    dst: &mut W,
+    mut data: &[u8],
+) -> std::io::Result<()> {
+    while !data.is_empty() {
+        match dst.write(data) {
+            Ok(0) => {
+                return Err(std::io::Error::new(
+                    ErrorKind::WriteZero,
+                    "bridge_host_to_guest_tcp: downstream write returned 0",
+                ));
+            }
+            Ok(n) => data = &data[n..],
+            Err(e) if e.kind() == ErrorKind::WouldBlock => {
+                wait_for_fd(dst.as_raw_fd(), libc::POLLOUT)?;
+            }
+            Err(e) if e.kind() == ErrorKind::Interrupted => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(())
+}
+
+fn wait_for_fd(fd: std::os::unix::io::RawFd, events: libc::c_short) -> std::io::Result<()> {
+    loop {
+        let mut pfd = libc::pollfd {
+            fd,
+            events,
+            revents: 0,
+        };
+        let ret = unsafe { libc::poll(&mut pfd, 1, -1) };
+        if ret >= 0 {
+            return Ok(());
+        }
+        let e = std::io::Error::last_os_error();
+        if e.kind() != ErrorKind::Interrupted {
+            return Err(e);
+        }
+    }
 }
 
 fn resolve_container_id(published: &PublishedPortsState, id_or_name: &str) -> Option<String> {
@@ -1155,4 +1241,97 @@ async fn wait_for_container_ip(state: &ProxyState, id: &str) -> crate::Result<Op
     }
     tracing::warn!(container = %id, "container IP not available after start; skipping published-port activation");
     Ok(None)
+}
+
+#[cfg(test)]
+mod bridge_host_to_guest_tcp_tests {
+    use super::copy_retrying_wouldblock;
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
+    use std::os::unix::io::AsRawFd;
+    use std::time::Duration;
+
+    /// Regression test for `bridge_host_to_guest_tcp`'s data-loss bug: VZ's
+    /// vsock connection fd can return `WouldBlock` on `write()` even without
+    /// `O_NONBLOCK` set (confirmed live — debug session
+    /// buildx-http2-frame-too-large), and `std::io::copy` treats any
+    /// `WouldBlock` as fatal, silently truncating the copy. This mimics that
+    /// scenario with a real loopback TCP pair whose writer-side `SO_SNDBUF`
+    /// is capped small: `copy_retrying_wouldblock` must retry via poll(),
+    /// not truncate, so every byte reaches the far end intact.
+    #[test]
+    fn copy_retrying_wouldblock_survives_wouldblock_without_truncating() {
+        // Destination side (mimics writing into the VZ vsock fd downstream):
+        // a loopback pair whose accepted end has a tiny SO_SNDBUF, and whose
+        // client end only starts reading from a background thread — forcing
+        // writes into `accepted` to hit WouldBlock before draining begins.
+        let dst_listener = TcpListener::bind("127.0.0.1:0").expect("bind dst listener");
+        let dst_addr = dst_listener.local_addr().expect("dst addr");
+        let mut client = TcpStream::connect(dst_addr).expect("client connect");
+        let mut accepted = dst_listener.accept().expect("dst accept").0;
+
+        let sndbuf: libc::c_int = 4096;
+        let rc = unsafe {
+            libc::setsockopt(
+                accepted.as_raw_fd(),
+                libc::SOL_SOCKET,
+                libc::SO_SNDBUF,
+                &sndbuf as *const libc::c_int as *const libc::c_void,
+                std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+            )
+        };
+        assert_eq!(rc, 0, "setsockopt(SO_SNDBUF=4096) failed");
+        // Force the destination into non-blocking mode so a full SNDBUF
+        // surfaces as WouldBlock rather than a plain blocking wait — this is
+        // what makes the test actually exercise the WouldBlock-retry path
+        // (the real VZ vsock fd returns WouldBlock even without O_NONBLOCK,
+        // but a standard TCP socket needs this to reproduce the same
+        // observable condition deterministically).
+        accepted
+            .set_nonblocking(true)
+            .expect("set accepted stream nonblocking");
+
+        // Source side (mimics reading the client request off the vsock fd):
+        // a plain loopback TcpStream pair, fully fed up front.
+        let src_listener = TcpListener::bind("127.0.0.1:0").expect("bind src listener");
+        let src_addr = src_listener.local_addr().expect("src addr");
+        let mut src_writer = TcpStream::connect(src_addr).expect("src writer connect");
+        let mut src_reader = src_listener.accept().expect("src accept").0;
+
+        const TOTAL: usize = 262_144; // 256KB — far larger than the 4KB SNDBUF cap.
+        let expected: Vec<u8> = (0..TOTAL).map(|i| (i % 251) as u8).collect();
+
+        let expected_for_writer = expected.clone();
+        let writer_thread = std::thread::spawn(move || {
+            src_writer
+                .write_all(&expected_for_writer)
+                .expect("feed src payload");
+            src_writer
+                .shutdown(std::net::Shutdown::Write)
+                .expect("shutdown src writer");
+        });
+
+        // Delay the client's reads slightly so the copy loop reliably hits
+        // WouldBlock at least once before anything drains the SNDBUF.
+        let reader_thread = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(200));
+            let mut got = Vec::new();
+            client.read_to_end(&mut got).expect("client read_to_end");
+            got
+        });
+
+        let copied = copy_retrying_wouldblock(&mut src_reader, &mut accepted)
+            .expect("copy_retrying_wouldblock must not error under backpressure");
+        drop(accepted); // close write side so the client sees EOF
+
+        writer_thread.join().expect("writer thread panicked");
+        let got = reader_thread.join().expect("reader thread panicked");
+
+        assert_eq!(
+            copied as usize, TOTAL,
+            "copy_retrying_wouldblock must report the full byte count"
+        );
+        assert_eq!(got.len(), TOTAL, "byte count mismatch at downstream client");
+        assert_eq!(got, expected, "payload corrupted or reordered in transit");
+    }
 }

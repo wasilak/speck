@@ -38,6 +38,7 @@ pub struct PortPublishBridge {
 struct PortBridgeState {
     stream: TcpStream,
     h2g_overflow: Option<(Vec<u8>, usize)>,
+    g2h_overflow: Option<(Vec<u8>, usize)>,
 }
 
 impl PortBridgeState {
@@ -45,6 +46,7 @@ impl PortBridgeState {
         Self {
             stream,
             h2g_overflow: None,
+            g2h_overflow: None,
         }
     }
 
@@ -62,6 +64,55 @@ impl PortBridgeState {
                 self.h2g_overflow = None;
             }
         }
+    }
+
+    /// Flush any buffered guest→host bytes to the (non-blocking) host stream.
+    ///
+    /// `write_all` cannot be used here: on a non-blocking socket it returns
+    /// immediately on the first `WouldBlock`, which would otherwise silently
+    /// drop the unwritten remainder of the chunk — corrupting the byte stream
+    /// for any framing-sensitive protocol (e.g. HTTP/2) riding on top. Instead
+    /// this loops on `write()`, keeping whatever wasn't accepted queued for
+    /// the next poll. Mirrors `flush_h2g`'s handling of the opposite direction.
+    ///
+    /// Returns `Err` only if the stream itself failed (not `WouldBlock`) —
+    /// the caller should treat that as a signal to close the bridge.
+    fn flush_g2h(&mut self) -> std::io::Result<()> {
+        let PortBridgeState {
+            stream,
+            g2h_overflow,
+            ..
+        } = self;
+        while let Some((data, offset)) = g2h_overflow {
+            let remaining = &data[*offset..];
+            match stream.write(remaining) {
+                Ok(0) => {
+                    return Err(std::io::Error::new(
+                        ErrorKind::WriteZero,
+                        "published-port host stream write returned 0",
+                    ));
+                }
+                Ok(n) => {
+                    *offset += n;
+                    if *offset >= data.len() {
+                        *g2h_overflow = None;
+                    }
+                }
+                Err(e) if e.kind() == ErrorKind::WouldBlock => return Ok(()),
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(())
+    }
+
+    /// Queue guest→host bytes (appending to any existing unflushed overflow
+    /// to preserve order) and attempt an immediate flush.
+    fn queue_guest_bytes(&mut self, data: &[u8]) -> std::io::Result<()> {
+        match &mut self.g2h_overflow {
+            Some((buf, _)) => buf.extend_from_slice(data),
+            None => self.g2h_overflow = Some((data.to_vec(), 0)),
+        }
+        self.flush_g2h()
     }
 }
 
@@ -215,13 +266,21 @@ impl PortPublishBridge {
                         None
                     };
 
-                    if socket.can_recv() {
+                    // Flush any guest→host bytes buffered from a previous poll
+                    // (e.g. because the host stream returned WouldBlock) before
+                    // accepting new guest bytes, to preserve byte order.
+                    let mut g2h_failed =
+                        bridge.g2h_overflow.is_some() && bridge.flush_g2h().is_err();
+
+                    if !g2h_failed && bridge.g2h_overflow.is_none() && socket.can_recv() {
                         let mut buf = vec![0u8; self.mtu as usize];
                         if let Ok(len) = socket.recv_slice(&mut buf)
                             && len > 0
                         {
                             tracing::info!(bytes = len, state = ?socket.state(), "received guest bytes for published port");
-                            let _ = bridge.stream.write_all(&buf[..len]);
+                            if bridge.queue_guest_bytes(&buf[..len]).is_err() {
+                                g2h_failed = true;
+                            }
                         }
                     }
 
@@ -229,11 +288,11 @@ impl PortPublishBridge {
                         Some(true) => true,
                         Some(false) => {
                             self.bridges.insert(handle, bridge);
-                            false
+                            g2h_failed
                         }
                         None => {
                             self.bridges.insert(handle, bridge);
-                            false
+                            g2h_failed
                         }
                     }
                 }
@@ -292,7 +351,7 @@ impl PortPublishBridge {
 
 #[cfg(test)]
 mod tests {
-    use super::{PortMapConfig, PortPublishBridge};
+    use super::{PortBridgeState, PortMapConfig, PortPublishBridge};
 
     #[test]
     fn test_portmap_config_serialization() {
@@ -331,5 +390,93 @@ mod tests {
 
         bridge.remove_port_map(config);
         assert_eq!(bridge.port_map_count(), 0);
+    }
+
+    /// Regression test for guest→host data loss on published TCP ports under
+    /// downstream backpressure.
+    ///
+    /// The host-accepted stream is non-blocking; a naive `write_all` returns
+    /// on the first `WouldBlock` and silently drops whatever wasn't yet
+    /// written. This mimics that scenario with a real loopback TCP pair whose
+    /// writer-side `SO_SNDBUF` is capped small and a downstream client that
+    /// reads nothing until after the write has already produced a `WouldBlock`
+    /// overflow: `queue_guest_bytes`/`flush_g2h` must retry rather than drop,
+    /// so every byte eventually reaches the client, in order.
+    #[test]
+    fn g2h_overflow_survives_wouldblock_without_dropping_bytes() {
+        use std::io::Read;
+        use std::net::{TcpListener, TcpStream};
+        use std::os::unix::io::AsRawFd;
+        use std::time::Duration;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback listener");
+        let addr = listener.local_addr().expect("local addr");
+
+        let mut client = TcpStream::connect(addr).expect("client connect");
+        let (accepted, _) = listener.accept().expect("accept");
+
+        // Cap the writer-side send buffer small so a modest payload reliably
+        // exceeds kernel buffering and forces WouldBlock while the client
+        // isn't reading — mirroring the fixed-size backpressure scenario this
+        // bridge must tolerate in production (macOS defaults are already
+        // small; this makes the test deterministic regardless of host tuning).
+        let sndbuf: libc::c_int = 4096;
+        let rc = unsafe {
+            libc::setsockopt(
+                accepted.as_raw_fd(),
+                libc::SOL_SOCKET,
+                libc::SO_SNDBUF,
+                &sndbuf as *const libc::c_int as *const libc::c_void,
+                std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+            )
+        };
+        assert_eq!(rc, 0, "setsockopt(SO_SNDBUF=4096) failed");
+        accepted
+            .set_nonblocking(true)
+            .expect("set accepted stream nonblocking");
+
+        let mut bridge = PortBridgeState::new(accepted);
+
+        const TOTAL: usize = 262_144; // 256KB — far larger than the 4KB SNDBUF cap.
+        let expected: Vec<u8> = (0..TOTAL).map(|i| (i % 251) as u8).collect();
+
+        // First queue: with nobody reading yet, this must hit WouldBlock
+        // partway through and buffer the remainder rather than erroring.
+        bridge
+            .queue_guest_bytes(&expected)
+            .expect("queue_guest_bytes must tolerate WouldBlock, not error");
+        assert!(
+            bridge.g2h_overflow.is_some(),
+            "test setup invalid: expected the small SNDBUF to force an overflow \
+             before the client reads anything — got no overflow, so this test \
+             isn't actually exercising the WouldBlock path"
+        );
+
+        // Drain from the client on a background thread while the main thread
+        // keeps calling flush_g2h() to simulate repeated poll() ticks.
+        let reader = std::thread::spawn(move || {
+            let mut got = Vec::new();
+            client.read_to_end(&mut got).expect("client read_to_end");
+            got
+        });
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while bridge.g2h_overflow.is_some() {
+            bridge
+                .flush_g2h()
+                .expect("flush_g2h must not error under backpressure");
+            assert!(
+                std::time::Instant::now() < deadline,
+                "flush_g2h did not drain the overflow within 5s"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+
+        // Drop the bridge to close the write side, signalling EOF to the client.
+        drop(bridge);
+
+        let got = reader.join().expect("reader thread panicked");
+        assert_eq!(got.len(), TOTAL, "byte count mismatch at downstream client");
+        assert_eq!(got, expected, "payload corrupted or reordered in transit");
     }
 }
