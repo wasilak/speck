@@ -856,78 +856,41 @@ mod linux {
     /// Install CA certificates from the VirtioFS share into the guest's trust
     /// store (CERT-02).
     ///
-    /// Reads all `.pem` files from `/var/lib/speck/ca-certs/` and appends them
-    /// to `/etc/ssl/certs/ca-certificates.crt`, then runs
-    /// `update-ca-certificates` so the system trust store picks them up.
+    /// Copies all `.pem` files from `/var/lib/speck/ca-certs/` into
+    /// `/usr/local/share/ca-certificates/`, runs `update-ca-certificates`, and
+    /// appends any cert still missing from the bundle (see `ca_trust`).
     fn install_ca_certs() {
-        let ca_dir = "/var/lib/speck/ca-certs/";
-        let ca_dir_path = std::path::Path::new(ca_dir);
-        if !ca_dir_path.is_dir() {
-            eprintln!("vminitd: CA certs directory {ca_dir} not found — skipping install");
+        let ca_dir = std::path::Path::new("/var/lib/speck/ca-certs/");
+        if !ca_dir.is_dir() {
+            eprintln!(
+                "vminitd: CA certs directory {} not found — skipping install",
+                ca_dir.display()
+            );
             return;
         }
-        let entries = match std::fs::read_dir(ca_dir_path) {
-            Ok(e) => e,
-            Err(e) => {
-                eprintln!("vminitd: failed to list {ca_dir}: {e}");
-                return;
-            }
-        };
-        let mut cert_count = 0u32;
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("pem") {
-                continue;
-            }
-            let content = match std::fs::read_to_string(&path) {
-                Ok(c) => c,
-                Err(e) => {
-                    eprintln!("vminitd: failed to read {}: {e}", path.display());
-                    continue;
+        let result = speck_guest::ca_trust::install_ca_certs(
+            ca_dir,
+            std::path::Path::new("/usr/local/share/ca-certificates"),
+            std::path::Path::new("/etc/ssl/certs/ca-certificates.crt"),
+            || {
+                // Absolute path: vminitd's PATH does not include /usr/sbin.
+                match std::process::Command::new("/usr/sbin/update-ca-certificates").status() {
+                    Ok(s) if s.success() => true,
+                    Ok(s) => {
+                        eprintln!("vminitd: update-ca-certificates exited with {s:?}");
+                        false
+                    }
+                    Err(e) => {
+                        eprintln!("vminitd: update-ca-certificates failed: {e}");
+                        false
+                    }
                 }
-            };
-            // Append to the system CA bundle.
-            if let Err(e) = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open("/etc/ssl/certs/ca-certificates.crt")
-                .and_then(|mut f| {
-                    use std::io::Write;
-                    // Write a header comment for traceability, then the PEM content.
-                    writeln!(
-                        f,
-                        "\n# Speck injected CA: {}",
-                        path.file_name()
-                            .and_then(|n| n.to_str())
-                            .unwrap_or("unknown")
-                    )?;
-                    f.write_all(content.as_bytes())?;
-                    writeln!(f)?;
-                    Ok(())
-                })
-            {
-                eprintln!("vminitd: failed to append cert to bundle: {e}");
-            } else {
-                cert_count += 1;
-            }
-        }
-        if cert_count > 0 {
-            eprintln!("vminitd: installed {cert_count} CA cert(s) into trust bundle");
-            // Run update-ca-certificates so the system picks them up immediately.
-            let status = std::process::Command::new("update-ca-certificates")
-                .args(["--fresh"])
-                .status();
-            match status {
-                Ok(s) if s.success() => {
-                    eprintln!("vminitd: update-ca-certificates succeeded");
-                }
-                Ok(s) => {
-                    eprintln!("vminitd: update-ca-certificates exited with {s:?}");
-                }
-                Err(e) => {
-                    eprintln!("vminitd: update-ca-certificates failed: {e}");
-                }
-            }
+            },
+        );
+        match result {
+            Ok(0) => {}
+            Ok(n) => eprintln!("vminitd: installed {n} CA cert(s) into trust store"),
+            Err(e) => eprintln!("vminitd: CA cert install failed: {e}"),
         }
     }
 
