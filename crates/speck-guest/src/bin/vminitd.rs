@@ -115,6 +115,14 @@ mod linux {
             );
         }
 
+        // Keep the guest clock in step with the host after Mac sleep (RES-03).
+        std::thread::spawn(|| {
+            let port = speck_guest::time_sync::TIME_SYNC_VSOCK_PORT;
+            if let Err(e) = speck_guest::time_sync::serve(port) {
+                eprintln!("vminitd: time sync listener error: {e}");
+            }
+        });
+
         // Bring up loopback first so 127.0.0.1 routes locally (kernel adds
         // 127.0.0.0/8 to its local table only when lo is UP).
         bring_up_loopback();

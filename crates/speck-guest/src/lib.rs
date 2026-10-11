@@ -7,6 +7,7 @@ pub mod log_relay;
 pub mod sock_forwarder;
 #[cfg(target_os = "linux")]
 pub mod tcp_forwarder;
+pub mod time_sync;
 #[cfg(target_os = "linux")]
 pub mod vsock_echo;
 

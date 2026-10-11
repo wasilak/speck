@@ -827,6 +827,8 @@ pub async fn run_up(
     .context("failed to start Docker API server")?;
     tracing::info!("Docker API server started at {}", sock_path.display());
 
+    spawn_guest_clock_sync(guest.clone());
+
     spinner.finish_with_message(format!("{NEON_CYAN}Speck is running{RESET}"));
 
     println!();
@@ -928,6 +930,41 @@ pub async fn run_up(
     shutdown_gracefully(&guest, &ctrl_sock_path, speck_home).await?;
 
     Ok(())
+}
+
+/// vsock port of vminitd's time sync listener (`speck_guest::time_sync`).
+const TIME_SYNC_VSOCK_PORT: u32 = 9007;
+const TIME_SYNC_INTERVAL: Duration = Duration::from_secs(30);
+
+/// Push the host wall clock to the guest periodically, so the guest clock is
+/// corrected shortly after the Mac wakes from sleep (RES-03). The guest only
+/// steps its clock when it drifted by more than a second.
+fn spawn_guest_clock_sync(guest: Arc<speck_vz::Guest>) {
+    tokio::spawn(async move {
+        loop {
+            let g = Arc::clone(&guest);
+            let sent = tokio::task::spawn_blocking(move || send_host_time(&g)).await;
+            if let Ok(Err(e)) = sent {
+                tracing::debug!(error = %e, "guest clock sync failed");
+            }
+            tokio::time::sleep(TIME_SYNC_INTERVAL).await;
+        }
+    });
+}
+
+fn send_host_time(guest: &speck_vz::Guest) -> anyhow::Result<()> {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?;
+    let socket = guest.vsock_connect(TIME_SYNC_VSOCK_PORT)?;
+    socket.write(&encode_time(now))?;
+    Ok(())
+}
+
+/// Wire format shared with `speck_guest::time_sync::decode`.
+fn encode_time(since_epoch: Duration) -> [u8; 12] {
+    let mut msg = [0u8; 12];
+    msg[..8].copy_from_slice(&(since_epoch.as_secs() as i64).to_be_bytes());
+    msg[8..].copy_from_slice(&since_epoch.subsec_nanos().to_be_bytes());
+    msg
 }
 
 /// Liveness probe cadence and tolerance: the guest counts as dead after
@@ -1034,6 +1071,13 @@ pub async fn wait_for_socket(sock_path: &std::path::Path, timeout_secs: u64) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn encode_time_matches_guest_wire_format() {
+        let msg = encode_time(Duration::new(1_791_712_000, 123_456_789));
+        assert_eq!(&msg[..8], &1_791_712_000i64.to_be_bytes());
+        assert_eq!(&msg[8..], &123_456_789u32.to_be_bytes());
+    }
 
     #[test]
     fn only_stopped_or_error_counts_as_vm_exit() {
