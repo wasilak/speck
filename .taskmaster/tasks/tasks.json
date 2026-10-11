@@ -667,12 +667,13 @@
         "description": "Netstack exit is only logged (up.rs:783); one unprompted exit on 2026-08-18 left networking dead.",
         "details": "Restart loop with backoff that reconnects the DNS vsock and recreates SpeckNet; if restart fails, exit via the RES-01 path. Verify: test with injected netstack error.",
         "testStrategy": "",
-        "status": "pending",
+        "status": "done",
         "dependencies": [
           "13"
         ],
         "priority": "high",
-        "subtasks": []
+        "subtasks": [],
+        "updatedAt": "2026-10-11T12:07:27.096Z"
       },
       {
         "id": "15",
@@ -769,9 +770,9 @@
     ],
     "metadata": {
       "version": "1.0.0",
-      "lastModified": "2026-10-11T12:04:43.996Z",
+      "lastModified": "2026-10-11T12:07:27.097Z",
       "taskCount": 21,
-      "completedCount": 6,
+      "completedCount": 7,
       "tags": [
         "v1_4-daily-driver"
       ]
