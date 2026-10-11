@@ -528,13 +528,13 @@
         "description": "Failed host connect closes guest socket with FIN after handshake; no connect timeout (reorigin.rs:180-183,257).",
         "details": "Use tokio::time::timeout around TcpStream::connect (~10s), socket.abort() (RST) instead of close() on failure and for 127.x/gateway destinations (reorigin.rs:233-241). Verify: unit test; container nc to a refusing host port fails fast.",
         "testStrategy": "",
-        "status": "in-progress",
+        "status": "done",
         "dependencies": [
           "2"
         ],
         "priority": "high",
         "subtasks": [],
-        "updatedAt": "2026-10-11T11:24:59.509Z"
+        "updatedAt": "2026-10-11T11:40:18.737Z"
       },
       {
         "id": "4",
@@ -542,12 +542,13 @@
         "description": "No guest UDP egress except DHCP and vsock DNS; NTP/QUIC/any UDP fails.",
         "details": "New crates/speck-net/src/udp_reorigin.rs: per-5-tuple flows, host tokio UdpSocket per flow, idle timeout ~60s, cap on flows. Exclude the DNS path. Verify: egress-smoke udp 123 (ntp) PASS + unit tests.",
         "testStrategy": "",
-        "status": "pending",
+        "status": "done",
         "dependencies": [
           "2"
         ],
         "priority": "high",
-        "subtasks": []
+        "subtasks": [],
+        "updatedAt": "2026-10-11T11:47:04.146Z"
       },
       {
         "id": "5",
@@ -691,10 +692,11 @@
         "description": "Only A/AAAA answered (dns.rs:233-300), others NODATA; single blocking thread (dns.rs:80).",
         "details": "Forward raw queries for other types to the resolver chosen by ResolverTable (or system default), per-query workers, retry over TCP on TC bit. Verify: egress-smoke dns TXT/SRV/MX PASS; unit tests with mock resolver.",
         "testStrategy": "",
-        "status": "pending",
+        "status": "in-progress",
         "dependencies": [],
         "priority": "high",
-        "subtasks": []
+        "subtasks": [],
+        "updatedAt": "2026-10-11T11:47:05.677Z"
       },
       {
         "id": "17",
@@ -755,9 +757,9 @@
     ],
     "metadata": {
       "version": "1.0.0",
-      "lastModified": "2026-10-11T11:24:59.509Z",
+      "lastModified": "2026-10-11T11:47:05.677Z",
       "taskCount": 20,
-      "completedCount": 2,
+      "completedCount": 4,
       "tags": [
         "v1_4-daily-driver"
       ]
