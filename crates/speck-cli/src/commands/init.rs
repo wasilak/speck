@@ -34,6 +34,9 @@ ca:
   # container and set SSL_CERT_FILE / REQUESTS_CA_BUNDLE / NODE_EXTRA_CA_CERTS,
   # so apk/pip/npm/curl work behind a TLS-inspecting proxy (default: false).
   # inject_into_containers: false
+  # Also trust certificates that macOS trusts via admin trust settings
+  # (e.g. Cloudflare WARP / Zscaler / MDM-installed roots). Default: true.
+  # keychain: true
 ";
 
 /// Resolve the shell target from the `--shell` override or auto-detection.

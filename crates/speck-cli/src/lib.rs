@@ -7,6 +7,7 @@ use clap::{Parser, Subcommand};
 mod commands;
 mod config;
 pub mod docker_client;
+mod keychain;
 mod shell;
 mod theme;
 

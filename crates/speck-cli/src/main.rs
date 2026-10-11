@@ -7,6 +7,7 @@ use tracing_subscriber::EnvFilter;
 mod commands;
 mod config;
 mod docker_client;
+mod keychain;
 mod shell;
 mod theme;
 

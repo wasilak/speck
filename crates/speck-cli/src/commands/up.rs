@@ -698,9 +698,23 @@ pub async fn run_up(
     kill_stale_vm_holders(&[&rootfs_disk_path, &data_disk_path]);
 
     // Validate and prepare CA certificates if any are configured (CERT-01).
-    let ca_cert_paths =
-        crate::config::validate_and_prepare_ca_certs(speck_home, &effective.extra_certs)
-            .context("CA certificate validation failed")?;
+    let keychain_pems = if effective.ca_from_keychain {
+        crate::keychain::admin_trusted_pems()
+    } else {
+        Vec::new()
+    };
+    if !keychain_pems.is_empty() {
+        tracing::info!(
+            count = keychain_pems.len(),
+            "exporting admin-trusted Keychain certificates to the guest"
+        );
+    }
+    let ca_cert_paths = crate::config::validate_and_prepare_ca_certs(
+        speck_home,
+        &effective.extra_certs,
+        &keychain_pems,
+    )
+    .context("CA certificate validation failed")?;
 
     let mut builder = GuestConfig::builder()
         .kernel_path(kernel_path)

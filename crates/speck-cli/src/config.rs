@@ -27,6 +27,10 @@ pub struct CaConfig {
     /// Opt-in: bind the guest CA bundle into every new container (TLS-03).
     #[serde(default)]
     pub inject_into_containers: bool,
+    /// Export admin-trusted Keychain certificates into the guest (TLS-02).
+    /// `None` means the default: on.
+    #[serde(default)]
+    pub keychain: Option<bool>,
 }
 
 impl Default for AppConfig {
@@ -56,6 +60,7 @@ pub struct EffectiveConfig {
     pub log_level: String,
     pub extra_certs: Vec<String>,
     pub inject_ca_into_containers: bool,
+    pub ca_from_keychain: bool,
 }
 
 impl Default for EffectiveConfig {
@@ -65,6 +70,7 @@ impl Default for EffectiveConfig {
             log_level: "info".into(),
             extra_certs: Vec::new(),
             inject_ca_into_containers: false,
+            ca_from_keychain: true,
         }
     }
 }
@@ -186,7 +192,7 @@ pub fn collect_unknown_keys(value: &serde_yaml::Value) -> Vec<ConfigWarning> {
         .and_then(serde_yaml::Value::as_mapping)
     {
         for key in ca.keys().filter_map(serde_yaml::Value::as_str) {
-            if !matches!(key, "extra_certs" | "inject_into_containers") {
+            if !matches!(key, "extra_certs" | "inject_into_containers" | "keychain") {
                 warnings.push(ConfigWarning {
                     path: format!("ca.{key}"),
                     message: format!("unknown config key `ca.{key}` ignored"),
@@ -227,6 +233,7 @@ fn resolve_effective_config_with_physical_cores(
     }
     effective.extra_certs = file.ca.extra_certs;
     effective.inject_ca_into_containers = file.ca.inject_into_containers;
+    effective.ca_from_keychain = file.ca.keychain.unwrap_or(true);
 
     if let Some(cpus) = cli.cpus {
         effective.vm.cpus = cpus;
@@ -328,22 +335,29 @@ fn validate_log_level(source: &str, value: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Validate CA certificate PEM files and copy them to `{speck_home}/ca-certs/{sha256}.pem`.
+/// Validate CA certificate PEM files and copy them to `{speck_home}/ca-certs/{sha256}.pem`,
+/// together with `keychain_pems` (TLS-02).
 ///
-/// Returns `Ok(vec![])` when the list is empty (fast path — no CA setup needed).
+/// The directory is synced: `.pem` files from earlier runs that are not in the
+/// current set are removed, because the whole directory is shared with the
+/// guest and a CA dropped from the config must stop being trusted.
+///
+/// Returns `Ok(vec![])` when there is nothing to install.
 /// Returns `Err` on first failed validation (missing file or invalid PEM).
-/// Returns `Ok(Vec<PathBuf>)` listing the copied cert files on success.
+/// Returns `Ok(Vec<PathBuf>)` listing the cert files on success.
 ///
 /// Validation fails fast at config-load time, before the VM starts (D-12-04).
 pub fn validate_and_prepare_ca_certs(
     speck_home: &Path,
     extra_certs: &[String],
+    keychain_pems: &[String],
 ) -> anyhow::Result<Vec<PathBuf>> {
-    if extra_certs.is_empty() {
+    let ca_certs_dir = speck_home.join("ca-certs");
+    if extra_certs.is_empty() && keychain_pems.is_empty() {
+        remove_stale_certs(&ca_certs_dir, &HashSet::new());
         return Ok(Vec::new());
     }
 
-    let ca_certs_dir = speck_home.join("ca-certs");
     std::fs::create_dir_all(&ca_certs_dir).with_context(|| {
         format!(
             "failed to create ca-certs directory at {}",
@@ -384,12 +398,69 @@ pub fn validate_and_prepare_ca_certs(
         }
     }
 
+    for pem in keychain_pems {
+        let hash_hex = format!("{:x}", Sha256::digest(pem.as_bytes()));
+        if seen_hashes.insert(hash_hex.clone()) {
+            let dest_path = ca_certs_dir.join(format!("{hash_hex}.pem"));
+            if !dest_path.exists() {
+                std::fs::write(&dest_path, pem).with_context(|| {
+                    format!("failed to write keychain cert to {}", dest_path.display())
+                })?;
+            }
+            copied_paths.push(dest_path);
+        }
+    }
+
+    remove_stale_certs(&ca_certs_dir, &seen_hashes);
     Ok(copied_paths)
+}
+
+/// Delete `{hash}.pem` files in `dir` whose hash is not in `keep`.
+fn remove_stale_certs(dir: &Path, keep: &HashSet<String>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let stale = path.extension().and_then(|e| e.to_str()) == Some("pem")
+            && path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .is_some_and(|stem| !keep.contains(stem));
+        if stale {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prepare_ca_certs_syncs_dir_and_adds_keychain_pems() {
+        let dir = temp_speck_home("ca-sync");
+        let ca_dir = dir.join("ca-certs");
+        std::fs::create_dir_all(&ca_dir).unwrap();
+        std::fs::write(ca_dir.join("deadbeef.pem"), "stale").unwrap();
+        std::fs::write(ca_dir.join("notes.txt"), "kept").unwrap();
+
+        let pem = "-----BEGIN CERTIFICATE-----\nMIIK\n-----END CERTIFICATE-----\n".to_string();
+        let paths = validate_and_prepare_ca_certs(&dir, &[], &[pem.clone(), pem]).unwrap();
+
+        assert_eq!(paths.len(), 1); // deduplicated
+        assert!(paths[0].is_file());
+        assert!(!ca_dir.join("deadbeef.pem").exists());
+        assert!(ca_dir.join("notes.txt").exists());
+
+        // Nothing configured any more: previously installed certs go away.
+        assert!(
+            validate_and_prepare_ca_certs(&dir, &[], &[])
+                .unwrap()
+                .is_empty()
+        );
+        assert!(!paths[0].exists());
+    }
 
     fn temp_speck_home(name: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("speck-config-{name}-{}", std::process::id()));
@@ -611,7 +682,7 @@ mod tests {
     #[test]
     fn empty_cert_list_returns_ok_empty_vec() {
         let dir = ca_test_dir("empty-list");
-        let result = validate_and_prepare_ca_certs(&dir, &[]);
+        let result = validate_and_prepare_ca_certs(&dir, &[], &[]);
         assert!(result.is_ok(), "empty list should succeed, got: {result:?}");
         let paths = result.unwrap();
         assert!(paths.is_empty(), "empty list should yield no output paths");
@@ -622,7 +693,7 @@ mod tests {
     fn missing_file_returns_err_file_not_found() {
         let dir = ca_test_dir("missing-file");
         let paths = vec![String::from("/nonexistent/ca.pem")];
-        let result = validate_and_prepare_ca_certs(&dir, &paths);
+        let result = validate_and_prepare_ca_certs(&dir, &paths, &[]);
         assert!(result.is_err(), "missing file should fail");
         let err = result.unwrap_err().to_string();
         assert!(
@@ -638,7 +709,7 @@ mod tests {
         let bad_file = dir.join("bad.pem");
         write_pem(&bad_file, NOT_PEM);
         let paths = vec![bad_file.to_string_lossy().to_string()];
-        let result = validate_and_prepare_ca_certs(&dir, &paths);
+        let result = validate_and_prepare_ca_certs(&dir, &paths, &[]);
         assert!(result.is_err(), "non-PEM should fail");
         let err = result.unwrap_err().to_string();
         assert!(
@@ -654,7 +725,7 @@ mod tests {
         let cert_file = dir.join("my-cert.pem");
         write_pem(&cert_file, VALID_PEM);
         let paths = vec![cert_file.to_string_lossy().to_string()];
-        let result = validate_and_prepare_ca_certs(&dir, &paths);
+        let result = validate_and_prepare_ca_certs(&dir, &paths, &[]);
         assert!(result.is_ok(), "valid PEM should succeed, got: {result:?}");
         let output_paths = result.unwrap();
         assert!(!output_paths.is_empty(), "should return at least one path");
@@ -680,7 +751,7 @@ mod tests {
             cert_a.to_string_lossy().to_string(),
             cert_b.to_string_lossy().to_string(),
         ];
-        let result = validate_and_prepare_ca_certs(&dir, &paths);
+        let result = validate_and_prepare_ca_certs(&dir, &paths, &[]);
         assert!(result.is_ok(), "dedup test should succeed");
         let output_paths = result.unwrap();
         // Two identical certs should produce one output file (same SHA256)
@@ -704,7 +775,7 @@ mod tests {
             cert_a.to_string_lossy().to_string(),
             cert_b.to_string_lossy().to_string(),
         ];
-        let result = validate_and_prepare_ca_certs(&dir, &paths);
+        let result = validate_and_prepare_ca_certs(&dir, &paths, &[]);
         assert!(result.is_ok(), "output path test should succeed");
         let output_paths = result.unwrap();
         assert!(!output_paths.is_empty(), "should have output paths");
