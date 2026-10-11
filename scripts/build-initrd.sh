@@ -62,7 +62,8 @@ echo "==> Packing ${OUT}"
 
 echo "==> initrd: $(du -h "${OUT}" | cut -f1), $(gzip -dc "${OUT}" | cpio -t --quiet 2>/dev/null | wc -l | tr -d ' ') entries"
 for tool in /init "${REQUIRED_TOOLS[@]/#//sbin/}"; do
-    gzip -dc "${OUT}" | cpio -t --quiet 2>/dev/null | grep -qx ".${tool}" \
+    # bsdcpio lists "./init", GNU cpio lists "init".
+    gzip -dc "${OUT}" | cpio -t --quiet 2>/dev/null | grep -Eqx "(\./)?${tool#/}" \
         || { echo "ERROR: ${tool} missing from ${OUT}" >&2; exit 1; }
 done
 echo "==> OK: /init and /sbin/{mke2fs,resize2fs,blkid} present"
