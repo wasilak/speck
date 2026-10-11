@@ -775,25 +775,25 @@ pub async fn run_up(
         Some(port_map_rx),
         resolver_rx,
     );
-    // Supervise netstack tasks so failures surface via structured logs instead of
-    // being silently dropped when the JoinHandles are discarded (WR-05).
+    // Supervise netstack tasks (WR-05). Any exit is fatal for the daemon: the
+    // poll loop only returns on an internal error, and the DNS proxy returns
+    // when the guest closes its single DNS vsock connection, which cannot be
+    // re-established. Report the first exit so run_up exits and launchd
+    // restarts Speck instead of running on with dead networking (RES-02).
+    let (netstack_dead_tx, netstack_dead_rx) = tokio::sync::oneshot::channel::<String>();
     {
         use futures::stream::{FuturesUnordered, StreamExt as _};
         let mut set: FuturesUnordered<
             tokio::task::JoinHandle<std::result::Result<(), speck_net::Error>>,
         > = netstack_handles.into_iter().collect();
         tokio::spawn(async move {
-            while let Some(join_result) = set.next().await {
-                match join_result {
-                    Ok(Ok(())) => tracing::warn!(
-                        "netstack task exited unexpectedly — VPN-proof networking may be degraded"
-                    ),
-                    Ok(Err(e)) => tracing::error!(
-                        error = %e,
-                        "netstack task error — VPN-proof networking may be degraded"
-                    ),
-                    Err(e) => tracing::error!(error = %e, "netstack task panicked"),
-                }
+            if let Some(join_result) = set.next().await {
+                let reason = match join_result {
+                    Ok(Ok(())) => "netstack task exited".to_string(),
+                    Ok(Err(e)) => format!("netstack task error: {e}"),
+                    Err(e) => format!("netstack task panicked: {e}"),
+                };
+                let _ = netstack_dead_tx.send(reason);
             }
         });
     }
@@ -888,6 +888,11 @@ pub async fn run_up(
         }
         _ = sigterm.recv() => {
             tracing::info!("SIGTERM received - shutting down");
+        }
+        Ok(reason) = netstack_dead_rx => {
+            tracing::error!(%reason, "networking is gone - exiting so launchd restarts Speck");
+            shutdown_gracefully(&guest, &ctrl_sock_path, speck_home).await?;
+            anyhow::bail!("networking is gone: {reason}");
         }
         reason = wait_for_vm_failure(guest.clone(), speck_home.join("speck.sock")) => {
             // Exit non-zero so launchd (KeepAlive) restarts Speck with a fresh
