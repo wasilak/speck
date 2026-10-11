@@ -280,4 +280,9 @@ impl ReoriginBridge {
     pub fn bridge_count(&self) -> usize {
         self.bridges.len()
     }
+
+    /// Whether `handle` is still referenced by an active bridge or pending connect.
+    pub fn owns(&self, handle: SocketHandle) -> bool {
+        self.bridges.contains_key(&handle) || self.pending.contains_key(&handle)
+    }
 }

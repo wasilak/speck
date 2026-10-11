@@ -103,26 +103,33 @@ impl SpeckNet {
             let mut dhcp = dhcp::DhcpServer::new(&self.config);
             dhcp.add_to_set(net.sockets_mut());
 
-            // Seed initial TCP listener sockets for transparent re-origination.
-            // Ports 443 (HTTPS) and 80 (HTTP) cover registry pulls.
-            tcp_listener::ensure_listeners(net.sockets_mut(), 443, 8);
-            tcp_listener::ensure_listeners(net.sockets_mut(), 80, 4);
+            // Seed the pre-warmed TCP listeners (443/80) for transparent re-origination.
+            tcp_listener::ensure_listeners_for(net.sockets_mut(), &[]);
 
             // Poll loop
             loop {
-                // Replenish listener slots consumed by accepted connections.
-                tcp_listener::ensure_listeners(net.sockets_mut(), 443, 8);
-                tcp_listener::ensure_listeners(net.sockets_mut(), 80, 4);
-
-                // Use a short timeout so host→guest data is forwarded promptly even
-                // when the guest is waiting (e.g., TLS handshake ServerHello).
-                match tokio::time::timeout(Duration::from_millis(5), async_fd.readable()).await {
-                    Ok(Ok(mut guard)) => guard.clear_ready(),
-                    Ok(Err(e)) => {
-                        return Err(Error::Netstack(format!("readable: {e}")));
+                // Held SYN frames never make the fd readable again, so only wait
+                // when the device has nothing queued.
+                if !net.device_mut().has_pending_frames() {
+                    // Use a short timeout so host→guest data is forwarded promptly even
+                    // when the guest is waiting (e.g., TLS handshake ServerHello).
+                    match tokio::time::timeout(Duration::from_millis(5), async_fd.readable())
+                        .await
+                    {
+                        Ok(Ok(mut guard)) => guard.clear_ready(),
+                        Ok(Err(e)) => {
+                            return Err(Error::Netstack(format!("readable: {e}")));
+                        }
+                        Err(_) => {} // timeout — fall through to poll bridges
                     }
-                    Err(_) => {} // timeout — fall through to poll bridges
                 }
+
+                // Open a listener for every guest SYN held by the device (any
+                // destination port), then let smoltcp see those SYNs. Also
+                // replenishes pre-warmed slots consumed by accepted connections.
+                let syn_ports = net.device_mut().held_syn_ports();
+                tcp_listener::ensure_listeners_for(net.sockets_mut(), &syn_ports);
+                net.device_mut().release_held_syns();
 
                 let timestamp = smoltcp::time::Instant::now();
 
@@ -157,6 +164,15 @@ impl SpeckNet {
 
                 // Process DHCP requests
                 dhcp.poll(net.sockets_mut());
+
+                // Free sockets of finished connections (bridges drop their
+                // handles in poll_bridges once a socket stops being open).
+                tcp_listener::sweep_closed(net.sockets_mut(), |h| {
+                    reorigin.owns(h) || port_publish.owns(h)
+                });
+                if !net.device_mut().has_ready_frames() {
+                    tcp_listener::trim_surplus_listeners(net.sockets_mut());
+                }
 
                 // Process egress frames (tx queued during poll/reorigin/dhcp)
                 net.poll(smoltcp::time::Instant::now());

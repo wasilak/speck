@@ -308,6 +308,11 @@ impl PortPublishBridge {
         self.bridges.len()
     }
 
+    /// Whether `handle` is still referenced by an active published-port bridge.
+    pub fn owns(&self, handle: SocketHandle) -> bool {
+        self.bridges.contains_key(&handle)
+    }
+
     pub fn port_map_count(&self) -> usize {
         self.listeners.len()
     }

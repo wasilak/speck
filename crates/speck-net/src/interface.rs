@@ -79,6 +79,11 @@ impl SmoltcpInterface {
         &mut self.iface
     }
 
+    /// Mutable access to the underlying device (held SYN frames).
+    pub fn device_mut(&mut self) -> &mut super::device::FdDevice {
+        &mut self.device
+    }
+
     /// Read-only access to the socket set.
     #[allow(dead_code)]
     pub fn sockets(&self) -> &SocketSet<'static> {
