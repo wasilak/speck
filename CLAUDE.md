@@ -207,28 +207,19 @@ Architecture not yet mapped. Follow existing patterns found in the codebase.
 No project skills found. Add skills to any of: `.claude/skills/`, `.agents/skills/`, `.cursor/skills/`, `.github/skills/`, or `.codex/skills/` with a `SKILL.md` index file.
 <!-- GSD:skills-end -->
 
-<!-- GSD:workflow-start source:GSD defaults -->
+## Workflow & Tooling (decided 2026-10-11)
 
-## GSD Workflow Enforcement
+**GSD is abandoned in this project** — it burned too many tokens for the value it gave. Do not use `/gsd:*` commands, do not suggest them, and do not regenerate the `<!-- GSD:... -->` sections above.
 
-Before using Edit, Write, or other file-changing tools, start work through a GSD command so planning artifacts and execution context stay in sync.
+Use only:
 
-Use these entry points:
+- **Task Master** (`task-master` CLI / `tm:*` skills) — the single source of truth for tasks, status and progress.
+- **Serena** — symbol lookup, references, impact before edits (its memory tools stay off-limits).
+- **codebase-memory-mcp** — code graph / architecture queries (`search_graph`, `trace_path`, `query_graph`).
 
-- `/gsd:quick` for small fixes, doc updates, and ad-hoc tasks
-- `/gsd:debug` for investigation and bug fixing
-- `/gsd:execute-phase` for planned phase work
+`.planning/` is a read-only archive: history of v1.0–v1.3, the decision log (`PROJECT.md` → Decisions, D-01…D-22) and the v1.4 requirement definitions (`REQUIREMENTS.md`). Record new architecture decisions in `PROJECT.md` → Decisions; track all work in Task Master.
 
-Do not make direct repo edits outside a GSD workflow unless the user explicitly asks to bypass it.
-<!-- GSD:workflow-end -->
-
-<!-- GSD:profile-start -->
-
-## Developer Profile
-
-> Profile not yet configured. Run `/gsd:profile-user` to generate your developer profile.
-> This section is managed by `generate-claude-profile` -- do not edit manually.
-<!-- GSD:profile-end -->
+Executable gates: `scripts/conformance-smoke.sh` (Docker API) and `scripts/egress-smoke.sh` (network egress). Corporate-network checks are manual: `docs/manual-testing.md`.
 
 ## Task Master AI Instructions
 **Import Task Master's development workflow commands and guidelines, treat as if import is in the main CLAUDE.md file.**

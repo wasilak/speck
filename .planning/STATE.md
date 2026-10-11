@@ -96,7 +96,7 @@ Progress: [░░░░░░░░░░] 0%
 ### Blockers/Concerns
 
 - Corporate-network behaviour can only be verified manually on the owner's work Mac (dev Mac has no WARP/proxy). M0 checklist must run before Phase 27 planning.
-- GSD slash commands were not installed in the 2026-10-11 session; Phase 0 edits were made directly with explicit owner approval.
+- 2026-10-11: GSD abandoned for this project (token cost vs value). Work is tracked in Task Master only; `.planning/` is a read-only archive + decision log. See CLAUDE.md "Workflow & Tooling".
 
 ## Deferred Items
 
@@ -119,4 +119,4 @@ Last session: 2026-10-11
 Stopped at: Phase 0 complete; v1.4 roadmap written
 Resume file: None
 
-**To resume:** plan Phase 26 (General Egress). In parallel the owner runs the M0 checklist (`docs/manual-testing.md`) on the corporate Mac.
+**To resume:** this file is no longer updated — use `task-master next`. Phase 26 (General Egress) is next; the owner runs the M0 checklist (`docs/manual-testing.md`) on the corporate Mac.

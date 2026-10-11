@@ -126,4 +126,4 @@ Keep an incident log:
 |---|---|---|---|
 
 Exit criterion: zero manual DNS/proxy resets over 5 working days.
-Every incident becomes a `/gsd:debug` session plus a regression test.
+Every incident becomes a Task Master task plus a regression test.
