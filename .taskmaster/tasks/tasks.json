@@ -850,13 +850,36 @@
         "priority": "high",
         "subtasks": [],
         "updatedAt": "2026-10-11T14:25:49.532Z"
+      },
+      {
+        "id": "28",
+        "title": "[EGRESS-07] Forward guest ICMP echo through the host",
+        "description": "ping from containers fails since the fake smoltcp echo reply was disabled (EGRESS-06); guest ICMP was never forwarded.",
+        "details": "Intercept guest ICMPv4 echo requests in FdDevice, send them from the host via an unprivileged ICMP datagram socket per (destination, identifier), craft echo replies back to the guest from the original destination. Verify: container ping 1.1.1.1 works with real RTT, ping 192.0.2.1 still times out, egress-smoke gains a real ping check.",
+        "testStrategy": "",
+        "status": "done",
+        "dependencies": [],
+        "priority": "medium",
+        "subtasks": [],
+        "updatedAt": "2026-10-11T14:46:38.865Z"
+      },
+      {
+        "id": "29",
+        "title": "[UX-04] colima-style status/list/version/prune",
+        "description": "Users need colima's 'status -e/-j', 'list', 'version' and 'prune' equivalents to see what Speck is doing.",
+        "details": "spk status: running state, CPUs/memory/disk (allocated + used), docker version, socket, docker context, uptime; --extended adds versions (spk, initrd, rootfs, kernel), guest memory/disk usage, network mode; --json for scripts. spk list (single instance, colima list columns). spk version (spk, docker server, initrd, rootfs). spk prune: delete cached downloaded assets not in use. Verify with unit tests for formatting and live runs.",
+        "testStrategy": "",
+        "status": "pending",
+        "dependencies": [],
+        "priority": "high",
+        "subtasks": []
       }
     ],
     "metadata": {
       "version": "1.0.0",
-      "lastModified": "2026-10-11T14:25:49.532Z",
-      "taskCount": 27,
-      "completedCount": 22,
+      "lastModified": "2026-10-11T14:46:38.865Z",
+      "taskCount": 29,
+      "completedCount": 23,
       "tags": [
         "v1_4-daily-driver"
       ]
