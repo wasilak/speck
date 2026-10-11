@@ -36,6 +36,11 @@ mockall::mock! {
 
 /// Build a minimal DNS A-record query for `domain`.
 fn make_query(domain: &str) -> Vec<u8> {
+    make_typed_query(domain, 1)
+}
+
+/// Build a minimal DNS query for `domain` with record type `qtype`.
+fn make_typed_query(domain: &str, qtype: u16) -> Vec<u8> {
     let mut buf = Vec::with_capacity(512);
     buf.extend_from_slice(&[0x12, 0x34]); // ID
     buf.extend_from_slice(&[0x01, 0x00]); // flags: RD=1
@@ -49,7 +54,7 @@ fn make_query(domain: &str) -> Vec<u8> {
         buf.extend_from_slice(label.as_bytes());
     }
     buf.push(0x00); // null terminator
-    buf.extend_from_slice(&[0x00, 0x01]); // QTYPE = A
+    buf.extend_from_slice(&qtype.to_be_bytes()); // QTYPE
     buf.extend_from_slice(&[0x00, 0x01]); // QCLASS = IN
     buf
 }
@@ -158,4 +163,40 @@ fn default_path_calls_resolve_not_direct_query() {
     let _result = speck_net::dns::resolve_with_table(&mock, &table, "example.com", &query);
 
     // Expectations verified by mockall on drop.
+}
+
+#[test]
+fn non_address_types_go_to_default_nameservers() {
+    let ns: IpAddr = "192.0.2.53".parse().unwrap();
+    let mut table = ResolverTable::default();
+    table.set_default_servers(vec![ns]);
+
+    for qtype in [16u16, 33, 15] {
+        // TXT, SRV, MX
+        let query = make_typed_query("example.com", qtype);
+        let answer = vec![0xab; 20];
+        let expected = answer.clone();
+        let mut mock = MockProxyResolver::new();
+        mock.expect_resolve().never();
+        mock.expect_direct_query()
+            .withf(move |n, _| *n == ns)
+            .times(1)
+            .return_const(Some(answer));
+        let resp = speck_net::dns::resolve_with_table(&mock, &table, "example.com", &query);
+        assert_eq!(resp, expected, "qtype {qtype}");
+    }
+}
+
+#[test]
+fn address_types_still_use_getaddrinfo_with_defaults_known() {
+    let mut table = ResolverTable::default();
+    table.set_default_servers(vec!["192.0.2.53".parse().unwrap()]);
+    let query = make_query("example.com");
+    let mut mock = MockProxyResolver::new();
+    mock.expect_direct_query().never();
+    mock.expect_resolve()
+        .times(1)
+        .return_const(Some(vec![1, 2, 3]));
+    let resp = speck_net::dns::resolve_with_table(&mock, &table, "example.com", &query);
+    assert_eq!(resp, vec![1, 2, 3]);
 }

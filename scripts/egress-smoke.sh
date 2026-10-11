@@ -71,9 +71,14 @@ check "udp 123 (ntp $NTP_HOST)"   in_c "timeout 10 ntpd -n -q -p $NTP_HOST"
 
 # DNS record types (RES-04)
 check "dns A"                     in_c "nslookup -type=A github.com | grep -q 'Address'"
-check "dns TXT"                   in_c "nslookup -type=TXT google.com | grep -q 'text ='"
-check "dns SRV"                   in_c "nslookup -type=SRV _xmpp-server._tcp.gmail.com | grep -q 'service ='"
+check "dns TXT"                   in_c "nslookup -type=TXT example.com | grep -q 'text ='"
+check "dns SRV"                   in_c "nslookup -type=SRV _imaps._tcp.gmail.com | grep -q 'service ='"
 check "dns MX"                    in_c "nslookup -type=MX gmail.com | grep -q 'mail exchanger'"
+# google.com TXT is ~1.2 KB. A truncated answer still carries some records,
+# so require the same record count the host sees (needs >512-byte answers
+# through the guest forwarder: TCP fallback or EDNS).
+TXT_EXPECTED="$(dig +short txt google.com 2>/dev/null | wc -l | tr -d ' ')"
+check "dns large answer (>512B)"  in_c "[ \$(nslookup -type=TXT google.com | grep -c 'text =') -ge ${TXT_EXPECTED:-1} ]"
 
 # TLS through whatever sits on the host path (TLS-01..03)
 check "https wget"                in_c "wget -q -T 10 -O /dev/null https://github.com"

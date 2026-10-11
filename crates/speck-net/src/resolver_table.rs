@@ -28,6 +28,9 @@ use tracing::{debug, warn};
 #[derive(Debug, Clone, Default)]
 pub struct ResolverTable {
     entries: HashMap<String, Vec<IpAddr>>,
+    /// System default nameservers (`State:/Network/Global/DNS`). Used only for
+    /// record types `getaddrinfo` cannot answer (SRV, TXT, MX, ...).
+    default_servers: Vec<IpAddr>,
 }
 
 impl ResolverTable {
@@ -36,6 +39,16 @@ impl ResolverTable {
         if !servers.is_empty() {
             self.entries.insert(domain, servers);
         }
+    }
+
+    /// Set the system default nameservers.
+    pub fn set_default_servers(&mut self, servers: Vec<IpAddr>) {
+        self.default_servers = servers;
+    }
+
+    /// System default nameservers, empty when unknown.
+    pub fn default_servers(&self) -> &[IpAddr] {
+        &self.default_servers
     }
 
     /// Return true when the table has no entries (no VPN-scoped resolvers present).
@@ -168,6 +181,18 @@ pub fn spawn_resolver_watcher() -> (
 /// are handled by `getaddrinfo` on the regular code path.
 fn read_resolver_table(store: &SCDynamicStore) -> ResolverTable {
     let mut table = ResolverTable::default();
+
+    if let Some(dict) = store
+        .get("State:/Network/Global/DNS")
+        .and_then(|pl| pl.downcast_into::<CFDictionary>())
+    {
+        let defaults = extract_string_array(
+            &dict,
+            // SAFETY: kSCPropNetDNSServerAddresses is a stable Apple CF constant.
+            unsafe { kSCPropNetDNSServerAddresses }.to_void(),
+        );
+        table.set_default_servers(defaults.iter().filter_map(|s| s.parse().ok()).collect());
+    }
 
     let keys = match store.get_keys("State:/Network/Service/.*/DNS") {
         Some(k) => k,

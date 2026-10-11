@@ -54,12 +54,30 @@ pub fn resolve_with_table(
             .unwrap_or_else(|| build_servfail_response(query));
         translate_nxdomain_to_servfail(&mut resp);
         resp
+    } else if !matches!(query_type(query), Some(1) | Some(28))
+        && !table.default_servers().is_empty()
+    {
+        // getaddrinfo only answers A/AAAA. Forward other record types (SRV,
+        // TXT, MX, ...) raw to the system default nameservers, which under
+        // WARP/VPN are the client's own resolvers.
+        table
+            .default_servers()
+            .iter()
+            .find_map(|&ns| resolver.direct_query(ns, query))
+            .unwrap_or_else(|| build_servfail_response(query))
     } else {
         // Default path: macOS system resolver via getaddrinfo (DNS-02, DNS-03)
         resolver
             .resolve(domain, query)
             .unwrap_or_else(|| build_servfail_response(query))
     }
+}
+
+/// QTYPE of the first question, or `None` for a malformed query.
+fn query_type(query: &[u8]) -> Option<u16> {
+    let qname_end = find_qname_end(query, 12)?;
+    let off = qname_end + 1;
+    Some(u16::from_be_bytes([*query.get(off)?, *query.get(off + 1)?]))
 }
 
 /// Spawn a thread that reads length-prefixed DNS queries from a vsock fd,
@@ -366,7 +384,8 @@ fn find_qname_end(data: &[u8], mut start: usize) -> Option<usize> {
     }
 }
 
-/// Forward a DNS query directly to a VPN nameserver via UDP (DNS-04).
+/// Forward a DNS query directly to a nameserver via UDP (DNS-04), retrying
+/// over TCP when the UDP answer is truncated (TC bit).
 /// Uses a 500ms read timeout to avoid blocking the proxy loop indefinitely.
 /// Returns None on any socket error, send failure, or receive timeout.
 fn direct_dns_query(nameserver: std::net::IpAddr, query: &[u8]) -> Option<Vec<u8>> {
@@ -379,10 +398,58 @@ fn direct_dns_query(nameserver: std::net::IpAddr, query: &[u8]) -> Option<Vec<u8
     let ns_addr = SocketAddr::new(nameserver, 53);
     socket.send_to(query, ns_addr).ok()?;
     let mut resp_buf = vec![0u8; 4096];
-    match socket.recv_from(&mut resp_buf) {
-        Ok((n, _)) => Some(resp_buf[..n].to_vec()),
-        Err(_) => None,
+    let n = socket.recv_from(&mut resp_buf).ok()?.0;
+    let resp = &resp_buf[..n];
+    // On truncation the full answer may only go back over UDP if it fits the
+    // size the client advertised (EDNS, else 512). Otherwise keep the
+    // truncated answer so the client knows to retry over TCP.
+    if is_truncated(resp)
+        && let Some(full) = tcp_dns_query(ns_addr, query)
+        && full.len() <= client_udp_limit(query)
+    {
+        return Some(full);
     }
+    Some(resp.to_vec())
+}
+
+/// Largest UDP answer the client accepts: the EDNS OPT payload size when the
+/// query carries one right after the question, else the classic 512 bytes.
+fn client_udp_limit(query: &[u8]) -> usize {
+    let arcount = query
+        .get(10..12)
+        .map_or(0, |b| u16::from_be_bytes([b[0], b[1]]));
+    let opt = find_qname_end(query, 12)
+        .map(|end| end + 5) // null + QTYPE + QCLASS → start of additional section
+        .filter(|_| arcount > 0)
+        .and_then(|off| query.get(off..off + 5));
+    match opt {
+        // root name (0), TYPE = OPT (41), CLASS = UDP payload size
+        Some([0, 0, 41, hi, lo]) => usize::from(u16::from_be_bytes([*hi, *lo])).max(512),
+        _ => 512,
+    }
+}
+
+/// TC bit (truncated) in a DNS response header.
+fn is_truncated(resp: &[u8]) -> bool {
+    resp.get(2).is_some_and(|flags| flags & 0x02 != 0)
+}
+
+/// One DNS query over TCP (RFC 7766 length-prefixed), 2 s timeout.
+fn tcp_dns_query(ns_addr: std::net::SocketAddr, query: &[u8]) -> Option<Vec<u8>> {
+    use std::io::{Read, Write};
+    use std::time::Duration;
+    let timeout = Duration::from_secs(2);
+    let mut stream = std::net::TcpStream::connect_timeout(&ns_addr, timeout).ok()?;
+    stream.set_read_timeout(Some(timeout)).ok()?;
+    stream.set_write_timeout(Some(timeout)).ok()?;
+    let len = u16::try_from(query.len()).ok()?.to_be_bytes();
+    stream.write_all(&len).ok()?;
+    stream.write_all(query).ok()?;
+    let mut len_buf = [0u8; 2];
+    stream.read_exact(&mut len_buf).ok()?;
+    let mut resp = vec![0u8; u16::from_be_bytes(len_buf) as usize];
+    stream.read_exact(&mut resp).ok()?;
+    Some(resp)
 }
 
 /// Rewrite RCODE NXDOMAIN (3) → SERVFAIL (2) per DNS-06.
@@ -413,6 +480,34 @@ fn build_servfail_response(query_header: &[u8]) -> Vec<u8> {
 mod tests {
     use super::*;
     use crate::resolver_table::ResolverTable;
+
+    fn query_with_opt(payload: Option<u16>) -> Vec<u8> {
+        let mut q = vec![0x12, 0x34, 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0];
+        q.extend_from_slice(&[
+            6, b'g', b'o', b'o', b'g', b'l', b'e', 3, b'c', b'o', b'm', 0,
+        ]);
+        q.extend_from_slice(&[0, 16, 0, 1]); // TXT IN
+        if let Some(size) = payload {
+            q[11] = 1; // ARCOUNT = 1
+            q.extend_from_slice(&[0, 0, 41]);
+            q.extend_from_slice(&size.to_be_bytes());
+            q.extend_from_slice(&[0, 0, 0, 0, 0, 0]); // ext-rcode/version/flags, RDLEN=0
+        }
+        q
+    }
+
+    #[test]
+    fn client_udp_limit_reads_edns_payload_size() {
+        assert_eq!(client_udp_limit(&query_with_opt(None)), 512);
+        assert_eq!(client_udp_limit(&query_with_opt(Some(4096))), 4096);
+        assert_eq!(client_udp_limit(&query_with_opt(Some(100))), 512);
+    }
+
+    #[test]
+    fn truncation_flag_is_detected() {
+        assert!(is_truncated(&[0, 0, 0x83, 0x80]));
+        assert!(!is_truncated(&[0, 0, 0x81, 0x80]));
+    }
 
     #[test]
     fn system_resolver_is_send_sync() {
