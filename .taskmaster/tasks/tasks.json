@@ -712,10 +712,11 @@
         "description": "expect('lock poisoned') in speck-dockerd proxy.rs and restart_503.rs:59; unbounded thread-per-connection port forwards; publish only on 127.0.0.1.",
         "details": "Use unwrap_or_else(|e| e.into_inner()); semaphore on forward threads; also bind ::1. Verify: cargo test -p speck-dockerd; curl http://[::1]:<port>.",
         "testStrategy": "",
-        "status": "pending",
+        "status": "done",
         "dependencies": [],
         "priority": "medium",
-        "subtasks": []
+        "subtasks": [],
+        "updatedAt": "2026-10-11T12:42:16.082Z"
       },
       {
         "id": "18",
@@ -788,9 +789,9 @@
     ],
     "metadata": {
       "version": "1.0.0",
-      "lastModified": "2026-10-11T12:38:42.084Z",
+      "lastModified": "2026-10-11T12:42:16.082Z",
       "taskCount": 22,
-      "completedCount": 13,
+      "completedCount": 14,
       "tags": [
         "v1_4-daily-driver"
       ]
