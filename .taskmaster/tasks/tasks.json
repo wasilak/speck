@@ -630,12 +630,13 @@
         "description": "Containers do not trust the corporate CA, so apk/pip/curl fail behind TLS inspection.",
         "details": "In the allowlisted POST /containers/create middleware (D-21 compliant) add a read-only bind of the guest CA bundle + SSL_CERT_FILE env when config ca.inject_into_containers: true. Verify: middleware unit test; manual apk add behind TLS proxy.",
         "testStrategy": "",
-        "status": "pending",
+        "status": "done",
         "dependencies": [
           "9"
         ],
         "priority": "medium",
-        "subtasks": []
+        "subtasks": [],
+        "updatedAt": "2026-10-11T12:20:37.586Z"
       },
       {
         "id": "12",
@@ -767,13 +768,25 @@
         "dependencies": [],
         "priority": "medium",
         "subtasks": []
+      },
+      {
+        "id": "22",
+        "title": "[RES-06] DNS on user-defined networks (docker compose)",
+        "description": "Compose networks had no DNS: guest forwarder replied from the wrong source address (unconnected 0.0.0.0 UDP socket). Fixed with IP_PKTINFO in commit 1dfeaec.",
+        "details": "Found while testing TLS-03. Gate: egress-smoke 'dns on user network' (verified failing on the old guest). Ships with the next initrd release (OPS-04).",
+        "testStrategy": "",
+        "status": "done",
+        "dependencies": [],
+        "priority": "high",
+        "subtasks": [],
+        "updatedAt": "2026-10-11T12:20:44.126Z"
       }
     ],
     "metadata": {
       "version": "1.0.0",
-      "lastModified": "2026-10-11T12:10:56.774Z",
-      "taskCount": 21,
-      "completedCount": 8,
+      "lastModified": "2026-10-11T12:20:44.126Z",
+      "taskCount": 22,
+      "completedCount": 10,
       "tags": [
         "v1_4-daily-driver"
       ]
