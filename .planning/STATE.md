@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Transparent Proxy Restoration
-status: complete
-stopped_at: Completed 24-01-PLAN.md
-last_updated: "2026-07-15T08:30:00.000Z"
-last_activity: 2026-07-15 -- Completed Phase 24 (Conformance Exit Gate)
+status: completed
+stopped_at: Phase 25 complete (incl. gap closure 25-03)
+last_updated: "2026-07-17T14:15:00.000Z"
+last_activity: 2026-07-17 -- Completed Phase 25 (Correct Guest Boot), incl. gap-closure plan 25-03 (container egress)
 progress:
-  total_phases: 5
-  completed_phases: 5
-  total_plans: 10
-  completed_plans: 10
+  total_phases: 6
+  completed_phases: 4
+  total_plans: 12
+  completed_plans: 12
   percent: 100
 ---
 
@@ -21,16 +21,22 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-09)
 
 **Core value:** A container runtime on Apple Silicon that never loses the network — micro-VMs inherit the host's routing/DNS live, surviving corporate VPNs and Cloudflare WARP where Docker Desktop fails.
-**Current focus:** Milestone v1.3 COMPLETE — all phases done
+**Current focus:** Phase 25 COMPLETE — all planned phases done
 
 ## Current Position
 
-Phase: 24 (Conformance Exit Gate) — COMPLETE
-Plan: 1 complete (24-01)
-Status: Milestone v1.3 complete
-Last activity: 2026-07-15 -- Completed Phase 24 (Conformance Exit Gate)
+Phase: 25 (Correct Guest Boot) — COMPLETE
+Plan: 3/3 complete (25-01, 25-02, 25-03 gap closure)
+Status: Phase 25 complete
+Last activity: 2026-07-17 -- Completed Phase 25 (Correct Guest Boot)
 
 Progress: [██████████] 100%
+
+## Phase 25 Verification Results
+
+- BOOT-01 fully verified live: 9/9 must-haves, zero `rootfs`-fstype mounts, `docker exec`/`docker run` mount-namespace parity (single + concurrent + fresh boot), `docker buildx create --driver docker-container` + `docker buildx build --load` succeed end-to-end
+- Gap-closure (25-03): `--iptables=true` for guest-internal `docker0` NAT egress — closes the buildx-build networking gap without touching `crates/speck-net/` or the host↔VM networking boundary (LOCKED invariant preserved)
+- D-10 baseline: `cargo test --workspace` 392 passed 0 failed, `cargo clippy --workspace --all-targets -Dwarnings` clean, `scripts/conformance-smoke.sh` 26/26
 
 ## Milestone v1.3 Phase Overview
 
@@ -41,6 +47,7 @@ Progress: [██████████] 100%
 | 22 | Response Rewriting & Restart Gate | MW-03, MW-04 | Complete |
 | 23 | SpeckDockerd Retirement | PROXY-04 | Complete |
 | 24 | Conformance Exit Gate | GATE-01, GATE-02, GATE-03 | Complete |
+| 25 | Correct Guest Boot | BOOT-01 | Complete |
 
 ## Phase 24 Verification Results
 
@@ -104,10 +111,14 @@ Carried forward at v1.2 close (2026-07-09) and requirements definition (2026-07-
 | deferred | K3s/CRI integration prototype | Future |
 | deferred | Listener buffer memory tuning (12 × 2MB smoltcp listeners) | Future |
 
+### Roadmap Evolution
+
+- Phase 25 added (2026-07-17): Correct Guest Boot — real switch_root (MS_MOVE-based mount namespace relocation) matching standard Linux/Colima boot semantics, replacing the chroot-only shortcut in vminitd (`crates/speck-guest/src/mount.rs::switch_root_to_rootfs`). Root cause and requirement surfaced during debug session `.planning/debug/resolved/buildx-http2-frame-too-large.md`. Note: milestone v1.3 was left formally un-transitioned (SUMMARY.md docs for phases 22/24 were never backfilled, PROJECT.md still shows v1.3 as "Current Milestone") — the underlying work is verified complete (26/26 conformance, live testing), this is a documentation-process gap, not open engineering work. Phase 25 proceeds without a full v1.3 close-out per explicit user decision (2026-07-17).
+
 ## Session Continuity
 
-Last session: 2026-07-15T08:30:00.000Z
-Stopped at: Completed Milestone v1.3
-Resume file: None
+Last session: 2026-07-17T07:16:39.155Z
+Stopped at: Phase 25 context gathered
+Resume file: .planning/phases/25-correct-guest-boot-real-switch-root-ms-move-based-mount-name/25-CONTEXT.md
 
-**To resume:** Start planning Milestone v1.4 or execute ad-hoc tasks.
+**To resume:** Phase 25 (Correct Guest Boot) added — needs discuss-phase/plan-phase before execution given prior kernel-panic history on this exact code path.

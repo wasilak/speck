@@ -147,11 +147,24 @@ Plans:
 
 **Plans**: TBD
 
+### Phase 25: Correct Guest Boot: real switch_root (MS_MOVE-based mount namespace relocation) matching standard Linux/Colima boot semantics — replace the chroot-only shortcut in vminitd so docker exec and buildx docker-container driver work correctly
+
+**Goal:** vminitd performs a genuine `switch_root` (MS_MOVE-based mount namespace relocation, matching busybox/systemd/dracut/Colima/Lima boot semantics) instead of the current `chroot`-only shortcut, so the guest's mount namespace topology is structurally correct — `docker exec` into any in-VM container lands in the correct mount namespace, and `docker buildx create --driver docker-container` + `docker buildx build` succeed end-to-end.
+**Requirements**: BOOT-01
+**Depends on:** Phase 24
+**Plans:** 3/3 plans complete
+
+Plans:
+
+- [x] 25-01-PLAN.md — Rewrite `switch_root_to_rootfs` with MS_MOVE + fd-based detach, 7 mock-based unit tests (Wave 1)
+- [x] 25-02-PLAN.md — Live-VM verification: `/proc/1/mountinfo` structural check, docker-exec parity, D-08 buildx E2E, D-09 repeat-boot/concurrency, D-10 baseline gate (Wave 2)
+- [x] 25-03-PLAN.md — Gap closure: enable dockerd-managed iptables NAT (`--iptables=true`) for container-level outbound egress, closing the `docker buildx build --load` gap from 25-VERIFICATION.md (Wave 3)
+
 ---
 
 ## Progress
 
-**Execution Order:** Phases execute in numeric order: 20 → 21 → 22 → 23 → 24
+**Execution Order:** Phases execute in numeric order: 20 → 21 → 22 → 23 → 24 → 25
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
@@ -182,3 +195,4 @@ Plans:
 | 22. Response Rewriting & Restart Gate | v1.3 | 2/2 | Complete | 2026-07-14 |
 | 23. SpeckDockerd Retirement | v1.3 | 1/1 | Complete | 2026-07-15 |
 | 24. Conformance Exit Gate | v1.3 | 1/1 | Complete | 2026-07-15 |
+| 25. Correct Guest Boot | v1.4(?) | 3/3 | Complete    | 2026-07-17 |

@@ -88,7 +88,7 @@ v1.2 delivered hardened test coverage for the core DNS/networking stack (DNS pro
 
 ### Active
 
-*(None — next milestone not yet defined.)*
+- **BOOT-01:** vminitd performs a genuine `switch_root` (MS_MOVE-based mount namespace relocation — the standard busybox/systemd/dracut pattern) instead of `chroot`-only, so the guest's mount namespace topology is correct from handoff to containerd, matching what Colima/Lima achieve by booting a real distro. `docker exec` into any in-VM container must land in the correct namespace; `docker buildx create --driver docker-container` must succeed end-to-end. Tracked as Phase 25.
 
 ### Out of Scope
 
@@ -135,6 +135,7 @@ v1.2 delivered hardened test coverage for the core DNS/networking stack (DNS pro
 | D-19 | Containerd transfer service for image pull (with unpack) — works | ✓ Good — container lifecycle works end-to-end | v1.2 |
 | D-20 | Ad-hoc release distribution only; Developer ID deferred | ✓ Good — ships dev artifact pipeline; DEVID requires Apple Program | v1.2 |
 | D-21 | **LOCKED:** Docker API = transparent byte proxy to guest dockerd + thin allowlisted middleware (binds/ports/HostIp/503 only). Reverses v1.2 CONF-01 (SpeckDockerd endpoint reimplementation against containerd), which caused the docker CLI 29.x conformance bug pile. Conformance gate: `scripts/conformance-smoke.sh` must pass. See CLAUDE.md "Architecture Invariants". | ✗ CONF-01 drifted — corrected | v1.3 |
+| D-22 | Reverses the prior caution against touching `switch_root_to_rootfs` (commit `31f56a12`, which replaced a failing `MS_MOVE` attempt with `chroot`-only). Container-runtime correctness (`docker exec`, `buildx docker-container`) requires a real `switch_root` matching standard Linux boot semantics — parity with what Colima/Lima achieve. `pivot_root` is ruled out (kernel forbids it on the anonymous initramfs rootfs, confirmed via live kernel panic + full revert, debug session `buildx-http2-frame-too-large`); `MS_MOVE` is the correct mechanism and must be retried with its prior failure root-caused first. Tracked as Phase 25 (BOOT-01). | Pending — Phase 25 not yet planned | v1.4(?) |
 
 ## Evolution
 
