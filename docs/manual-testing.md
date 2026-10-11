@@ -7,22 +7,19 @@ are run by hand on the work Mac. Each run produces a short results table that go
 
 Automated gates run on the dev Mac: `scripts/conformance-smoke.sh`, `scripts/egress-smoke.sh`.
 
-## Install a HEAD build (until OPS-04 publishes a matching initrd)
+## Install a HEAD build
 
-The public `initrd-1.3.0` release predates the transparent proxy, Phase 25 and
-the v1.4 guest fixes, and lacks `/sbin/mke2fs`, so its first boot cannot
-format the data disk. Do not boot it. Copy the HEAD build from the dev Mac and
-put the initrd in place **before** the first `spk up` (assets are only
-downloaded when missing).
+`initrd-1.4.0` (published from `scripts/build-initrd.sh`) matches the HEAD
+guest, and a binary built from HEAD downloads it on the first `spk up`. Do
+not reuse a `~/.speck` populated by an older build: `spk up` refuses stale
+assets; run `spk up --pull` once to refresh them.
 
 On the dev Mac:
 
 ```bash
 cargo build --release --target aarch64-apple-darwin -p speck-cli
 cargo xtask sign release
-# copy these two files to the work Mac (AirDrop, scp, USB):
-#   target/aarch64-apple-darwin/release/spk
-#   ~/.speck/initrd/initrd.cpio.gz
+# copy target/aarch64-apple-darwin/release/spk to the work Mac
 ```
 
 On the work Mac:
@@ -30,10 +27,7 @@ On the work Mac:
 ```bash
 rm -f ~/bin/spk && cp spk ~/bin/spk     # rm first: overwriting a signed binary in place → SIGKILL
 spk --version
-mkdir -p ~/.speck/initrd
-cp initrd.cpio.gz ~/.speck/initrd/initrd.cpio.gz
-printf '1.3.0\n' > ~/.speck/initrd/initrd.version
-spk up --wait                           # downloads kernel + rootfs only
+spk up --wait                           # downloads kernel, initrd 1.4.0, rootfs
 docker context create speck --docker "host=unix://$HOME/.speck/speck.sock"
 ```
 

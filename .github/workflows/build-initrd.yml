@@ -6,7 +6,7 @@ on:
       version:
         description: Initrd version (e.g. 0.1.0)
         required: true
-        default: "1.3.0"
+        default: "1.4.0"
   push:
     tags: ["initrd-v*"]
 
@@ -49,20 +49,13 @@ jobs:
           ldd target/aarch64-unknown-linux-musl/release/vminitd 2>&1 | grep -q "not a dynamic executable" \
             || { echo "FAIL: vminitd is not statically linked"; exit 1; }
 
-      - name: Package as cpio initrd
+      - name: Package initrd (Alpine base + disk tools + vminitd as /init)
         run: |
           VERSION="${{ steps.meta.outputs.version }}"
-          mkdir -p initrd_root/{proc,sys,dev,rootfs,var/lib/containerd,run/speck}
-          cp target/aarch64-unknown-linux-musl/release/vminitd initrd_root/init
-          chmod +x initrd_root/init
-          cd initrd_root
-          find . | cpio -H newc -o | gzip -9 > "../speck-initrd-${VERSION}-arm64.cpio.gz"
-          cd ..
+          scripts/build-initrd.sh target/aarch64-unknown-linux-musl/release/vminitd \
+            "speck-initrd-${VERSION}-arm64.cpio.gz"
           shasum -a 256 "speck-initrd-${VERSION}-arm64.cpio.gz" \
             > "speck-initrd-${VERSION}-arm64.cpio.gz.sha256"
-          echo "=== initrd contents ==="
-          zcat "speck-initrd-${VERSION}-arm64.cpio.gz" | cpio -t
-          echo "=== sha256 ==="
           cat "speck-initrd-${VERSION}-arm64.cpio.gz.sha256"
 
       - name: Upload as GitHub Release
