@@ -9,8 +9,11 @@ Automated gates run on the dev Mac: `scripts/conformance-smoke.sh`, `scripts/egr
 
 ## Install a HEAD build (until OPS-04 publishes a matching initrd)
 
-The public `initrd-1.3.0` release predates the transparent proxy and Phase 25.
-Do not use it as is. Copy the HEAD build from the dev Mac instead.
+The public `initrd-1.3.0` release predates the transparent proxy, Phase 25 and
+the v1.4 guest fixes, and lacks `/sbin/mke2fs`, so its first boot cannot
+format the data disk. Do not boot it. Copy the HEAD build from the dev Mac and
+put the initrd in place **before** the first `spk up` (assets are only
+downloaded when missing).
 
 On the dev Mac:
 
@@ -27,10 +30,10 @@ On the work Mac:
 ```bash
 rm -f ~/bin/spk && cp spk ~/bin/spk     # rm first: overwriting a signed binary in place → SIGKILL
 spk --version
-spk up --wait                           # first run downloads kernel, rootfs, old initrd
-spk down
+mkdir -p ~/.speck/initrd
 cp initrd.cpio.gz ~/.speck/initrd/initrd.cpio.gz
-spk up --wait
+printf '1.3.0\n' > ~/.speck/initrd/initrd.version
+spk up --wait                           # downloads kernel + rootfs only
 docker context create speck --docker "host=unix://$HOME/.speck/speck.sock"
 ```
 
@@ -38,6 +41,14 @@ Keep Colima installed. Switch back at any time with `docker context use colima`.
 
 If `spk up` cannot download assets (proxy blocks GitHub), copy `~/.speck/kernel/`,
 `~/.speck/initrd/` and `~/.speck/rootfs.img` + `~/.speck/rootfs.version` from the dev Mac too.
+
+Corporate CA handling (v1.4):
+
+- Certificates macOS trusts through admin trust settings (WARP, Zscaler,
+  MDM roots) are exported to the VM automatically. Opt out with
+  `ca.keychain: false`.
+- To make containers trust them too (apk/pip/npm/curl behind TLS
+  inspection), set `ca.inject_into_containers: true` in `~/.speck/config.yaml`.
 
 ## M0 — Baseline (before any v1.4 code changes)
 
@@ -69,13 +80,15 @@ an explicit proxy/PAC (TLS-04) is required.
      ./scripts/egress-smoke.sh
    ```
 
-4. The same with the corporate CA configured. Add it to `~/.speck/config.yaml`, then
-   `spk restart` and run step 3 again:
+4. The same with CA injection into containers. Add to `~/.speck/config.yaml`, then
+   `spk restart` and run step 3 again (the Keychain export already covers the
+   VM itself; `extra_certs` is only needed if the CA is not admin-trusted):
 
    ```yaml
    ca:
-     extra_certs:
-       - /Users/<you>/corp-ca.pem
+     inject_into_containers: true
+     # extra_certs:
+     #   - /Users/<you>/corp-ca.pem
    ```
 
 5. The same egress run under Colima, for comparison:
@@ -84,8 +97,9 @@ an explicit proxy/PAC (TLS-04) is required.
    EGRESS_DOCKER_HOST=unix://$HOME/.colima/default/docker.sock ./scripts/egress-smoke.sh
    ```
 
-Record: a ✅/❌ table per check for Speck without CA, Speck with CA, and Colima, plus the
-`scutil --proxy` output. Expected today: only TCP 80/443 and DNS A pass under Speck.
+Record: a ✅/❌ table per check for Speck without and with CA injection, and
+Colima, plus the `scutil --proxy` output. On the dev Mac (no VPN) the HEAD
+build passes 20/20.
 
 ## M1 — Real workloads (after Phases 26 + 27)
 
