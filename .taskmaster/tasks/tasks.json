@@ -684,12 +684,13 @@
         "description": "No power observer; guest clock drifts after lid close, breaking TLS and AWS SigV4.",
         "details": "IORegisterForSystemPower observer on host; on wake send a settimeofday RPC to vminitd, drop stale reorigin bridges. Verify: manual M2 sleep 10min -> guest date within 2s of host.",
         "testStrategy": "",
-        "status": "pending",
+        "status": "review",
         "dependencies": [
           "13"
         ],
         "priority": "high",
-        "subtasks": []
+        "subtasks": [],
+        "updatedAt": "2026-10-11T12:30:11.670Z"
       },
       {
         "id": "16",
@@ -785,7 +786,7 @@
     ],
     "metadata": {
       "version": "1.0.0",
-      "lastModified": "2026-10-11T12:26:22.892Z",
+      "lastModified": "2026-10-11T12:30:11.670Z",
       "taskCount": 22,
       "completedCount": 11,
       "tags": [
