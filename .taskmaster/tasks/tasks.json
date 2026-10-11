@@ -617,12 +617,13 @@
         "description": "Corporate TLS-inspection CA must currently be listed manually in config.yaml.",
         "details": "On spk up, export admin/system-trusted roots (security find-certificate -a -p + trust settings) into the ca-certs dir alongside extra_certs; config opt-out ca.keychain: false. Verify: unit test of PEM parsing/dedup; manual on work Mac.",
         "testStrategy": "",
-        "status": "pending",
+        "status": "done",
         "dependencies": [
           "9"
         ],
         "priority": "medium",
-        "subtasks": []
+        "subtasks": [],
+        "updatedAt": "2026-10-11T12:26:22.892Z"
       },
       {
         "id": "11",
@@ -784,9 +785,9 @@
     ],
     "metadata": {
       "version": "1.0.0",
-      "lastModified": "2026-10-11T12:20:44.126Z",
+      "lastModified": "2026-10-11T12:26:22.892Z",
       "taskCount": 22,
-      "completedCount": 10,
+      "completedCount": 11,
       "tags": [
         "v1_4-daily-driver"
       ]
