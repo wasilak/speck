@@ -724,10 +724,11 @@
         "description": "dockerd respawned with no backoff; vminitd logs 'sysctl_write not yet implemented' so sysctl tuning is a no-op.",
         "details": "Backoff in vminitd spawn_dockerd_with_restart; implement sysctl_write via /proc/sys writes in LibcSyscalls. Verify: mock tests; console.log no longer shows the sysctl error.",
         "testStrategy": "",
-        "status": "pending",
+        "status": "done",
         "dependencies": [],
         "priority": "medium",
-        "subtasks": []
+        "subtasks": [],
+        "updatedAt": "2026-10-11T12:46:37.696Z"
       },
       {
         "id": "19",
@@ -769,10 +770,11 @@
         "description": "Guest dns_forwarder.rs only listens on UDP:53 with a 512-byte buffer and handles one query at a time over a single vsock connection; >512B answers reach clients truncated (google.com TXT: 7 of 17 records) and one slow lookup blocks all guest DNS.",
         "details": "speck-guest/src/dns_forwarder.rs: add a TCP:53 listener (length-prefixed, RFC 7766) sharing the vsock connection under a mutex or a second vsock connection; raise DNS_BUF_SIZE to 4096. For concurrency, match responses by DNS ID or open one vsock connection per in-flight query (host spawn_dns_proxy then accepts multiple). Needs an initrd rebuild (ties into OPS-04 release). Verify: egress-smoke 'dns large answer (>512B)' PASS; concurrent slow lookups do not block each other.",
         "testStrategy": "",
-        "status": "pending",
+        "status": "done",
         "dependencies": [],
         "priority": "medium",
-        "subtasks": []
+        "subtasks": [],
+        "updatedAt": "2026-10-11T12:46:39.251Z"
       },
       {
         "id": "22",
@@ -789,9 +791,9 @@
     ],
     "metadata": {
       "version": "1.0.0",
-      "lastModified": "2026-10-11T12:42:16.082Z",
+      "lastModified": "2026-10-11T12:46:39.251Z",
       "taskCount": 22,
-      "completedCount": 14,
+      "completedCount": 16,
       "tags": [
         "v1_4-daily-driver"
       ]
