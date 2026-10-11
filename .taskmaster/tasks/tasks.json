@@ -802,13 +802,60 @@
         "priority": "high",
         "subtasks": [],
         "updatedAt": "2026-10-11T13:40:38.374Z"
+      },
+      {
+        "id": "24",
+        "title": "[UX-01] spk up selects a 'speck' docker context like colima",
+        "description": "colima start creates and selects a 'colima' docker context; spk up did nothing, so docker kept talking to the previous runtime.",
+        "details": "Create/update context 'speck' (host=unix://$SPECK_HOME/speck.sock) and select it when the daemon is up; switch back to 'default' on spk down only if 'speck' is current. Skip with a log line when the docker CLI is missing. Warn when DOCKER_HOST overrides contexts.",
+        "testStrategy": "",
+        "status": "done",
+        "dependencies": [],
+        "priority": "high",
+        "subtasks": [],
+        "updatedAt": "2026-10-11T14:19:49.058Z"
+      },
+      {
+        "id": "25",
+        "title": "[UX-02] Refresh stale guest assets automatically",
+        "description": "After an upgrade spk up refused to start with 'run spk up --pull'; colima users never do that.",
+        "details": "When initrd.version / rootfs.version differ from the binary's versions, download the new asset instead of failing. Container data lives on data.img and is kept.",
+        "testStrategy": "",
+        "status": "done",
+        "dependencies": [],
+        "priority": "high",
+        "subtasks": [],
+        "updatedAt": "2026-10-11T14:19:50.520Z"
+      },
+      {
+        "id": "26",
+        "title": "[UX-03] colima-style commands: start/stop/delete",
+        "description": "spk uses up/down; colima users type start/stop/restart/status/delete.",
+        "details": "start = alias of up; stop without arguments stops Speck (with container arguments keeps stopping containers); delete removes the VM disks and docker context after confirmation (--force skips it).",
+        "testStrategy": "",
+        "status": "done",
+        "dependencies": [],
+        "priority": "high",
+        "subtasks": [],
+        "updatedAt": "2026-10-11T14:19:51.984Z"
+      },
+      {
+        "id": "27",
+        "title": "[REL-01] Release spk v1.4.0 and update Homebrew formula",
+        "description": "Last binary release is v1.3.2 (July); Formula/spk.rb still points at 0.1.0.",
+        "details": "Bump workspace version to 1.4.0, tag v1.4.0 (release.yml builds artifacts), update the formula url/sha256, verify brew install + spk start on a clean SPECK_HOME.",
+        "testStrategy": "",
+        "status": "pending",
+        "dependencies": [],
+        "priority": "high",
+        "subtasks": []
       }
     ],
     "metadata": {
       "version": "1.0.0",
-      "lastModified": "2026-10-11T13:40:39.804Z",
-      "taskCount": 23,
-      "completedCount": 18,
+      "lastModified": "2026-10-11T14:19:51.984Z",
+      "taskCount": 27,
+      "completedCount": 21,
       "tags": [
         "v1_4-daily-driver"
       ]
