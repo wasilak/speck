@@ -168,8 +168,8 @@ pub fn daemonize(speck_home: &Path, binary: &Path) -> anyhow::Result<()> {
     println!("{NEON_CYAN}Speck daemon registered — VM is starting in the background.{RESET}");
     println!("  Follow boot:  spk logs --follow");
     println!("  Check status: spk status");
-    println!("  For scripts:  spk up --wait  (blocks until ready)");
-    println!("  To stop:      spk down");
+    println!("  For scripts:  spk start --wait  (blocks until ready)");
+    println!("  To stop:      spk stop");
     Ok(())
 }
 
@@ -215,38 +215,53 @@ async fn ensure_assets(
     Ok(())
 }
 
-fn check_asset_version_file(
-    path: &Path,
-    asset_name: &str,
-    required_version: &str,
-) -> anyhow::Result<()> {
-    if !path.exists() {
-        return Ok(());
+/// Remove guest assets whose version file does not match this binary, so
+/// `ensure_assets` downloads the matching ones (UX-02: upgrades need no
+/// `--pull`, like colima). Containers, images and volumes live on data.img
+/// and are kept; the guest trust store is rebuilt at every boot.
+fn refresh_stale_assets(speck_home: &Path) -> anyhow::Result<()> {
+    let assets = [
+        (
+            "rootfs",
+            speck_home.join("rootfs.version"),
+            speck_home.join("rootfs.img"),
+            ROOTFS_VERSION,
+        ),
+        (
+            "initrd",
+            speck_home.join("initrd/initrd.version"),
+            speck_home.join("initrd/initrd.cpio.gz"),
+            INITRD_VERSION,
+        ),
+    ];
+    for (name, version_file, asset, required) in assets {
+        if let Some(found) = stale_version(&version_file, required)? {
+            println!("  Updating {name} {found} -> {required}...");
+            tracing::info!(asset = name, from = %found, to = required, "refreshing stale guest asset");
+            for path in [&asset, &version_file] {
+                match std::fs::remove_file(path) {
+                    Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                        return Err(e)
+                            .with_context(|| format!("failed to remove {}", path.display()));
+                    }
+                    _ => {}
+                }
+            }
+        }
     }
-
-    let on_disk_version = std::fs::read_to_string(path)
-        .with_context(|| format!("failed to read {}", path.display()))?
-        .trim()
-        .to_owned();
-
-    anyhow::ensure!(
-        on_disk_version == required_version,
-        "stale {asset_name} asset version at {}: found {on_disk_version}, required {required_version}; run `spk up --pull` to refresh VM assets",
-        path.display()
-    );
-
     Ok(())
 }
 
-fn check_asset_versions(speck_home: &Path) -> anyhow::Result<()> {
-    check_asset_version_file(&speck_home.join("rootfs.version"), "rootfs", ROOTFS_VERSION)?;
-    check_asset_version_file(
-        &speck_home.join("initrd/initrd.version"),
-        "initrd",
-        INITRD_VERSION,
-    )?;
-
-    Ok(())
+/// On-disk version from `path` when it differs from `required`.
+fn stale_version(path: &Path, required: &str) -> anyhow::Result<Option<String>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let on_disk = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read {}", path.display()))?
+        .trim()
+        .to_owned();
+    Ok((on_disk != required).then_some(on_disk))
 }
 
 fn console_log_hint(speck_home: &Path) -> String {
@@ -658,7 +673,7 @@ pub async fn run_up(
         && args.data_disk.is_some();
     if !has_all_overrides {
         if !args.pull {
-            check_asset_versions(speck_home)?;
+            refresh_stale_assets(speck_home)?;
         }
         ensure_assets(speck_home, effective.vm.disk_gb, args.pull).await?;
     }
@@ -828,6 +843,12 @@ pub async fn run_up(
     tracing::info!("Docker API server started at {}", sock_path.display());
 
     spawn_guest_clock_sync(guest.clone());
+
+    // Select the 'speck' docker context like `colima start` does (UX-01).
+    tokio::task::spawn_blocking({
+        let home = speck_home.to_path_buf();
+        move || crate::docker_context::select(&home)
+    });
 
     spinner.finish_with_message(format!("{NEON_CYAN}Speck is running{RESET}"));
 
@@ -1173,86 +1194,43 @@ mod tests {
         );
     }
 
-    #[test]
-    fn check_asset_versions_allows_matching_version_files() {
-        let dir =
-            std::env::temp_dir().join(format!("speck-asset-version-match-{}", std::process::id()));
+    fn asset_home(name: &str, rootfs: &str, initrd: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("speck-assets-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("initrd")).unwrap();
-        std::fs::write(dir.join("rootfs.version"), format!("{ROOTFS_VERSION}\n")).unwrap();
-        std::fs::write(
-            dir.join("initrd/initrd.version"),
-            format!("{INITRD_VERSION}\n"),
-        )
-        .unwrap();
-
-        check_asset_versions(&dir).unwrap();
+        std::fs::write(dir.join("rootfs.version"), format!("{rootfs}\n")).unwrap();
+        std::fs::write(dir.join("rootfs.img"), "rootfs").unwrap();
+        std::fs::write(dir.join("initrd/initrd.version"), format!("{initrd}\n")).unwrap();
+        std::fs::write(dir.join("initrd/initrd.cpio.gz"), "initrd").unwrap();
+        std::fs::write(dir.join("data.img"), "containers").unwrap();
+        dir
     }
 
     #[test]
-    fn check_asset_versions_rejects_stale_rootfs_with_pull_hint() {
-        let dir = std::env::temp_dir().join(format!(
-            "speck-asset-version-rootfs-stale-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(dir.join("initrd")).unwrap();
-        std::fs::write(dir.join("rootfs.version"), "0.0.1\n").unwrap();
-        std::fs::write(
-            dir.join("initrd/initrd.version"),
-            format!("{INITRD_VERSION}\n"),
-        )
-        .unwrap();
-
-        let err = check_asset_versions(&dir).unwrap_err().to_string();
-
-        assert!(
-            err.contains("rootfs.version"),
-            "error names stale file: {err}"
-        );
-        assert!(
-            err.contains("0.0.1"),
-            "error includes on-disk version: {err}"
-        );
-        assert!(
-            err.contains(ROOTFS_VERSION),
-            "error includes required version: {err}"
-        );
-        assert!(
-            err.contains("spk up --pull"),
-            "error includes pull hint: {err}"
-        );
+    fn matching_assets_are_kept() {
+        let dir = asset_home("match", ROOTFS_VERSION, INITRD_VERSION);
+        refresh_stale_assets(&dir).unwrap();
+        assert!(dir.join("rootfs.img").exists());
+        assert!(dir.join("initrd/initrd.cpio.gz").exists());
     }
 
     #[test]
-    fn check_asset_versions_rejects_stale_initrd_with_pull_hint() {
-        let dir = std::env::temp_dir().join(format!(
-            "speck-asset-version-initrd-stale-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(dir.join("initrd")).unwrap();
-        std::fs::write(dir.join("rootfs.version"), format!("{ROOTFS_VERSION}\n")).unwrap();
-        std::fs::write(dir.join("initrd/initrd.version"), "0.0.1\n").unwrap();
+    fn stale_assets_are_removed_for_redownload_and_data_is_kept() {
+        let dir = asset_home("stale", "0.0.1", "0.0.1");
+        refresh_stale_assets(&dir).unwrap();
+        assert!(!dir.join("rootfs.img").exists());
+        assert!(!dir.join("rootfs.version").exists());
+        assert!(!dir.join("initrd/initrd.cpio.gz").exists());
+        assert!(!dir.join("initrd/initrd.version").exists());
+        assert!(dir.join("data.img").exists());
+    }
 
-        let err = check_asset_versions(&dir).unwrap_err().to_string();
-
-        assert!(
-            err.contains("initrd/initrd.version"),
-            "error names stale file: {err}"
-        );
-        assert!(
-            err.contains("0.0.1"),
-            "error includes on-disk version: {err}"
-        );
-        assert!(
-            err.contains(INITRD_VERSION),
-            "error includes required version: {err}"
-        );
-        assert!(
-            err.contains("spk up --pull"),
-            "error includes pull hint: {err}"
-        );
+    #[test]
+    fn missing_version_files_leave_assets_alone() {
+        let dir = asset_home("unversioned", ROOTFS_VERSION, INITRD_VERSION);
+        std::fs::remove_file(dir.join("initrd/initrd.version")).unwrap();
+        refresh_stale_assets(&dir).unwrap();
+        assert!(dir.join("initrd/initrd.cpio.gz").exists());
     }
 
     #[test]
@@ -1263,8 +1241,8 @@ mod tests {
         let run_up = &source[run_up_start..tests_start];
 
         assert!(
-            run_up.contains("check_asset_versions(speck_home)?"),
-            "run_up must check asset versions before ensure_assets"
+            run_up.contains("refresh_stale_assets(speck_home)?"),
+            "run_up must refresh stale assets before ensure_assets"
         );
         assert!(
             run_up.contains("!args.pull"),

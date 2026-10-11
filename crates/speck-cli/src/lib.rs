@@ -7,6 +7,7 @@ use clap::{Parser, Subcommand};
 mod commands;
 mod config;
 pub mod docker_client;
+mod docker_context;
 mod keychain;
 mod shell;
 mod theme;
@@ -25,6 +26,7 @@ struct Cli {
 #[derive(Parser)]
 enum Commands {
     /// Start the Speck VM and Docker API server
+    #[command(visible_alias = "start")]
     Up(UpArgs),
     /// Stop the Speck VM
     Down,
@@ -34,7 +36,7 @@ enum Commands {
     Ps,
     /// Execute a command in a running container
     Exec(ExecArgs),
-    /// Stop a running container
+    /// Stop Speck (like `colima stop`), or a container when one is named
     Stop(StopArgs),
     /// Remove a container
     Rm(RmArgs),
@@ -54,6 +56,15 @@ enum Commands {
     Status,
     /// Show VM boot logs
     Logs(LogsArgs),
+    /// Delete the Speck VM with all containers, images and volumes
+    Delete(DeleteArgs),
+}
+
+#[derive(Parser)]
+struct DeleteArgs {
+    /// Skip the confirmation prompt
+    #[arg(long, short)]
+    force: bool,
 }
 
 #[derive(Parser)]
@@ -111,7 +122,8 @@ struct ExecArgs {
 
 #[derive(Parser)]
 struct StopArgs {
-    container: String,
+    /// Container to stop; without it, Speck itself is stopped
+    container: Option<String>,
 }
 
 #[derive(Parser)]

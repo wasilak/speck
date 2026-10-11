@@ -7,6 +7,7 @@ use tracing_subscriber::EnvFilter;
 mod commands;
 mod config;
 mod docker_client;
+mod docker_context;
 mod keychain;
 mod shell;
 mod theme;
@@ -25,6 +26,7 @@ struct Cli {
 #[derive(Parser)]
 enum Commands {
     /// Start the Speck VM and Docker API server
+    #[command(visible_alias = "start")]
     Up(UpArgs),
     /// Stop the Speck VM
     Down,
@@ -36,7 +38,7 @@ enum Commands {
     Ps,
     /// Execute a command in a running container
     Exec(ExecArgs),
-    /// Stop a running container
+    /// Stop Speck (like `colima stop`), or a container when one is named
     Stop(StopArgs),
     /// Remove a container
     Rm(RmArgs),
@@ -56,6 +58,15 @@ enum Commands {
     Status,
     /// Show VM boot logs
     Logs(LogsArgs),
+    /// Delete the Speck VM with all containers, images and volumes
+    Delete(DeleteArgs),
+}
+
+#[derive(Parser)]
+struct DeleteArgs {
+    /// Skip the confirmation prompt
+    #[arg(long, short)]
+    force: bool,
 }
 
 #[derive(Parser)]
@@ -113,7 +124,8 @@ struct ExecArgs {
 
 #[derive(Parser)]
 struct StopArgs {
-    container: String,
+    /// Container to stop; without it, Speck itself is stopped
+    container: Option<String>,
 }
 
 #[derive(Parser)]
@@ -484,6 +496,9 @@ async fn main() -> anyhow::Result<()> {
             let sock_path = speck_home.join("speck.sock");
             unsafe { std::env::set_var("SPECK_SOCK", sock_path.to_string_lossy().to_string()) };
             if !args.foreground && std::env::var("SPECK_DAEMONIZED").is_err() {
+                if let Some(warning) = docker_context::docker_host_override_warning(&speck_home) {
+                    eprintln!("warning: {warning}");
+                }
                 let binary = std::env::current_exe().context("cannot find own binary")?;
                 commands::up::daemonize(&speck_home, &binary)?;
                 if args.wait {
@@ -513,7 +528,8 @@ async fn main() -> anyhow::Result<()> {
         }
         Commands::Down => {
             init_tracing(&default_tracing_filter())?;
-            commands::down::run_down(&speck_home).await?
+            commands::down::run_down(&speck_home).await?;
+            docker_context::deselect();
         }
         Commands::Restart => {
             init_tracing(&default_tracing_filter())?;
@@ -533,7 +549,17 @@ async fn main() -> anyhow::Result<()> {
         }
         Commands::Stop(args) => {
             init_tracing(&default_tracing_filter())?;
-            commands::stop::run_stop(args, &speck_home).await?
+            match args.container {
+                Some(container) => commands::stop::run_stop(&container, &speck_home).await?,
+                None => {
+                    commands::down::run_down(&speck_home).await?;
+                    docker_context::deselect();
+                }
+            }
+        }
+        Commands::Delete(args) => {
+            init_tracing(&default_tracing_filter())?;
+            commands::delete::run_delete(args.force, &speck_home).await?
         }
         Commands::Rm(args) => {
             init_tracing(&default_tracing_filter())?;
