@@ -119,6 +119,16 @@ pub fn serve(dns_vsock_port: u32) -> io::Result<()> {
         );
     }
 
+    // TCP:53 for clients that retry over TCP after a truncated UDP answer
+    // (RFC 7766). Optional: the forwarder keeps serving UDP if it fails.
+    let tcp_fd = match tcp_listener(53) {
+        Ok(fd) => fd,
+        Err(e) => {
+            eprintln!("vminitd: dns forwarder TCP:53 unavailable: {e}");
+            -1
+        }
+    };
+
     // --- Step 3: Poll loop ---
     let mut buf = [0u8; DNS_BUF_SIZE];
     let mut resp = vec![0u8; u16::MAX as usize];
@@ -135,9 +145,14 @@ pub fn serve(dns_vsock_port: u32) -> io::Result<()> {
                 events: libc::POLLIN,
                 revents: 0,
             },
+            libc::pollfd {
+                fd: tcp_fd, // negative fd is ignored by poll
+                events: libc::POLLIN,
+                revents: 0,
+            },
         ];
 
-        let ret = unsafe { libc::poll(fds.as_mut_ptr(), 2, -1) };
+        let ret = unsafe { libc::poll(fds.as_mut_ptr(), 3, -1) };
         if ret < 0 {
             return Err(io::Error::last_os_error());
         }
@@ -150,22 +165,24 @@ pub fn serve(dns_vsock_port: u32) -> io::Result<()> {
                 continue;
             };
 
-            // Send length-prefixed DNS query over vsock (u16 BE + bytes)
-            write_all(vsock_fd, &(n as u16).to_be_bytes())?;
-            write_all(vsock_fd, &buf[..n])?;
-
-            // Read response from vsock: u16 BE length prefix + DNS response
-            // bytes. Always read the whole response, whatever its size: a
-            // partial read would desynchronise the stream for every later query.
-            let mut len_buf = [0u8; 2];
-            read_exact(vsock_fd, &mut len_buf)?;
-            let resp_len = u16::from_be_bytes(len_buf) as usize;
-            read_exact(vsock_fd, &mut resp[..resp_len])?;
+            let resp_len = forward(vsock_fd, &buf[..n], &mut resp)?;
             if resp_len == 0 {
                 continue;
             }
 
             send_reply(udp_fd, &resp[..resp_len], &client_addr, local_addr);
+        }
+
+        // TCP:53 client — serve its queries inline (clients send one query
+        // and close; a 2 s timeout bounds how long UDP waits behind it).
+        if fds[2].revents & libc::POLLIN != 0 {
+            let client =
+                unsafe { libc::accept(tcp_fd, std::ptr::null_mut(), std::ptr::null_mut()) };
+            if client >= 0 {
+                let result = serve_tcp_client(client, vsock_fd, &mut resp);
+                unsafe { libc::close(client) };
+                result?;
+            }
         }
 
         // Vsock data arriving without a prior query (rare/protocol error) — drain
@@ -291,4 +308,93 @@ fn read_exact(fd: libc::c_int, buf: &mut [u8]) -> io::Result<()> {
         r += n as usize;
     }
     Ok(())
+}
+
+/// Send one length-prefixed query to the host over vsock and read the whole
+/// response into `resp`. Always reads the full response, whatever its size:
+/// a partial read would desynchronise the stream for every later query.
+fn forward(vsock_fd: libc::c_int, query: &[u8], resp: &mut [u8]) -> io::Result<usize> {
+    write_all(vsock_fd, &(query.len() as u16).to_be_bytes())?;
+    write_all(vsock_fd, query)?;
+    let mut len_buf = [0u8; 2];
+    read_exact(vsock_fd, &mut len_buf)?;
+    let resp_len = u16::from_be_bytes(len_buf) as usize;
+    read_exact(vsock_fd, &mut resp[..resp_len])?;
+    Ok(resp_len)
+}
+
+fn tcp_listener(port: u16) -> io::Result<libc::c_int> {
+    let fd = unsafe { libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0) };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let one: libc::c_int = 1;
+    unsafe {
+        libc::setsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_REUSEADDR,
+            &one as *const libc::c_int as *const libc::c_void,
+            std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+        );
+    }
+    let addr = libc::sockaddr_in {
+        sin_family: libc::AF_INET as u16,
+        sin_port: port.to_be(),
+        sin_addr: libc::in_addr { s_addr: 0 },
+        sin_zero: [0u8; 8],
+    };
+    let ok = unsafe {
+        libc::bind(
+            fd,
+            &addr as *const libc::sockaddr_in as *const libc::sockaddr,
+            std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t,
+        ) == 0
+            && libc::listen(fd, 16) == 0
+    };
+    if !ok {
+        let err = io::Error::last_os_error();
+        unsafe { libc::close(fd) };
+        return Err(err);
+    }
+    Ok(fd)
+}
+
+/// Serve DNS-over-TCP queries from one client until it closes or idles.
+/// Client-side failures end the connection; only vsock failures are errors.
+fn serve_tcp_client(client: libc::c_int, vsock_fd: libc::c_int, resp: &mut [u8]) -> io::Result<()> {
+    let timeout = libc::timeval {
+        tv_sec: 2,
+        tv_usec: 0,
+    };
+    for opt in [libc::SO_RCVTIMEO, libc::SO_SNDTIMEO] {
+        unsafe {
+            libc::setsockopt(
+                client,
+                libc::SOL_SOCKET,
+                opt,
+                &timeout as *const libc::timeval as *const libc::c_void,
+                std::mem::size_of::<libc::timeval>() as libc::socklen_t,
+            );
+        }
+    }
+    let mut query = vec![0u8; u16::MAX as usize];
+    loop {
+        let mut len_buf = [0u8; 2];
+        if read_exact(client, &mut len_buf).is_err() {
+            return Ok(());
+        }
+        let len = u16::from_be_bytes(len_buf) as usize;
+        if read_exact(client, &mut query[..len]).is_err() {
+            return Ok(());
+        }
+        // A TCP client accepts answers of any size; tell the host so.
+        let q = crate::dns_wire::with_edns(&query[..len], crate::dns_wire::TCP_EDNS_PAYLOAD);
+        let resp_len = forward(vsock_fd, &q, resp)?;
+        if write_all(client, &(resp_len as u16).to_be_bytes()).is_err()
+            || write_all(client, &resp[..resp_len]).is_err()
+        {
+            return Ok(());
+        }
+    }
 }
