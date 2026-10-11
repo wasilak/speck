@@ -12,7 +12,17 @@ tokio = { version = "1.52", features = ["rt", "net", "io-util", "sync", "fs", "t
 socket2 = "0.5"
 libc = "0.2"
 thiserror = "2"
-smoltcp = "0.13.1"
+# Default features minus "auto-icmp-echo-reply": with any_ip that feature
+# answers pings to every destination locally, so container ping health checks
+# lied (EGRESS-06). Guest ICMP is now simply not forwarded.
+smoltcp = { version = "0.13.1", default-features = false, features = [
+    "std", "log", "medium-ethernet", "medium-ip", "medium-ieee802154",
+    "phy-raw_socket", "phy-tuntap_interface", "proto-ipv4", "proto-dhcpv4",
+    "proto-ipv6", "proto-ipv6-slaac", "proto-dns", "proto-ipv4-fragmentation",
+    "proto-sixlowpan-fragmentation", "socket-raw", "socket-icmp", "socket-udp",
+    "socket-tcp", "socket-dhcpv4", "socket-dns", "socket-mdns", "packetmeta-id",
+    "async", "multicast",
+] }
 serde = { version = "1", features = ["derive"] }
 tracing = "0.1"
 system-configuration = "0.7.0"

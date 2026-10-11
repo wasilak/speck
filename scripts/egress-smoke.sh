@@ -103,8 +103,9 @@ if [ -n "${EGRESS_INTERNAL_TCP:-}" ]; then
 fi
 
 # ICMP: 192.0.2.1 (TEST-NET-1) must NOT answer. An answer means the netstack
-# fakes echo replies locally (baseline 2026-10-11: it does, ~0.2 ms RTT).
-info  "icmp not faked"            in_c "! ping -c1 -W3 192.0.2.1"
+# fakes echo replies locally (EGRESS-06; it did until smoltcp's
+# auto-icmp-echo-reply was disabled). Guest ICMP is not forwarded.
+check "icmp not faked"            in_c "! ping -c1 -W3 192.0.2.1"
 
 docker rm -f "$C" >/dev/null 2>&1
 
