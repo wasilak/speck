@@ -80,6 +80,15 @@ check "dns MX"                    in_c "nslookup -type=MX gmail.com | grep -q 'm
 TXT_EXPECTED="$(dig +short txt google.com 2>/dev/null | wc -l | tr -d ' ')"
 check "dns large answer (>512B)"  in_c "[ \$(nslookup -type=TXT google.com | grep -c 'text =') -ge ${TXT_EXPECTED:-1} ]"
 
+# DNS on a user-defined network (docker compose): containers query Docker's
+# embedded DNS, which forwards to the guest forwarder from another bridge.
+check "dns on user network"       sh -c 'docker network create egress-net >/dev/null 2>&1; docker run --rm --network egress-net alpine nslookup github.com | grep -q "^Address"'
+docker network rm egress-net >/dev/null 2>&1
+
+# An EDNS client must get the full >512-byte answer through the guest
+# forwarder (it used to drop anything above 512 bytes).
+check "dns large answer (EDNS)"   in_c "apk add -q --no-cache bind-tools >/dev/null && [ \$(dig +bufsize=4096 +short txt google.com | wc -l) -ge ${TXT_EXPECTED:-1} ]"
+
 # TLS through whatever sits on the host path (TLS-01..03)
 check "https wget"                in_c "wget -q -T 10 -O /dev/null https://github.com"
 check "apk add over TLS"          in_c "apk add --no-cache -q curl"
