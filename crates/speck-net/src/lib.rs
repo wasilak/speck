@@ -10,6 +10,7 @@ pub mod port_publish;
 pub(crate) mod reorigin;
 pub mod resolver_table;
 pub(crate) mod tcp_listener;
+pub(crate) mod udp_reorigin;
 
 pub use dns::spawn_dns_proxy;
 pub use error::{Error, Result};
@@ -106,6 +107,7 @@ impl SpeckNet {
 
             // Host-first connects for guest SYNs (TCP to any destination port).
             let mut connector = connector::Connector::default();
+            let mut udp = udp_reorigin::UdpReorigin::default();
 
             // Poll loop
             loop {
@@ -145,6 +147,13 @@ impl SpeckNet {
                     }
                 }
 
+                // Guest UDP: make sure the destination port has a socket, then
+                // let smoltcp see the held datagrams.
+                for (port, frame) in net.device_mut().take_held_udp() {
+                    udp.ensure_port(net.sockets_mut(), port);
+                    net.device_mut().push_ready(frame);
+                }
+
                 let timestamp = smoltcp::time::Instant::now();
 
                 // Process inbound packets (data arrives on fd)
@@ -178,6 +187,9 @@ impl SpeckNet {
 
                 // Process DHCP requests
                 dhcp.poll(net.sockets_mut());
+
+                // Forward guest UDP to host flows and host replies back to the guest.
+                udp.poll(net.sockets_mut());
 
                 // Free sockets of finished connections (bridges drop their
                 // handles in poll_bridges once a socket stops being open).

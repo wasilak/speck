@@ -14,7 +14,9 @@ pub struct FdDevice {
     mtu: usize,
     /// Guest TCP SYN frames held back until the host connect for them resolves.
     held_syns: Vec<(SynInfo, Vec<u8>)>,
-    /// Released SYN frames, handed to smoltcp before new reads.
+    /// Guest UDP datagrams held back until their destination port has a socket.
+    held_udp: Vec<(u16, Vec<u8>)>,
+    /// Released held frames, handed to smoltcp before new reads.
     ready: VecDeque<Vec<u8>>,
 }
 
@@ -45,6 +47,7 @@ impl FdDevice {
             fd,
             mtu,
             held_syns: Vec::new(),
+            held_udp: Vec::new(),
             ready: VecDeque::new(),
         }
     }
@@ -54,6 +57,11 @@ impl FdDevice {
         std::mem::take(&mut self.held_syns)
     }
 
+    /// Take the UDP frames held since the last call, with their destination port.
+    pub fn take_held_udp(&mut self) -> Vec<(u16, Vec<u8>)> {
+        std::mem::take(&mut self.held_udp)
+    }
+
     /// Queue a previously held frame for smoltcp's next poll.
     pub fn push_ready(&mut self, frame: Vec<u8>) {
         self.ready.push_back(frame);
@@ -61,7 +69,7 @@ impl FdDevice {
 
     /// Whether frames are waiting that will not trigger fd readiness again.
     pub fn has_pending_frames(&self) -> bool {
-        !self.held_syns.is_empty() || !self.ready.is_empty()
+        !self.held_syns.is_empty() || !self.held_udp.is_empty() || !self.ready.is_empty()
     }
 
     /// Whether released frames are still waiting to be processed by smoltcp.
@@ -163,6 +171,10 @@ impl Device for FdDevice {
                     rx_buf.truncate(n as usize);
                     if let Some(syn) = syn_info(&rx_buf) {
                         self.held_syns.push((syn, rx_buf));
+                        continue;
+                    }
+                    if let Some(port) = crate::udp_reorigin::udp_dst_port(&rx_buf) {
+                        self.held_udp.push((port, rx_buf));
                         continue;
                     }
                     return Some((FdRxToken(rx_buf), FdTxToken { fd: self.fd }));

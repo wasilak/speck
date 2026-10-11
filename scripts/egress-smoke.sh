@@ -9,7 +9,7 @@
 #
 # Optional overrides (for the corporate Mac):
 #   EGRESS_SSH_HOST      ssh endpoint on :22              (default github.com)
-#   EGRESS_NTP_HOST      NTP server for the UDP check     (default pool.ntp.org)
+#   EGRESS_NTP_HOST      NTP server for the UDP check     (default time.cloudflare.com)
 #   EGRESS_INTERNAL_HOST internal split-DNS https host    (check skipped if unset)
 #   EGRESS_INTERNAL_TCP  internal host:port, e.g. db:5432 (check skipped if unset)
 #   EGRESS_DOCKER_HOST   compare another runtime, e.g. unix://$HOME/.colima/default/docker.sock
@@ -17,7 +17,7 @@ set -u
 
 export DOCKER_HOST="${EGRESS_DOCKER_HOST:-unix://${SPECK_HOME:-$HOME/.speck}/speck.sock}"
 SSH_HOST="${EGRESS_SSH_HOST:-github.com}"
-NTP_HOST="${EGRESS_NTP_HOST:-pool.ntp.org}"
+NTP_HOST="${EGRESS_NTP_HOST:-time.cloudflare.com}"
 C=egress-smoke
 PASS=0; FAIL=0; FAILED=()
 
