@@ -2,7 +2,7 @@
   "errors": {
     "tasks": [
       {
-        "id": "1",
+        "id": 1,
         "title": "Implement --wait flag for spk up command",
         "description": "Add a --wait flag to spk up that blocks until the Docker socket at $SPECK_HOME/speck.sock responds to GET /_ping with HTTP 200, with timeout handling and progress reporting.",
         "details": "1. Add `--wait` clap argument to `spk up` command\n2. Implement socket readiness check using HTTP client (reqwest or hyper) against $SPECK_HOME/speck.sock/_ping\n3. Add 300s default timeout with configurable --timeout flag\n4. Print progress messages to stderr during wait period\n5. Return non-zero exit code on timeout with actionable error message\n6. Preserve existing behavior when --wait is not specified",
@@ -25,9 +25,7 @@
             "id": 2,
             "title": "Implement HTTP client socket readiness check",
             "description": "Set up HTTP client to ping Docker socket endpoint with timeout handling",
-            "dependencies": [
-              1
-            ],
+            "dependencies": [],
             "details": "Use reqwest or hyper HTTP client library to make GET request to $SPECK_HOME/speck.sock/_ping endpoint, handle connection errors and timeouts appropriately",
             "status": "pending",
             "testStrategy": null,
@@ -37,9 +35,7 @@
             "id": 3,
             "title": "Add timeout handling with configurable default",
             "description": "Implement 300s default timeout with configurable --timeout parameter",
-            "dependencies": [
-              2
-            ],
+            "dependencies": [],
             "details": "Set up timeout logic that defaults to 300 seconds but can be overridden by --timeout flag, ensuring proper error handling and exit codes on timeout",
             "status": "pending",
             "testStrategy": null,
@@ -49,9 +45,7 @@
             "id": 4,
             "title": "Implement progress reporting to stderr",
             "description": "Add progress messages during wait period to stderr for user feedback",
-            "dependencies": [
-              3
-            ],
+            "dependencies": [],
             "details": "Output periodic progress messages to stderr during socket readiness check, ensuring messages are informative and don't interfere with normal program output",
             "status": "pending",
             "testStrategy": null,
@@ -61,9 +55,7 @@
             "id": 5,
             "title": "Handle exit codes and error messaging",
             "description": "Return appropriate exit codes and provide actionable error messages on timeout",
-            "dependencies": [
-              4
-            ],
+            "dependencies": [],
             "details": "Ensure non-zero exit code is returned when timeout occurs, with clear error message indicating what went wrong and how to resolve it, while preserving existing behavior when --wait flag is not used",
             "status": "pending",
             "testStrategy": null,
@@ -76,7 +68,7 @@
         "updatedAt": "2026-07-06T13:11:33.397Z"
       },
       {
-        "id": "2",
+        "id": 2,
         "title": "Add progress indicator for Kata asset download",
         "description": "Modify fetch_kata_assets() to show download progress using curl's --progress-bar flag while streaming the tarball.",
         "details": "1. Update fetch_kata_assets function in shell pipeline\n2. Add curl --progress-bar flag for visible progress during download\n3. Ensure progress output is suppressed in daemon mode (SPECK_DAEMONIZED=1)\n4. Use existing zstdcat | tar pipeline but inject curl progress\n5. Handle terminal detection to suppress progress in non-interactive mode",
@@ -99,9 +91,7 @@
             "id": 2,
             "title": "Implement terminal detection and daemon mode suppression",
             "description": "Add logic to detect terminal environment and suppress progress output in daemon mode",
-            "dependencies": [
-              1
-            ],
+            "dependencies": [],
             "details": "Implement terminal detection using isatty or equivalent methods to determine if output should be suppressed when SPECK_DAEMONIZED=1. Ensure progress bar only appears in interactive terminals while suppressing it in daemon mode to prevent log pollution.",
             "status": "pending",
             "testStrategy": null,
@@ -111,10 +101,7 @@
             "id": 3,
             "title": "Validate progress indicator functionality across modes",
             "description": "Test that progress indicator works correctly in both interactive and daemon modes",
-            "dependencies": [
-              1,
-              2
-            ],
+            "dependencies": [],
             "details": "Create test scenarios to verify progress bar appears during download in interactive mode, suppresses properly in daemon mode (SPECK_DAEMONIZED=1), and maintains existing zstdcat | tar pipeline functionality without breaking download completion.",
             "status": "pending",
             "testStrategy": null,
@@ -127,7 +114,7 @@
         "updatedAt": "2026-07-06T13:18:56.171Z"
       },
       {
-        "id": "3",
+        "id": 3,
         "title": "Improve daemon startup feedback message",
         "description": "Change post-daemonize message to accurately reflect that the service has been registered but not necessarily running yet.",
         "details": "1. Modify message printed after launchctl bootstrap in daemon mode\n2. Change from \"Speck VM is running\" to \"Speck daemon registered. VM is starting in the background.\"\n3. Add suggestions for monitoring startup: spk logs --follow and spk status\n4. Optionally recommend spk up --wait for scripted use when --wait not used",
@@ -150,9 +137,7 @@
             "id": 2,
             "title": "Add command suggestions and scripting recommendations to daemon startup message",
             "description": "Enhance the daemon startup message with helpful monitoring and scripting commands for users.",
-            "dependencies": [
-              1
-            ],
+            "dependencies": [],
             "details": "Modify the updated message from subtask 1 to include specific command recommendations for users to monitor startup progress. Add 'spk logs --follow' and 'spk status' suggestions, and optionally include 'spk up --wait' recommendation for scripted use cases when --wait is not specified, ensuring all commands are properly formatted and actionable.",
             "status": "pending",
             "testStrategy": null,
@@ -165,7 +150,7 @@
         "updatedAt": "2026-07-06T13:20:24.235Z"
       },
       {
-        "id": "4",
+        "id": 4,
         "title": "Fix ANSI color codes in non-TTY output",
         "description": "Ensure color output respects NO_COLOR environment variable and TTY detection using anstream crate.",
         "details": "1. Use anstream crate to wrap stdout/stderr\n2. Detect if stdout is a TTY using std::io::IsTerminal or anstream's built-in detection\n3. Respect NO_COLOR environment variable (if set, emit no ANSI codes)\n4. Apply changes to all commands using theme.rs constants: doctor, ps, status\n5. Ensure interactive terminal output still renders colors normally",
@@ -188,9 +173,7 @@
             "id": 2,
             "title": "Implement TTY detection logic",
             "description": "Add TTY detection using std::io::IsTerminal or anstream's built-in detection to determine when colors should be output.",
-            "dependencies": [
-              1
-            ],
+            "dependencies": [],
             "details": "Implement TTY detection in the color output functions, ensuring that anstream automatically disables ANSI codes when output is not going to a terminal. Use both std::io::IsTerminal and anstream's built-in methods for robust detection across different environments.",
             "status": "pending",
             "testStrategy": null,
@@ -200,10 +183,7 @@
             "id": 3,
             "title": "Handle NO_COLOR environment variable",
             "description": "Implement logic to respect the NO_COLOR environment variable by suppressing ANSI color codes when set.",
-            "dependencies": [
-              1,
-              2
-            ],
+            "dependencies": [],
             "details": "Add environment variable checking code that reads NO_COLOR and configures anstream to disable color output regardless of TTY status. Ensure this is applied globally across all commands using theme.rs constants for consistent behavior.",
             "status": "pending",
             "testStrategy": null,
@@ -213,11 +193,7 @@
             "id": 4,
             "title": "Apply changes to affected commands and test",
             "description": "Update doctor, ps, and status commands to use the new color handling logic and verify proper behavior in all scenarios.",
-            "dependencies": [
-              1,
-              2,
-              3
-            ],
+            "dependencies": [],
             "details": "Modify the three affected commands (doctor, ps, status) to utilize theme.rs constants with the new anstream-based output system. Test that non-TTY output has no escape codes, NO_COLOR suppresses colors, interactive terminals show colors normally, and all commands behave consistently.",
             "status": "pending",
             "testStrategy": null,
@@ -230,7 +206,7 @@
         "updatedAt": "2026-07-06T13:36:55.128Z"
       },
       {
-        "id": "5",
+        "id": 5,
         "title": "Add SPECK_HOME path to spk doctor output",
         "description": "Include the resolved SPECK_HOME path at the top of spk doctor output.",
         "details": "1. Resolve SPECK_HOME path before running health checks\n2. Add a line at beginning of doctor output showing resolved path\n3. If set via environment variable, annotate with '(from $SPECK_HOME env)'\n4. Ensure this appears before any check results\n5. Validate path matches what spk up would use",
@@ -253,9 +229,7 @@
             "id": 2,
             "title": "Format and display SPECK_HOME path in doctor output",
             "description": "Add formatted output of the resolved SPECK_HOME path at the beginning of spk doctor output with environment variable annotation",
-            "dependencies": [
-              1
-            ],
+            "dependencies": [],
             "details": "Modify the doctor command output to include a line showing the resolved SPECK_HOME path at the top. Add conditional annotation '(from $SPECK_HOME env)' when the path is set via environment variable. Ensure this appears before any check results and validate the formatting matches existing output style.",
             "status": "pending",
             "testStrategy": null,
@@ -268,7 +242,7 @@
         "updatedAt": "2026-07-06T13:41:53.214Z"
       },
       {
-        "id": "6",
+        "id": 6,
         "title": "Enhance cert hint in spk doctor",
         "description": "Update the cert injection check message to include configuration hint when no CA certs are configured.",
         "details": "1. Modify PassWithDetail message for empty-certs case\n2. Add configuration hint: 'no CA certs configured — add paths to ca.extra_certs in ~/.speck/config.yaml'\n3. Use resolved SPECK_HOME path instead of hardcoded '~/.speck'\n4. Ensure hint is clear and actionable for first-time users",
@@ -304,7 +278,7 @@
         "updatedAt": "2026-07-06T13:49:06.612Z"
       },
       {
-        "id": "7",
+        "id": 7,
         "title": "Improve VPN DNS check wording",
         "description": "Update the VPN DNS check skip reason to be more actionable and clear.",
         "details": "1. Modify Skip reason for no VPN active case\n2. Change from '(no VPN-scoped resolvers detected (no VPN active))' to 'no VPN active — connect a VPN to verify split-DNS inheritance'\n3. Ensure existing PASS behavior remains unchanged when VPN is active\n4. Update message to be clear about why check is skipped",
@@ -330,7 +304,7 @@
         "updatedAt": "2026-07-06T13:54:43.128Z"
       },
       {
-        "id": "8",
+        "id": 8,
         "title": "Implement spk init to scaffold config.yaml",
         "description": "Add functionality to create a commented default config.yaml file when running spk init.",
         "details": "1. Add logic to spk init command to check for existing config.yaml\n2. If file doesn't exist, write scaffolding with all supported config keys as comments\n3. Include default values and one-line explanations for each key\n4. If file exists, print notice instead of overwriting\n5. Format config as YAML with proper comments and structure",
@@ -353,9 +327,7 @@
             "id": 2,
             "title": "Generate YAML scaffolding with comments and structure",
             "description": "Create proper YAML format configuration file with all supported keys as comments",
-            "dependencies": [
-              1
-            ],
+            "dependencies": [],
             "details": "Implement YAML generation that includes all supported config keys as commented entries, each with default values and one-line explanations, using rust-yaml or similar library to ensure proper formatting",
             "status": "pending",
             "testStrategy": null,
@@ -365,9 +337,7 @@
             "id": 3,
             "title": "Enumerate configuration keys and create documentation",
             "description": "Define all supported config keys with their default values and explanations",
-            "dependencies": [
-              2
-            ],
+            "dependencies": [],
             "details": "Create comprehensive list of all configuration keys that should be included in scaffolding, define default values for each key, and craft one-line explanations that will be used as comments in the generated YAML file",
             "status": "pending",
             "testStrategy": null,
@@ -377,11 +347,7 @@
             "id": 4,
             "title": "Implement overwrite prevention and user feedback",
             "description": "Ensure existing config.yaml is not overwritten and provide appropriate user feedback",
-            "dependencies": [
-              1,
-              2,
-              3
-            ],
+            "dependencies": [],
             "details": "Add logic to detect existing config.yaml file and print clear notice message instead of overwriting, implement proper error handling for edge cases like permission issues, and ensure user receives actionable feedback about the current state of their configuration",
             "status": "pending",
             "testStrategy": null,
@@ -394,7 +360,7 @@
         "updatedAt": "2026-07-06T13:59:45.435Z"
       },
       {
-        "id": "9",
+        "id": 9,
         "title": "Implement guest serial console capture",
         "description": "Capture guest hvc0 serial console output to $SPECK_HOME/console.log during VM lifetime.",
         "details": "1. Use VZVirtioConsoleDeviceConfiguration with VZVirtioConsolePortConfiguration\n2. Set up VZFileHandleSerialPortAttachment backed by file handle writing to console.log\n3. Create or truncate console.log at VM start and close on VM stop\n4. Add hint to spk up --foreground after GuestReadyTimeout: 'Check console output: spk_home/console.log'\n5. Ensure console.log contains kernel boot messages for both successful and failed boots",
@@ -417,9 +383,7 @@
             "id": 2,
             "title": "Implement File Handle Attachment to console.log",
             "description": "Create VZFileHandleSerialPortAttachment backed by file handle writing to console.log",
-            "dependencies": [
-              1
-            ],
+            "dependencies": [],
             "details": "Set up the file attachment mechanism using VZFileHandleSerialPortAttachment that writes serial console output directly to the specified console.log file, ensuring proper file handle management and error handling for I/O operations.",
             "status": "pending",
             "testStrategy": null,
@@ -429,9 +393,7 @@
             "id": 3,
             "title": "Integrate File Management with VM Lifecycle",
             "description": "Create or truncate console.log at VM start and close on VM stop",
-            "dependencies": [
-              2
-            ],
+            "dependencies": [],
             "details": "Implement file lifecycle management by creating/truncating console.log when VM starts and properly closing the file handle when VM stops, ensuring file integrity and proper resource cleanup during VM operations.",
             "status": "pending",
             "testStrategy": null,
@@ -441,9 +403,7 @@
             "id": 4,
             "title": "Implement Error Handling and Logging for Console Capture",
             "description": "Add comprehensive error handling and logging for console capture functionality",
-            "dependencies": [
-              3
-            ],
+            "dependencies": [],
             "details": "Develop robust error handling mechanisms for serial console capture including proper logging of failures, ensuring graceful degradation when console capture fails, and implementing appropriate error messages for debugging.",
             "status": "pending",
             "testStrategy": null,
@@ -453,9 +413,7 @@
             "id": 5,
             "title": "Add Hint Message in Foreground Mode",
             "description": "Place hint message after GuestReadyTimeout in foreground mode",
-            "dependencies": [
-              3
-            ],
+            "dependencies": [],
             "details": "Integrate the console log hint message 'Check console output: spk_home/console.log' into the foreground mode execution flow after GuestReadyTimeout, ensuring it appears at the appropriate time during VM startup.",
             "status": "pending",
             "testStrategy": null,
@@ -465,10 +423,7 @@
             "id": 6,
             "title": "Verify Kernel Messages in console.log",
             "description": "Test that console.log contains kernel boot messages for successful and failed boots",
-            "dependencies": [
-              4,
-              5
-            ],
+            "dependencies": [],
             "details": "Implement comprehensive testing to verify that console.log properly captures kernel boot messages including both successful boot sequences and error conditions, ensuring complete boot log coverage for diagnostics.",
             "status": "pending",
             "testStrategy": null,
@@ -481,7 +436,7 @@
         "updatedAt": "2026-07-06T13:15:41.929Z"
       },
       {
-        "id": "10",
+        "id": 10,
         "title": "Update documentation for environment variables and log locations",
         "description": "Add documentation about SPECK_HOME, DOCKER_HOST, RUST_LOG environment variables and log file location to README.md.",
         "details": "1. Add \"Environment Variables\" section to README.md\n2. Document SPECK_HOME, DOCKER_HOST, and RUST_LOG with explanations\n3. Add \"Logs\" section describing $SPECK_HOME/speck.log location and spk logs --follow usage\n4. Add shell completion install one-liners for zsh and fish\n5. Ensure all documentation is visible to users in appropriate locations",
@@ -504,9 +459,7 @@
             "id": 2,
             "title": "Document environment variables with explanations and usage examples",
             "description": "Add detailed documentation for SPECK_HOME, DOCKER_HOST, and RUST_LOG environment variables including their purposes and usage contexts",
-            "dependencies": [
-              1
-            ],
+            "dependencies": [],
             "details": "Provide clear explanations for each environment variable, including their expected values, default behaviors, and practical usage scenarios. Include code examples where appropriate to demonstrate proper configuration.",
             "status": "pending",
             "testStrategy": null,
@@ -516,9 +469,7 @@
             "id": 3,
             "title": "Add shell completion installation instructions and verification",
             "description": "Include zsh and fish shell completion installation one-liners with testing verification procedures",
-            "dependencies": [
-              1
-            ],
+            "dependencies": [],
             "details": "Add comprehensive shell completion setup instructions for both zsh and fish shells, including the exact one-liner commands. Implement verification steps to ensure completions work correctly after installation.",
             "status": "pending",
             "testStrategy": null,
@@ -538,6 +489,277 @@
       "completedCount": 10,
       "tags": [
         "errors"
+      ],
+      "created": "2026-10-11T11:14:16.552Z",
+      "description": "Tasks for errors context"
+    }
+  },
+  "v1_4-daily-driver": {
+    "tasks": [
+      {
+        "id": "1",
+        "title": "[EGRESS-02] Sweep closed smoltcp sockets from the SocketSet",
+        "description": "Closed/TimeWait sockets are never removed (no sockets.remove in crates/speck-net/src); each connection leaks ~2MB and grows the 5ms scan.",
+        "details": "Files: crates/speck-net/src/{lib.rs,reorigin.rs,port_publish.rs,tcp_listener.rs}. After close(), remove the handle once state is Closed/TimeWait (periodic sweep in the poll loop), drop bridge entry. Verify: unit test opening/closing N connections asserts SocketSet size stays flat; cargo test -p speck-net.",
+        "testStrategy": "",
+        "status": "done",
+        "dependencies": [],
+        "priority": "high",
+        "subtasks": [],
+        "updatedAt": "2026-10-11T11:24:57.970Z"
+      },
+      {
+        "id": "2",
+        "title": "[EGRESS-01] Re-originate guest TCP to any destination port",
+        "description": "Only ports 443 (8) and 80 (4) have smoltcp listeners (speck-net/src/lib.rs:108-115); ssh/DB/ES/custom ports fail.",
+        "details": "Approach: sniff inbound guest frames for TCP SYN to a port without a listener and create a listener on demand before smoltcp processes the frame (any_ip already covers all dst IPs). Keep 443/80 pre-warm. Verify: scripts/egress-smoke.sh TCP 22/5432/9200/8443/27017 PASS; conformance-smoke 26/26.",
+        "testStrategy": "",
+        "status": "done",
+        "dependencies": [
+          "1"
+        ],
+        "priority": "high",
+        "subtasks": [],
+        "updatedAt": "2026-10-11T11:24:57.973Z"
+      },
+      {
+        "id": "3",
+        "title": "[EGRESS-03] RST on host connect failure + bounded connect timeout",
+        "description": "Failed host connect closes guest socket with FIN after handshake; no connect timeout (reorigin.rs:180-183,257).",
+        "details": "Use tokio::time::timeout around TcpStream::connect (~10s), socket.abort() (RST) instead of close() on failure and for 127.x/gateway destinations (reorigin.rs:233-241). Verify: unit test; container nc to a refusing host port fails fast.",
+        "testStrategy": "",
+        "status": "in-progress",
+        "dependencies": [
+          "2"
+        ],
+        "priority": "high",
+        "subtasks": [],
+        "updatedAt": "2026-10-11T11:24:59.509Z"
+      },
+      {
+        "id": "4",
+        "title": "[EGRESS-04] UDP re-origination via 5-tuple NAT table",
+        "description": "No guest UDP egress except DHCP and vsock DNS; NTP/QUIC/any UDP fails.",
+        "details": "New crates/speck-net/src/udp_reorigin.rs: per-5-tuple flows, host tokio UdpSocket per flow, idle timeout ~60s, cap on flows. Exclude the DNS path. Verify: egress-smoke udp 123 (ntp) PASS + unit tests.",
+        "testStrategy": "",
+        "status": "pending",
+        "dependencies": [
+          "2"
+        ],
+        "priority": "high",
+        "subtasks": []
+      },
+      {
+        "id": "5",
+        "title": "[EGRESS-06] Stop faking ICMP echo replies",
+        "description": "Netstack answers pings to any IP locally in ~0.2ms (even 192.0.2.1), so container ping health checks lie.",
+        "details": "Find the smoltcp auto-reply (any_ip + iface ICMP echo). Forward via unprivileged host ICMP datagram socket (SOCK_DGRAM IPPROTO_ICMP, no root on macOS) or drop. Verify: egress-smoke 'icmp not faked: ok'.",
+        "testStrategy": "",
+        "status": "pending",
+        "dependencies": [
+          "2"
+        ],
+        "priority": "medium",
+        "subtasks": []
+      },
+      {
+        "id": "6",
+        "title": "[EGRESS-05] Event-driven netstack poll loop",
+        "description": "Poll loop wakes every 5ms forever (lib.rs:119) - constant CPU/battery cost; per-frame Vec allocations.",
+        "details": "Use iface.poll_delay() for the timeout, wake on fd readiness and host bridge readiness; reuse buffers. Verify: idle CPU of spk near 0; no regression in egress-smoke/conformance or large docker pull throughput.",
+        "testStrategy": "",
+        "status": "pending",
+        "dependencies": [
+          "3",
+          "4"
+        ],
+        "priority": "medium",
+        "subtasks": []
+      },
+      {
+        "id": "7",
+        "title": "[OPS-04] Publish initrd release matching HEAD guest",
+        "description": "Public initrd-1.3.0 (2026-07-09) predates the transparent proxy and Phase 25; a clean install on another Mac gets a mismatched guest.",
+        "details": "Build initrd from the HEAD guest, publish initrd-1.4.0 GitHub release, bump INITRD_VERSION in crates/speck-cli/src/commands/up.rs, release spk. Verify: fresh SPECK_HOME on dev Mac, spk up --wait, conformance-smoke 26/26.",
+        "testStrategy": "",
+        "status": "pending",
+        "dependencies": [],
+        "priority": "high",
+        "subtasks": []
+      },
+      {
+        "id": "8",
+        "title": "[M0] Corporate Mac baseline (manual, Piotr)",
+        "description": "Run docs/manual-testing.md M0 on the work Mac: scutil --proxy, spk doctor, egress-smoke with/without corporate CA, Colima comparison.",
+        "details": "Owner task. Paste the results table + scutil --proxy output into this task (task-master update-task). Decides whether TLS-04 (explicit proxy/PAC) is needed.",
+        "testStrategy": "",
+        "status": "pending",
+        "dependencies": [],
+        "priority": "high",
+        "subtasks": []
+      },
+      {
+        "id": "9",
+        "title": "[TLS-01] Fix guest CA injection (survive update-ca-certificates)",
+        "description": "vminitd appends certs to ca-certificates.crt then runs update-ca-certificates --fresh which regenerates the bundle and drops them (vminitd.rs:860-930).",
+        "details": "Write each cert to /usr/local/share/ca-certificates/<hash>.crt and run update-ca-certificates without --fresh. Verify: test via fs seam if possible; live: cert from config.yaml ca.extra_certs present in the guest bundle.",
+        "testStrategy": "",
+        "status": "pending",
+        "dependencies": [],
+        "priority": "high",
+        "subtasks": []
+      },
+      {
+        "id": "10",
+        "title": "[TLS-02] Auto-export Keychain trusted roots to the guest",
+        "description": "Corporate TLS-inspection CA must currently be listed manually in config.yaml.",
+        "details": "On spk up, export admin/system-trusted roots (security find-certificate -a -p + trust settings) into the ca-certs dir alongside extra_certs; config opt-out ca.keychain: false. Verify: unit test of PEM parsing/dedup; manual on work Mac.",
+        "testStrategy": "",
+        "status": "pending",
+        "dependencies": [
+          "9"
+        ],
+        "priority": "medium",
+        "subtasks": []
+      },
+      {
+        "id": "11",
+        "title": "[TLS-03] Opt-in CA bundle injection into containers",
+        "description": "Containers do not trust the corporate CA, so apk/pip/curl fail behind TLS inspection.",
+        "details": "In the allowlisted POST /containers/create middleware (D-21 compliant) add a read-only bind of the guest CA bundle + SSL_CERT_FILE env when config ca.inject_into_containers: true. Verify: middleware unit test; manual apk add behind TLS proxy.",
+        "testStrategy": "",
+        "status": "pending",
+        "dependencies": [
+          "9"
+        ],
+        "priority": "medium",
+        "subtasks": []
+      },
+      {
+        "id": "12",
+        "title": "[TLS-04] Explicit proxy / PAC propagation (conditional on M0)",
+        "description": "If M0 shows an explicit proxy/PAC, guest dockerd/BuildKit/asset downloads need HTTP(S)_PROXY/NO_PROXY.",
+        "details": "Read State:/Network/Global/Proxies from SCDynamicStore, pass proxy env to guest dockerd via vminitd, curl assets with proxy. Cancel this task if M0 shows transparent interception only.",
+        "testStrategy": "",
+        "status": "pending",
+        "dependencies": [
+          "8"
+        ],
+        "priority": "medium",
+        "subtasks": []
+      },
+      {
+        "id": "13",
+        "title": "[RES-01] Daemon exits when the VM stops or errors",
+        "description": "run_up waits only for SIGINT/SIGTERM (up.rs:~880); VM death leaves a 'running' daemon and launchd KeepAlive never fires.",
+        "details": "Forward delegate stop/error events (speck-vz delegate.rs, vm_thread.rs apply_delegate_event) to a channel, select on it in run_up, exit non-zero. Add ThrottleInterval to the LaunchAgent plist. Verify: unit test; manual kill VM -> launchd restarts Speck.",
+        "testStrategy": "",
+        "status": "pending",
+        "dependencies": [],
+        "priority": "high",
+        "subtasks": []
+      },
+      {
+        "id": "14",
+        "title": "[RES-02] Supervise and restart netstack + DNS vsock",
+        "description": "Netstack exit is only logged (up.rs:783); one unprompted exit on 2026-08-18 left networking dead.",
+        "details": "Restart loop with backoff that reconnects the DNS vsock and recreates SpeckNet; if restart fails, exit via the RES-01 path. Verify: test with injected netstack error.",
+        "testStrategy": "",
+        "status": "pending",
+        "dependencies": [
+          "13"
+        ],
+        "priority": "high",
+        "subtasks": []
+      },
+      {
+        "id": "15",
+        "title": "[RES-03] Guest clock resync + stale bridge drop after sleep/wake",
+        "description": "No power observer; guest clock drifts after lid close, breaking TLS and AWS SigV4.",
+        "details": "IORegisterForSystemPower observer on host; on wake send a settimeofday RPC to vminitd, drop stale reorigin bridges. Verify: manual M2 sleep 10min -> guest date within 2s of host.",
+        "testStrategy": "",
+        "status": "pending",
+        "dependencies": [
+          "13"
+        ],
+        "priority": "high",
+        "subtasks": []
+      },
+      {
+        "id": "16",
+        "title": "[RES-04] DNS proxy: all record types, concurrency, TCP fallback",
+        "description": "Only A/AAAA answered (dns.rs:233-300), others NODATA; single blocking thread (dns.rs:80).",
+        "details": "Forward raw queries for other types to the resolver chosen by ResolverTable (or system default), per-query workers, retry over TCP on TC bit. Verify: egress-smoke dns TXT/SRV/MX PASS; unit tests with mock resolver.",
+        "testStrategy": "",
+        "status": "pending",
+        "dependencies": [],
+        "priority": "high",
+        "subtasks": []
+      },
+      {
+        "id": "17",
+        "title": "[OPS-01] Proxy robustness: lock poisoning, bounded forwards, ::1 publish",
+        "description": "expect('lock poisoned') in speck-dockerd proxy.rs and restart_503.rs:59; unbounded thread-per-connection port forwards; publish only on 127.0.0.1.",
+        "details": "Use unwrap_or_else(|e| e.into_inner()); semaphore on forward threads; also bind ::1. Verify: cargo test -p speck-dockerd; curl http://[::1]:<port>.",
+        "testStrategy": "",
+        "status": "pending",
+        "dependencies": [],
+        "priority": "medium",
+        "subtasks": []
+      },
+      {
+        "id": "18",
+        "title": "[OPS-02] Guest: dockerd respawn backoff + implement sysctl_write",
+        "description": "dockerd respawned with no backoff; vminitd logs 'sysctl_write not yet implemented' so sysctl tuning is a no-op.",
+        "details": "Backoff in vminitd spawn_dockerd_with_restart; implement sysctl_write via /proc/sys writes in LibcSyscalls. Verify: mock tests; console.log no longer shows the sysctl error.",
+        "testStrategy": "",
+        "status": "pending",
+        "dependencies": [],
+        "priority": "medium",
+        "subtasks": []
+      },
+      {
+        "id": "19",
+        "title": "[OPS-03] spk doctor: binary/asset drift, guest CA, guest clock skew",
+        "description": "Stale host binary vs guest assets went unnoticed for months; no check for CA or clock.",
+        "details": "Add doctor checks for host/guest generation mismatch, CA present in guest, guest clock skew, egress port probe. Verify: doctor unit tests + live run.",
+        "testStrategy": "",
+        "status": "pending",
+        "dependencies": [
+          "7"
+        ],
+        "priority": "low",
+        "subtasks": []
+      },
+      {
+        "id": "20",
+        "title": "[DOG-01] Dogfood week on the corporate Mac",
+        "description": "Speck as the only runtime for 5 working days; exit criterion 0 manual DNS/proxy resets.",
+        "details": "Follow docs/manual-testing.md M1-M3. Log every incident as a new task with a regression test.",
+        "testStrategy": "",
+        "status": "pending",
+        "dependencies": [
+          "2",
+          "3",
+          "4",
+          "7",
+          "9",
+          "13",
+          "14",
+          "15",
+          "16"
+        ],
+        "priority": "high",
+        "subtasks": []
+      }
+    ],
+    "metadata": {
+      "version": "1.0.0",
+      "lastModified": "2026-10-11T11:24:59.509Z",
+      "taskCount": 20,
+      "completedCount": 2,
+      "tags": [
+        "v1_4-daily-driver"
       ]
     }
   }
