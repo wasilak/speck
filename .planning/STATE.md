@@ -1,70 +1,67 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.3
-milestone_name: Transparent Proxy Restoration
-status: completed
-stopped_at: Phase 25 complete (incl. gap closure 25-03)
-last_updated: "2026-07-17T14:15:00.000Z"
-last_activity: 2026-07-17 -- Completed Phase 25 (Correct Guest Boot), incl. gap-closure plan 25-03 (container egress)
+milestone: v1.4
+milestone_name: Daily Driver
+status: in_progress
+stopped_at: Phase 0 hygiene done; Phase 26 not yet planned
+last_updated: "2026-10-11T12:00:00.000Z"
+last_activity: 2026-10-11 -- Closed v1.3, opened v1.4 Daily Driver, egress baseline captured
 progress:
-  total_phases: 6
-  completed_phases: 4
-  total_plans: 12
-  completed_plans: 12
-  percent: 100
+  total_phases: 5
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
-# State — Milestone v1.3 Transparent Proxy Restoration
+# State — Milestone v1.4 Daily Driver
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-07-09)
+See: .planning/PROJECT.md (updated 2026-10-11)
 
 **Core value:** A container runtime on Apple Silicon that never loses the network — micro-VMs inherit the host's routing/DNS live, surviving corporate VPNs and Cloudflare WARP where Docker Desktop fails.
-**Current focus:** Phase 25 COMPLETE — all planned phases done
+**Current focus:** Phase 26 (General Egress) — needs plan-phase
 
 ## Current Position
 
-Phase: 25 (Correct Guest Boot) — COMPLETE
-Plan: 3/3 complete (25-01, 25-02, 25-03 gap closure)
-Status: Phase 25 complete
-Last activity: 2026-07-17 -- Completed Phase 25 (Correct Guest Boot)
+Phase: 26 (General Egress) — not started
+Plan: none yet
+Status: Phase 0 (hygiene + baseline) complete
+Last activity: 2026-10-11 -- v1.3 closed; HEAD build installed; conformance 26/26; egress baseline captured
 
-Progress: [██████████] 100%
+Progress: [░░░░░░░░░░] 0%
 
-## Phase 25 Verification Results
+## Phase 0 Results (2026-10-11)
 
-- BOOT-01 fully verified live: 9/9 must-haves, zero `rootfs`-fstype mounts, `docker exec`/`docker run` mount-namespace parity (single + concurrent + fresh boot), `docker buildx create --driver docker-container` + `docker buildx build --load` succeed end-to-end
-- Gap-closure (25-03): `--iptables=true` for guest-internal `docker0` NAT egress — closes the buildx-build networking gap without touching `crates/speck-net/` or the host↔VM networking boundary (LOCKED invariant preserved)
-- D-10 baseline: `cargo test --workspace` 392 passed 0 failed, `cargo clippy --workspace --all-targets -Dwarnings` clean, `scripts/conformance-smoke.sh` 26/26
+- Installed `~/bin/spk` was a stale 2026-07-16 build (missing `c725d50` WouldBlock fix and Phase 25) while guest initrd was from HEAD. Rebuilt release from `be27106`, signed (`cargo xtask sign release`), installed, restarted. **Gotcha:** `cp` over the signed binary in place → SIGKILL (rc=137) on launch; `rm` first, then copy.
+- `scripts/conformance-smoke.sh`: 26/26 on the HEAD build.
+- Egress baseline (`scripts/egress-smoke.sh`, new): 5 passed / 9 failed. PASS: TCP 443/80, DNS A, https wget, `apk add`. FAIL: TCP 22/5432/9200/8443/27017, UDP 123, DNS TXT/SRV/MX. This is the Phase 26/28 red baseline.
+- M0 corporate-Mac baseline: **pending (owner, manual)** — decides whether TLS-04 (explicit proxy/PAC) is needed.
 
-## Milestone v1.3 Phase Overview
+## Milestone v1.4 Phase Overview
 
 | Phase | Name | Requirements | Status |
 |-------|------|--------------|--------|
-| 20 | Transparent Proxy Cutover | PROXY-01, PROXY-02, PROXY-03 | Complete |
-| 21 | Create Interception Middleware | MW-01, MW-02 | Complete |
-| 22 | Response Rewriting & Restart Gate | MW-03, MW-04 | Complete |
-| 23 | SpeckDockerd Retirement | PROXY-04 | Complete |
-| 24 | Conformance Exit Gate | GATE-01, GATE-02, GATE-03 | Complete |
-| 25 | Correct Guest Boot | BOOT-01 | Complete |
+| 26 | General Egress | EGRESS-01..06, OPS-04 | Not started |
+| 27 | Corporate TLS & Proxy | TLS-01..04 | Not started |
+| 28 | Resilience | RES-01..04 | Not started |
+| 29 | Operational Polish | OPS-01..03 | Not started |
+| 30 | Dogfood Gate | DOG-01 | Not started |
 
-## Phase 24 Verification Results
+## 2026-10-11 Review Findings (source for v1.4)
 
-- `scripts/conformance-smoke.sh`: extended with build/push/pull round-trip against local registry
-  - 20 baseline checks + 6 build/push/pull checks = 26 total checks
-  - Script syntax validated with `bash -n`
-- Workspace build: `cargo check --workspace` — PASS
-- Clippy: `cargo clippy -p speck-dockerd` — PASS
-- Unit tests: `cargo test -p speck-dockerd` — 36 passed, 20 ignored
-
-## Performance Metrics
-
-| Metric | v1.1 | v1.2 | v1.3 |
-|--------|------|------|------|
-| Phases | 8 | 7 | 5 |
-| Plans | 26 | 32 | 5 |
-| Timeline | 5 days | 3 days | 3 days |
+- Egress only TCP 443/80 — `crates/speck-net/src/lib.rs:108-115`; no UDP/ICMP/IPv6
+- smoltcp sockets never removed from SocketSet (no `sockets.remove` in `crates/speck-net/src`)
+- CA injection: `vminitd.rs:887-918` appends to `ca-certificates.crt`, then `update-ca-certificates --fresh` regenerates it — appended CAs are lost; CA never reaches containers/BuildKit
+- `run_up` waits only for SIGINT/SIGTERM (`up.rs:~880`); VM death and netstack exit (`up.rs:783`, 85 log hits, one unprompted on 2026-08-18) are only logged
+- Reorigin: no connect timeout, `close()` instead of RST (`reorigin.rs:180-183,257`), 256-bridge cap, 5 ms busy poll
+- DNS: A/AAAA only, single-threaded (`dns.rs:80`), no TCP fallback
+- `.expect("lock poisoned")` across `speck-dockerd/src/proxy.rs` and `restart_503.rs:59`; unbounded thread-per-connection forwards; publish only on 127.0.0.1
+- Guest: dockerd respawn without backoff; `sysctl_write not yet implemented` → sysctl tuning is a silent no-op
+- Distribution gap: public `initrd-1.3.0` (2026-07-09) predates the transparent proxy and Phase 25; the dev Mac runs a hand-repacked initrd → OPS-04, pulled into Phase 26
+- ICMP echo is faked by the netstack: pings to any IP (even 192.0.2.1 / 10.255.255.1) answer in ~0.2 ms → EGRESS-06
+- `SO_SNDBUF/SO_RCVBUF` EINVAL at boot is a harmless race on the READY probe (port 9000), not on data fds
 
 ## Accumulated Context
 
@@ -98,7 +95,8 @@ Progress: [██████████] 100%
 
 ### Blockers/Concerns
 
-- Live Phase 20 conformance blocked locally: `spk restart` rejects an unexpected `120` argument and direct `spk up --wait` fails `launchctl bootstrap`; `spk doctor` still reports missing virtualization entitlement after `cargo xtask codesign-dev`.
+- Corporate-network behaviour can only be verified manually on the owner's work Mac (dev Mac has no WARP/proxy). M0 checklist must run before Phase 27 planning.
+- GSD slash commands were not installed in the 2026-10-11 session; Phase 0 edits were made directly with explicit owner approval.
 
 ## Deferred Items
 
@@ -107,9 +105,9 @@ Carried forward at v1.2 close (2026-07-09) and requirements definition (2026-07-
 | Category | Item | Status |
 |----------|------|--------|
 | deferred | Developer ID signing + notarization + Homebrew Cask | Requires Apple Developer Program |
-| deferred | Broader guest-outbound port coverage beyond 443/80 in reorigin | Future |
+| promoted | Broader guest-outbound port coverage beyond 443/80 in reorigin | → v1.4 EGRESS-01 |
 | deferred | K3s/CRI integration prototype | Future |
-| deferred | Listener buffer memory tuning (12 × 2MB smoltcp listeners) | Future |
+| promoted | Listener buffer memory tuning (12 × 2MB smoltcp listeners) | → v1.4 EGRESS-02 |
 
 ### Roadmap Evolution
 
@@ -117,8 +115,8 @@ Carried forward at v1.2 close (2026-07-09) and requirements definition (2026-07-
 
 ## Session Continuity
 
-Last session: 2026-07-17T07:16:39.155Z
-Stopped at: Phase 25 context gathered
-Resume file: .planning/phases/25-correct-guest-boot-real-switch-root-ms-move-based-mount-name/25-CONTEXT.md
+Last session: 2026-10-11
+Stopped at: Phase 0 complete; v1.4 roadmap written
+Resume file: None
 
-**To resume:** Phase 25 (Correct Guest Boot) added — needs discuss-phase/plan-phase before execution given prior kernel-panic history on this exact code path.
+**To resume:** plan Phase 26 (General Egress). In parallel the owner runs the M0 checklist (`docs/manual-testing.md`) on the corporate Mac.

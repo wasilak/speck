@@ -6,25 +6,25 @@ Ultra-fast, minimalist container runtime for Apple Silicon macOS. Runs container
 
 ## Current State
 
-**Shipped v1.2 Hardened Runtime** (2026-07-07 → 2026-07-09): 7 phases, 32 plans, 55 tasks, ~50 commits.
+**Shipped v1.3 Transparent Proxy Restoration** (2026-07-12 → 2026-07-17, formally closed 2026-10-11): 6 phases (20–25), 13 plans.
 
-v1.2 delivered hardened test coverage for the core DNS/networking stack (DNS proxy unit tests, vminitd mount simulation, unsafe env mutation sweep), Docker API conformance (9/9 tests passing with live container lifecycle: pull → create → start → exit), daemon lifecycle polish (reliable stop/restart, port/exec e2e), ad-hoc signed development distribution artifacts, and a FIFO-backed container stdout/stderr log relay with live follow-mode streaming.
+v1.3 made `speck.sock` a transparent byte proxy to the real guest dockerd (D-21) with a thin allowlisted middleware, retired the SpeckDockerd reimplementation, and replaced the chroot-only guest boot with an MS_MOVE `switch_root` (D-22). Conformance gate: 26/26 (re-verified 2026-10-11 on a HEAD build).
 
-**Known deferred:** Developer ID signing + notarization + Cask (requires Apple Developer Program). Verification gaps from Phase 17 acknowledged as resolved by subsequent gap-closure phases.
+**Known deferred:** Developer ID signing + notarization + Cask (requires Apple Developer Program).
 
-## Current Milestone: v1.3 Transparent Proxy Restoration
+## Current Milestone: v1.4 Daily Driver
 
-**Goal:** Implement locked decision D-21 — `speck.sock` becomes a transparent byte proxy to the real dockerd running inside the guest; SpeckDockerd shrinks from a Docker API reimplementation to a thin allowlisted middleware.
+**Goal:** Speck replaces Colima as the only container runtime on the owner's corporate Mac (Cloudflare WARP + TLS-inspecting proxy + corporate split-DNS) — zero manual DNS/proxy resets for 5 working days.
+
+**Why now (2026-10-11 review):** the transport and Docker API layers are solid, but the network data path is not daily-driver ready. Live baseline from a container: TCP 80/443 PASS; TCP 22/5432/9200/8443 FAIL; DNS TXT/SRV empty. Code review also found leaked smoltcp sockets, broken CA injection (`update-ca-certificates --fresh` drops appended certs), no VM/netstack death detection, no UDP egress, and no explicit-proxy/PAC support.
 
 **Target features:**
-- Docker API served by transparent proxy to guest dockerd (`/run/speck/dockerd.sock`) over the hardened vsock bridge
-- Middleware allowlist only: container-create bind translation (VirtioFS), port-publish tracking for the host netstack, HostIp rewriting, 503 restart gate
-- Hijacked/upgraded streams (attach/exec) pass through byte-for-byte
-- Exit gate: `scripts/conformance-smoke.sh` 18/18 (baseline 2026-07-11: 8/18) + intact `spk down/up` launchd cycle
+- All-port TCP + UDP egress re-originated from the host (Phase 26)
+- Corporate TLS: working CA injection, Keychain trust export, CA delivery to containers; explicit proxy/PAC if the corporate baseline needs it (Phase 27)
+- Resilience: daemon exits on VM death, netstack supervision, sleep/wake clock resync, full DNS record types (Phase 28)
+- Operational polish (Phase 29) and a one-week dogfood gate on the corporate Mac (Phase 30)
 
-**Context (2026-07-09 → 2026-07-11 debugging round):** three systemic transport bugs fixed with regression tests — netstack socketpair buffers (1.7KB/s pulls), control-socket probe deadlock (down/status/doctor hangs), VZ vsock 8KB data loss (docker ps h2 errors). The remaining conformance failures are all consequences of the CONF-01 reimplementation drift that D-21 reverses.
-
-**Out of scope for v1.3:** Developer ID distribution, K3s/CRI, GUI.
+**Out of scope for v1.4:** Developer ID distribution, K3s/CRI, GUI.
 
 ## Constraints
 
@@ -85,10 +85,14 @@ v1.2 delivered hardened test coverage for the core DNS/networking stack (DNS pro
 - ✓ DAEMON-DOWN: `spk down` reliable outside launchd — v1.2
 - ✓ PORT-E2E: Port publishing verified end-to-end — v1.2
 - ✓ EXEC-E2E: `spk exec` verified end-to-end — v1.2
+- ✓ PROXY-01–04: Docker API = transparent byte proxy to guest dockerd; SpeckDockerd handlers retired — v1.3
+- ✓ MW-01–04: bind translation, port publish tracking, HostIp rewriting, 503 restart gate — v1.3
+- ✓ GATE-01–03: conformance-smoke 26/26 incl. build/push/pull round-trip; down/up/restart cycle — v1.3
+- ✓ BOOT-01: MS_MOVE-based `switch_root`; `docker exec` namespace parity; `buildx --driver docker-container` — v1.3
 
 ### Active
 
-- **BOOT-01:** vminitd performs a genuine `switch_root` (MS_MOVE-based mount namespace relocation — the standard busybox/systemd/dracut pattern) instead of `chroot`-only, so the guest's mount namespace topology is correct from handoff to containerd, matching what Colima/Lima achieve by booting a real distro. `docker exec` into any in-VM container must land in the correct namespace; `docker buildx create --driver docker-container` must succeed end-to-end. Tracked as Phase 25.
+See `.planning/REQUIREMENTS.md` (v1.4 Daily Driver): EGRESS, TLS, RES, OPS, DOG requirement groups.
 
 ### Out of Scope
 
@@ -108,7 +112,8 @@ v1.2 delivered hardened test coverage for the core DNS/networking stack (DNS pro
 **Codebase:** ~17,000 lines of Rust across `speck-vz`, `speck-net`, `speck-cli`, `speck-core`, `speck-guest`.
 **State:** `spk up` starts a background daemon; containers run end-to-end with Docker-compatible API; DNS survives VPN toggles; 9/9 conformance tests pass; daemon start/stop/restart works; development distribution via ad-hoc signed artifacts.
 **Known limitations:** Developer ID signing + notarization + Homebrew Cask not yet delivered (requires Apple Developer Program). `spk restart` is stop+start subprocess, not in-process VM restart.
-**Next:** Planning v1.3.
+**Shipped v1.3** (2026-07-12 → 2026-07-17): 6 phases, 13 plans. Transparent proxy + MS_MOVE switch_root; conformance 26/26.
+**Next:** v1.4 Daily Driver (Phases 26–30), started 2026-10-11.
 
 ## Decisions
 
@@ -135,7 +140,7 @@ v1.2 delivered hardened test coverage for the core DNS/networking stack (DNS pro
 | D-19 | Containerd transfer service for image pull (with unpack) — works | ✓ Good — container lifecycle works end-to-end | v1.2 |
 | D-20 | Ad-hoc release distribution only; Developer ID deferred | ✓ Good — ships dev artifact pipeline; DEVID requires Apple Program | v1.2 |
 | D-21 | **LOCKED:** Docker API = transparent byte proxy to guest dockerd + thin allowlisted middleware (binds/ports/HostIp/503 only). Reverses v1.2 CONF-01 (SpeckDockerd endpoint reimplementation against containerd), which caused the docker CLI 29.x conformance bug pile. Conformance gate: `scripts/conformance-smoke.sh` must pass. See CLAUDE.md "Architecture Invariants". | ✗ CONF-01 drifted — corrected | v1.3 |
-| D-22 | Reverses the prior caution against touching `switch_root_to_rootfs` (commit `31f56a12`, which replaced a failing `MS_MOVE` attempt with `chroot`-only). Container-runtime correctness (`docker exec`, `buildx docker-container`) requires a real `switch_root` matching standard Linux boot semantics — parity with what Colima/Lima achieve. `pivot_root` is ruled out (kernel forbids it on the anonymous initramfs rootfs, confirmed via live kernel panic + full revert, debug session `buildx-http2-frame-too-large`); `MS_MOVE` is the correct mechanism and must be retried with its prior failure root-caused first. Tracked as Phase 25 (BOOT-01). | Pending — Phase 25 not yet planned | v1.4(?) |
+| D-22 | Reverses the prior caution against touching `switch_root_to_rootfs` (commit `31f56a12`, which replaced a failing `MS_MOVE` attempt with `chroot`-only). Container-runtime correctness (`docker exec`, `buildx docker-container`) requires a real `switch_root` matching standard Linux boot semantics — parity with what Colima/Lima achieve. `pivot_root` is ruled out (kernel forbids it on the anonymous initramfs rootfs, confirmed via live kernel panic + full revert, debug session `buildx-http2-frame-too-large`); `MS_MOVE` is the correct mechanism and must be retried with its prior failure root-caused first. Tracked as Phase 25 (BOOT-01). | ✓ Done — Phase 25 (MS_MOVE switch_root, live-verified 9/9) | v1.3 |
 
 ## Evolution
 
@@ -156,4 +161,4 @@ This document evolves at phase transitions and milestone boundaries.
 
 ---
 
-*Last updated: 2026-07-09 after v1.2 milestone*
+*Last updated: 2026-10-11 after v1.3 close, v1.4 Daily Driver started*

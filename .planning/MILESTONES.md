@@ -1,5 +1,22 @@
 # Milestones
 
+## v1.3 Transparent Proxy Restoration (Shipped: 2026-07-17, formally closed 2026-10-11)
+
+**Phases completed:** 6 phases (20–25), 13 plans
+
+**Key accomplishments:**
+
+- `speck.sock` is a transparent byte proxy to the real guest dockerd (D-21); hijacked/upgraded streams pass through byte-for-byte
+- Thin allowlisted middleware only: bind translation to VirtioFS, published-port tracking/cleanup, `HostIp` rewriting, 503 restart gate
+- SpeckDockerd containerd-backed handlers retired — `speck-dockerd` reduced to error/middleware/proxy/server
+- Conformance gate extended to build/push/pull round-trip against a local registry: 26/26
+- WouldBlock-safe host↔guest TCP bridge (`c725d50`) — fixes HTTP/2 frame corruption on published ports (buildx `--driver remote`)
+- Phase 25 (BOOT-01, D-22): MS_MOVE-based `switch_root` replaces chroot-only boot; `docker exec` namespace parity and `buildx --driver docker-container` work; guest `--iptables=true` for container egress
+
+**Archives:** `milestones/v1.3-ROADMAP.md`, `milestones/v1.3-REQUIREMENTS.md`
+
+---
+
 ## v1.2 Hardened Runtime (Shipped: 2026-07-09)
 
 **Phases completed:** 7 phases, 32 plans, 55 tasks
