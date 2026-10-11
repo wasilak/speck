@@ -941,7 +941,11 @@ mod linux {
     /// dockerd now runs directly in the switched root (/) — no chroot needed.
     fn spawn_dockerd_with_restart(dockerd_bin: &'static str) {
         std::thread::spawn(move || {
+            // Exponential backoff for a crash-looping dockerd, reset once it
+            // has stayed up for a minute.
+            let mut backoff = std::time::Duration::from_secs(1);
             loop {
+                let started = std::time::Instant::now();
                 let mut cmd = std::process::Command::new(dockerd_bin);
                 cmd.args([
                     "--host",
@@ -1027,7 +1031,12 @@ mod linux {
                         eprintln!("vminitd: failed to spawn dockerd: {e} — retrying");
                     }
                 }
-                std::thread::sleep(std::time::Duration::from_secs(1));
+                if started.elapsed() > std::time::Duration::from_secs(60) {
+                    backoff = std::time::Duration::from_secs(1);
+                }
+                eprintln!("vminitd: restarting dockerd in {}s", backoff.as_secs());
+                std::thread::sleep(backoff);
+                backoff = (backoff * 2).min(std::time::Duration::from_secs(30));
             }
         });
     }

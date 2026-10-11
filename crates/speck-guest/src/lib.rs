@@ -85,11 +85,17 @@ impl Syscalls for LibcSyscalls {
         unsafe { libc::fchdir(fd) }
     }
 
-    fn sysctl_write(&self, _name: &str, _value: &str) -> Result<(), std::io::Error> {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::Unsupported,
-            "sysctl_write not yet implemented via libc",
-        ))
+    fn sysctl_write(&self, name: &str, value: &str) -> Result<(), std::io::Error> {
+        let path = format!("/proc/sys/{}", name.replace('.', "/"));
+        match std::fs::write(&path, value) {
+            // Knob absent from this kernel (e.g. unprivileged_userns_clone is a
+            // distro patch; upstream allows user namespaces by default).
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                eprintln!("vminitd: sysctl {name} not available on this kernel — skipped");
+                Ok(())
+            }
+            other => other,
+        }
     }
 
     fn grow_filesystem(&self, device: &str, mountpoint: &str) -> Result<(), std::io::Error> {
