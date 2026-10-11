@@ -869,17 +869,18 @@
         "description": "Users need colima's 'status -e/-j', 'list', 'version' and 'prune' equivalents to see what Speck is doing.",
         "details": "spk status: running state, CPUs/memory/disk (allocated + used), docker version, socket, docker context, uptime; --extended adds versions (spk, initrd, rootfs, kernel), guest memory/disk usage, network mode; --json for scripts. spk list (single instance, colima list columns). spk version (spk, docker server, initrd, rootfs). spk prune: delete cached downloaded assets not in use. Verify with unit tests for formatting and live runs.",
         "testStrategy": "",
-        "status": "pending",
+        "status": "done",
         "dependencies": [],
         "priority": "high",
-        "subtasks": []
+        "subtasks": [],
+        "updatedAt": "2026-10-11T14:51:26.050Z"
       }
     ],
     "metadata": {
       "version": "1.0.0",
-      "lastModified": "2026-10-11T14:46:38.865Z",
+      "lastModified": "2026-10-11T14:51:26.050Z",
       "taskCount": 29,
-      "completedCount": 23,
+      "completedCount": 24,
       "tags": [
         "v1_4-daily-driver"
       ]
