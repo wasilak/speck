@@ -570,13 +570,14 @@
         "description": "Poll loop wakes every 5ms forever (lib.rs:119) - constant CPU/battery cost; per-frame Vec allocations.",
         "details": "Use iface.poll_delay() for the timeout, wake on fd readiness and host bridge readiness; reuse buffers. Verify: idle CPU of spk near 0; no regression in egress-smoke/conformance or large docker pull throughput.",
         "testStrategy": "",
-        "status": "pending",
+        "status": "done",
         "dependencies": [
           "3",
           "4"
         ],
         "priority": "medium",
-        "subtasks": []
+        "subtasks": [],
+        "updatedAt": "2026-10-11T12:38:42.084Z"
       },
       {
         "id": "7",
@@ -787,9 +788,9 @@
     ],
     "metadata": {
       "version": "1.0.0",
-      "lastModified": "2026-10-11T12:33:07.479Z",
+      "lastModified": "2026-10-11T12:38:42.084Z",
       "taskCount": 22,
-      "completedCount": 12,
+      "completedCount": 13,
       "tags": [
         "v1_4-daily-driver"
       ]
