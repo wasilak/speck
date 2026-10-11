@@ -112,6 +112,8 @@ pub fn daemonize(speck_home: &Path, binary: &Path) -> anyhow::Result<()> {
     </dict>
     <key>KeepAlive</key>
     <true/>
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
     <key>RunAtLoad</key>
     <true/>
 </dict>
@@ -887,11 +889,60 @@ pub async fn run_up(
         _ = sigterm.recv() => {
             tracing::info!("SIGTERM received - shutting down");
         }
+        reason = wait_for_vm_failure(guest.clone(), speck_home.join("speck.sock")) => {
+            // Exit non-zero so launchd (KeepAlive) restarts Speck with a fresh
+            // VM, instead of a daemon that reports "running" with a dead VM.
+            tracing::error!(%reason, "VM is gone - exiting so launchd restarts Speck");
+            shutdown_gracefully(&guest, &ctrl_sock_path, speck_home).await?;
+            anyhow::bail!("VM is gone: {reason}");
+        }
     }
 
     shutdown_gracefully(&guest, &ctrl_sock_path, speck_home).await?;
 
     Ok(())
+}
+
+/// Liveness probe cadence and tolerance: the guest counts as dead after
+/// `LIVENESS_FAILURES` consecutive failed probes (~1 min).
+const LIVENESS_INTERVAL: Duration = Duration::from_secs(10);
+const LIVENESS_TIMEOUT: Duration = Duration::from_secs(10);
+const LIVENESS_FAILURES: u32 = 3;
+
+/// Resolve with a reason once the VM is gone: either VZ reported stop/error,
+/// or the guest stopped answering. The second case matters because a guest
+/// that halts or hangs (kernel panic, `reboot -f`) is not always reported by
+/// VZ, which would leave a daemon that says "running" with a dead VM.
+async fn wait_for_vm_failure(guest: Arc<speck_vz::Guest>, docker_sock: PathBuf) -> String {
+    let client = DockerClient::new(docker_sock);
+    let mut failures = 0;
+    loop {
+        tokio::time::sleep(LIVENESS_INTERVAL).await;
+        let g = Arc::clone(&guest);
+        let state = tokio::task::spawn_blocking(move || g.state())
+            .await
+            .unwrap_or(speck_core::VmState::Stopped);
+        if vm_has_exited(&state) {
+            return format!("VM state {state:?}");
+        }
+        let alive = tokio::time::timeout(LIVENESS_TIMEOUT, client.ping())
+            .await
+            .unwrap_or(false);
+        failures = if alive { 0 } else { failures + 1 };
+        if failures >= LIVENESS_FAILURES {
+            return format!("guest dockerd did not answer {failures} consecutive pings");
+        }
+        if failures > 0 {
+            tracing::warn!(failures, "guest liveness probe failed");
+        }
+    }
+}
+
+fn vm_has_exited(state: &speck_core::VmState) -> bool {
+    matches!(
+        state,
+        speck_core::VmState::Stopped | speck_core::VmState::Error(_)
+    )
 }
 
 async fn shutdown_gracefully(
@@ -956,6 +1007,17 @@ pub async fn wait_for_socket(sock_path: &std::path::Path, timeout_secs: u64) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_stopped_or_error_counts_as_vm_exit() {
+        use speck_core::VmState;
+        assert!(vm_has_exited(&VmState::Stopped));
+        assert!(vm_has_exited(&VmState::Error("boom".into())));
+        assert!(!vm_has_exited(&VmState::Running));
+        assert!(!vm_has_exited(&VmState::Starting));
+        assert!(!vm_has_exited(&VmState::Restarting));
+        assert!(!vm_has_exited(&VmState::Stopping));
+    }
 
     #[test]
     fn run_up_uses_spawn_blocking_for_vm_start_and_ready_wait() {
