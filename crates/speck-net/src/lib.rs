@@ -4,6 +4,7 @@ pub mod device;
 pub(crate) mod dhcp;
 pub mod dns;
 pub mod error;
+pub(crate) mod icmp_reorigin;
 pub mod interface;
 pub mod mtu;
 pub mod port_publish;
@@ -114,6 +115,7 @@ impl SpeckNet {
             // Host-first connects for guest SYNs (TCP to any destination port).
             let mut connector = connector::Connector::default();
             let mut udp = udp_reorigin::UdpReorigin::default();
+            let mut icmp = icmp_reorigin::IcmpReorigin::new(self.config.gateway, net.sockets_mut());
 
             // Poll loop
             loop {
@@ -127,8 +129,12 @@ impl SpeckNet {
                     let busy = reorigin.is_active()
                         || connector.is_active()
                         || udp.is_active()
+                        || icmp.is_active()
                         || port_publish.bridge_count() > 0;
-                    let wait = if busy { BUSY_POLL } else { IDLE_POLL };
+                    let base = if busy { BUSY_POLL } else { IDLE_POLL };
+                    // Never sleep past a deadline smoltcp has (e.g. the next
+                    // fragment of a reply larger than the MTU).
+                    let wait = net.poll_delay().map_or(base, |d| d.min(base));
                     match tokio::time::timeout(wait, async_fd.readable()).await {
                         Ok(Ok(mut guard)) => guard.clear_ready(),
                         Ok(Err(e)) => {
@@ -201,6 +207,9 @@ impl SpeckNet {
 
                 // Forward guest UDP to host flows and host replies back to the guest.
                 udp.poll(net.sockets_mut());
+
+                // Forward guest pings from the host and deliver the replies.
+                icmp.poll(net.sockets_mut());
 
                 // Free sockets of finished connections (bridges drop their
                 // handles in poll_bridges once a socket stops being open).

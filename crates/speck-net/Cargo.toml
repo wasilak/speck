@@ -14,7 +14,8 @@ libc = "0.2"
 thiserror = "2"
 # Default features minus "auto-icmp-echo-reply": with any_ip that feature
 # answers pings to every destination locally, so container ping health checks
-# lied (EGRESS-06). Guest ICMP is now simply not forwarded.
+# lied (EGRESS-06). Guest pings are forwarded from the host instead
+# (icmp_reorigin, EGRESS-07).
 smoltcp = { version = "0.13.1", default-features = false, features = [
     "std", "log", "medium-ethernet", "medium-ip", "medium-ieee802154",
     "phy-raw_socket", "phy-tuntap_interface", "proto-ipv4", "proto-dhcpv4",
@@ -22,6 +23,11 @@ smoltcp = { version = "0.13.1", default-features = false, features = [
     "proto-sixlowpan-fragmentation", "socket-raw", "socket-icmp", "socket-udp",
     "socket-tcp", "socket-dhcpv4", "socket-dns", "socket-mdns", "packetmeta-id",
     "async", "multicast",
+    # Defaults are 1500 bytes and one packet in reassembly: any fragmented IP
+    # packet above the MTU (large UDP datagrams, big pings) was silently
+    # dropped in both directions. Allow full 64 KB packets, 8 in flight.
+    "reassembly-buffer-size-65536", "reassembly-buffer-count-8",
+    "fragmentation-buffer-size-65536",
 ] }
 serde = { version = "1", features = ["derive"] }
 tracing = "0.1"

@@ -67,6 +67,14 @@ impl SmoltcpInterface {
         )
     }
 
+    /// How long smoltcp can wait before it must be polled again (pending
+    /// fragments of a large packet, TCP timers); `None` when nothing is due.
+    pub fn poll_delay(&mut self) -> Option<std::time::Duration> {
+        self.iface
+            .poll_delay(smoltcp::time::Instant::now(), &self.sockets)
+            .map(|d| std::time::Duration::from_micros(d.total_micros()))
+    }
+
     /// Read-only access to the interface.
     #[allow(dead_code)]
     pub fn iface(&self) -> &Interface {

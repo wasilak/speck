@@ -102,8 +102,13 @@ fi
 
 # ICMP: 192.0.2.1 (TEST-NET-1) must NOT answer. An answer means the netstack
 # fakes echo replies locally (EGRESS-06; it did until smoltcp's
-# auto-icmp-echo-reply was disabled). Guest ICMP is not forwarded.
+# auto-icmp-echo-reply was disabled).
 check "icmp not faked"            in_c "! ping -c1 -W3 192.0.2.1"
+# Real pings are forwarded from the host (EGRESS-07). 8000 bytes is fragmented
+# in both directions, which needs smoltcp reassembly/fragmentation >1500 B.
+check "icmp ping 1.1.1.1"         in_c "ping -c2 -W3 1.1.1.1"
+check "icmp ping fragmented (8000B)" in_c "ping -c2 -W3 -s 8000 1.1.1.1"
+check "icmp ping gateway"         in_c "ping -c1 -W2 172.16.0.1"
 
 docker rm -f "$C" >/dev/null 2>&1
 
