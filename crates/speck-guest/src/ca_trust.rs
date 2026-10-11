@@ -15,6 +15,10 @@ use std::path::Path;
 /// not enough: a later `update-ca-certificates` run regenerates `bundle` and
 /// would drop anything that only lived there.
 ///
+/// `local_dir` lives on the persistent guest rootfs, so `speck-*.crt` files
+/// not in the current set (a CA removed from the host config or Keychain) are
+/// deleted and the bundle rebuilt; a missing `src` counts as an empty set.
+///
 /// Returns the number of `.pem` files installed.
 pub fn install_ca_certs(
     src: &Path,
@@ -23,7 +27,7 @@ pub fn install_ca_certs(
     update: impl FnOnce() -> bool,
 ) -> std::io::Result<usize> {
     let mut pems = Vec::new();
-    for entry in std::fs::read_dir(src)?.flatten() {
+    for entry in std::fs::read_dir(src).into_iter().flatten().flatten() {
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) != Some("pem") {
             continue;
@@ -34,7 +38,12 @@ pub fn install_ca_certs(
         let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("ca");
         pems.push((format!("speck-{stem}.crt"), content));
     }
+
+    let removed = remove_stale(local_dir, &pems);
     if pems.is_empty() {
+        if removed > 0 {
+            let _ = update();
+        }
         return Ok(0);
     }
 
@@ -62,6 +71,22 @@ pub fn install_ca_certs(
         }
     }
     Ok(pems.len())
+}
+
+/// Delete `speck-*.crt` files in `local_dir` that are not in `pems`.
+fn remove_stale(local_dir: &Path, pems: &[(String, String)]) -> usize {
+    let mut removed = 0;
+    for entry in std::fs::read_dir(local_dir).into_iter().flatten().flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let ours = name.starts_with("speck-") && name.ends_with(".crt");
+        if ours
+            && !pems.iter().any(|(n, _)| *n == name)
+            && std::fs::remove_file(entry.path()).is_ok()
+        {
+            removed += 1;
+        }
+    }
+    removed
 }
 
 /// Base64 bodies of the certificates in a PEM text, whitespace removed.
@@ -141,6 +166,24 @@ mod tests {
 
         let text = std::fs::read_to_string(&bundle).unwrap();
         assert_eq!(text.matches("MIIBcorpCAfirst").count(), 1);
+    }
+
+    #[test]
+    fn removed_cas_are_dropped_from_the_trust_store() {
+        let (src, local, bundle) = dirs("revoke");
+        std::fs::write(&bundle, "SYSTEMROOTS\n").unwrap();
+        install_ca_certs(&src, &local, &bundle, || regenerate(&local, &bundle)).unwrap();
+        std::fs::write(local.join("unrelated.crt"), "keep").unwrap();
+
+        // The CA is no longer configured on the host; src is gone entirely.
+        std::fs::remove_dir_all(&src).unwrap();
+        let n = install_ca_certs(&src, &local, &bundle, || regenerate(&local, &bundle)).unwrap();
+
+        assert_eq!(n, 0);
+        assert!(!local.join("speck-corp.crt").exists());
+        assert!(local.join("unrelated.crt").exists());
+        let text = std::fs::read_to_string(&bundle).unwrap();
+        assert!(!normalize(&text).contains("MIIBcorpCAfirst"));
     }
 
     #[test]

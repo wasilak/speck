@@ -860,14 +860,9 @@ mod linux {
     /// `/usr/local/share/ca-certificates/`, runs `update-ca-certificates`, and
     /// appends any cert still missing from the bundle (see `ca_trust`).
     fn install_ca_certs() {
+        // Runs even when the share is absent, so CAs dropped on the host are
+        // removed from the persistent guest trust store.
         let ca_dir = std::path::Path::new("/var/lib/speck/ca-certs/");
-        if !ca_dir.is_dir() {
-            eprintln!(
-                "vminitd: CA certs directory {} not found — skipping install",
-                ca_dir.display()
-            );
-            return;
-        }
         let result = speck_guest::ca_trust::install_ca_certs(
             ca_dir,
             std::path::Path::new("/usr/local/share/ca-certificates"),
