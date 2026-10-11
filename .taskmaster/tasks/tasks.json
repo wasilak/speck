@@ -845,17 +845,18 @@
         "description": "Last binary release is v1.3.2 (July); Formula/spk.rb still points at 0.1.0.",
         "details": "Bump workspace version to 1.4.0, tag v1.4.0 (release.yml builds artifacts), update the formula url/sha256, verify brew install + spk start on a clean SPECK_HOME.",
         "testStrategy": "",
-        "status": "pending",
+        "status": "done",
         "dependencies": [],
         "priority": "high",
-        "subtasks": []
+        "subtasks": [],
+        "updatedAt": "2026-10-11T14:25:49.532Z"
       }
     ],
     "metadata": {
       "version": "1.0.0",
-      "lastModified": "2026-10-11T14:19:51.984Z",
+      "lastModified": "2026-10-11T14:25:49.532Z",
       "taskCount": 27,
-      "completedCount": 21,
+      "completedCount": 22,
       "tags": [
         "v1_4-daily-driver"
       ]
