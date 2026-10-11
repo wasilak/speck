@@ -556,12 +556,13 @@
         "description": "Netstack answers pings to any IP locally in ~0.2ms (even 192.0.2.1), so container ping health checks lie.",
         "details": "Find the smoltcp auto-reply (any_ip + iface ICMP echo). Forward via unprivileged host ICMP datagram socket (SOCK_DGRAM IPPROTO_ICMP, no root on macOS) or drop. Verify: egress-smoke 'icmp not faked: ok'.",
         "testStrategy": "",
-        "status": "pending",
+        "status": "done",
         "dependencies": [
           "2"
         ],
         "priority": "medium",
-        "subtasks": []
+        "subtasks": [],
+        "updatedAt": "2026-10-11T12:33:07.479Z"
       },
       {
         "id": "6",
@@ -786,9 +787,9 @@
     ],
     "metadata": {
       "version": "1.0.0",
-      "lastModified": "2026-10-11T12:30:11.670Z",
+      "lastModified": "2026-10-11T12:33:07.479Z",
       "taskCount": 22,
-      "completedCount": 11,
+      "completedCount": 12,
       "tags": [
         "v1_4-daily-driver"
       ]
