@@ -605,10 +605,11 @@
         "description": "vminitd appends certs to ca-certificates.crt then runs update-ca-certificates --fresh which regenerates the bundle and drops them (vminitd.rs:860-930).",
         "details": "Write each cert to /usr/local/share/ca-certificates/<hash>.crt and run update-ca-certificates without --fresh. Verify: test via fs seam if possible; live: cert from config.yaml ca.extra_certs present in the guest bundle.",
         "testStrategy": "",
-        "status": "pending",
+        "status": "done",
         "dependencies": [],
         "priority": "high",
-        "subtasks": []
+        "subtasks": [],
+        "updatedAt": "2026-10-11T12:10:56.774Z"
       },
       {
         "id": "10",
@@ -770,9 +771,9 @@
     ],
     "metadata": {
       "version": "1.0.0",
-      "lastModified": "2026-10-11T12:07:27.097Z",
+      "lastModified": "2026-10-11T12:10:56.774Z",
       "taskCount": 21,
-      "completedCount": 7,
+      "completedCount": 8,
       "tags": [
         "v1_4-daily-driver"
       ]
