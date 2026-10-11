@@ -24,6 +24,9 @@ pub struct AppConfig {
 pub struct CaConfig {
     #[serde(default)]
     pub extra_certs: Vec<String>,
+    /// Opt-in: bind the guest CA bundle into every new container (TLS-03).
+    #[serde(default)]
+    pub inject_into_containers: bool,
 }
 
 impl Default for AppConfig {
@@ -52,6 +55,7 @@ pub struct EffectiveConfig {
     pub vm: EffectiveVmConfig,
     pub log_level: String,
     pub extra_certs: Vec<String>,
+    pub inject_ca_into_containers: bool,
 }
 
 impl Default for EffectiveConfig {
@@ -60,6 +64,7 @@ impl Default for EffectiveConfig {
             vm: EffectiveVmConfig::default(),
             log_level: "info".into(),
             extra_certs: Vec::new(),
+            inject_ca_into_containers: false,
         }
     }
 }
@@ -181,7 +186,7 @@ pub fn collect_unknown_keys(value: &serde_yaml::Value) -> Vec<ConfigWarning> {
         .and_then(serde_yaml::Value::as_mapping)
     {
         for key in ca.keys().filter_map(serde_yaml::Value::as_str) {
-            if !matches!(key, "extra_certs") {
+            if !matches!(key, "extra_certs" | "inject_into_containers") {
                 warnings.push(ConfigWarning {
                     path: format!("ca.{key}"),
                     message: format!("unknown config key `ca.{key}` ignored"),
@@ -221,6 +226,7 @@ fn resolve_effective_config_with_physical_cores(
         effective.log_level = log_level;
     }
     effective.extra_certs = file.ca.extra_certs;
+    effective.inject_ca_into_containers = file.ca.inject_into_containers;
 
     if let Some(cpus) = cli.cpus {
         effective.vm.cpus = cpus;

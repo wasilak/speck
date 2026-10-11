@@ -801,8 +801,16 @@ pub async fn run_up(
     spinner.set_message("Starting Docker API server...");
     let sock_path = speck_home.join("speck.sock");
     let vm_state: Arc<RwLock<VmState>> = Arc::new(RwLock::new(VmState::Running));
-    let _dockerd = SpeckDockerd::start(guest.clone(), sock_path.clone(), vm_state.clone())
-        .context("failed to start Docker API server")?;
+    let proxy_options = speck_dockerd::ProxyOptions {
+        inject_ca_into_containers: effective.inject_ca_into_containers,
+    };
+    let _dockerd = SpeckDockerd::start(
+        guest.clone(),
+        sock_path.clone(),
+        vm_state.clone(),
+        proxy_options,
+    )
+    .context("failed to start Docker API server")?;
     tracing::info!("Docker API server started at {}", sock_path.display());
 
     spinner.finish_with_message(format!("{NEON_CYAN}Speck is running{RESET}"));

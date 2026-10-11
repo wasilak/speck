@@ -15,6 +15,7 @@ pub mod proxy;
 pub mod server;
 
 pub use error::{DockerApiError, Result};
+pub use proxy::ProxyOptions;
 
 pub struct SpeckDockerd {
     sock_path: PathBuf,
@@ -26,6 +27,7 @@ impl SpeckDockerd {
         guest: Arc<speck_vz::Guest>,
         sock_path: PathBuf,
         vm_state: Arc<RwLock<VmState>>,
+        options: ProxyOptions,
     ) -> Result<Self> {
         let speck_home = sock_path
             .parent()
@@ -52,7 +54,12 @@ impl SpeckDockerd {
             "serving speck.sock via guest dockerd passthrough proxy"
         );
 
-        let router = proxy::build_proxy_router(internal_sock_path, Some(guest), vm_state);
+        let router = proxy::build_proxy_router_with_options(
+            internal_sock_path,
+            Some(guest),
+            vm_state,
+            options,
+        );
         let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
         tokio::spawn(server::serve(router, sock_path.clone(), shutdown_rx));

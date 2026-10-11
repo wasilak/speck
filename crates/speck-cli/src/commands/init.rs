@@ -30,6 +30,10 @@ ca:
   # (useful for corporate CAs and private registries)
   # extra_certs:
   #   - /path/to/corporate-ca.pem
+  # Bind the guest CA bundle (system roots + the certs above) into every new
+  # container and set SSL_CERT_FILE / REQUESTS_CA_BUNDLE / NODE_EXTRA_CA_CERTS,
+  # so apk/pip/npm/curl work behind a TLS-inspecting proxy (default: false).
+  # inject_into_containers: false
 ";
 
 /// Resolve the shell target from the `--shell` override or auto-detection.

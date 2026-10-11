@@ -39,9 +39,18 @@ use crate::DockerApiError;
 use crate::middleware::restart_503::RestartCheckLayer;
 use crate::middleware::strip_api_version::strip_version_prefix;
 
+/// Host-side behaviour switches for the allowlisted middleware.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ProxyOptions {
+    /// Bind the guest CA bundle (system roots + Speck-injected corporate CAs)
+    /// into every new container and point common CA env vars at it (TLS-03).
+    pub inject_ca_into_containers: bool,
+}
+
 #[derive(Clone)]
 struct ProxyState {
     internal_sock_path: Arc<PathBuf>,
+    options: ProxyOptions,
     guest: Option<Arc<speck_vz::Guest>>,
     published_ports: Arc<Mutex<PublishedPortsState>>,
     bind_mounts: Arc<Mutex<BindMountState>>,
@@ -118,8 +127,18 @@ pub fn build_proxy_router(
     guest: Option<Arc<speck_vz::Guest>>,
     vm_state: Arc<RwLock<VmState>>,
 ) -> Router {
+    build_proxy_router_with_options(internal_sock_path, guest, vm_state, ProxyOptions::default())
+}
+
+pub fn build_proxy_router_with_options(
+    internal_sock_path: PathBuf,
+    guest: Option<Arc<speck_vz::Guest>>,
+    vm_state: Arc<RwLock<VmState>>,
+    options: ProxyOptions,
+) -> Router {
     let state = ProxyState {
         internal_sock_path: Arc::new(internal_sock_path),
+        options,
         guest,
         published_ports: Arc::new(Mutex::new(PublishedPortsState::default())),
         bind_mounts: Arc::new(Mutex::new(BindMountState::default())),
@@ -265,6 +284,11 @@ async fn intercept_container_create(state: ProxyState, req: Request) -> crate::R
             bind_namespace.as_deref(),
         )?)
     };
+    let forward_body_bytes = if state.options.inject_ca_into_containers {
+        Bytes::from(inject_ca_bundle(&forward_body_bytes)?)
+    } else {
+        forward_body_bytes
+    };
 
     let mut parts = parts;
     parts.headers.insert(
@@ -311,6 +335,73 @@ async fn intercept_container_create(state: ProxyState, req: Request) -> crate::R
     }
 
     Ok(Response::from_parts(parts, Body::from(body_bytes)))
+}
+
+/// Guest trust bundle: system roots plus CAs vminitd installed (TLS-01).
+const GUEST_CA_BUNDLE: &str = "/etc/ssl/certs/ca-certificates.crt";
+/// Where common distros look for the system CA bundle.
+const CONTAINER_CA_PATHS: &[&str] = &[
+    "/etc/ssl/certs/ca-certificates.crt", // Debian, Ubuntu, Alpine
+    "/etc/pki/tls/certs/ca-bundle.crt",   // RHEL, Fedora, Amazon Linux
+];
+/// CA env vars honoured by OpenSSL, Python requests and Node.js.
+const CA_ENV_VARS: &[&str] = &["SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "NODE_EXTRA_CA_CERTS"];
+
+/// Add read-only binds of the guest CA bundle and CA env vars to a container
+/// create body. The bind sources are guest paths, so they bypass the host →
+/// VirtioFS bind translation. Paths and variables the user already set are
+/// left alone.
+fn inject_ca_bundle(body_bytes: &[u8]) -> crate::Result<Vec<u8>> {
+    let mut create: serde_json::Value = serde_json::from_slice(body_bytes)
+        .map_err(|err| DockerApiError::Internal(format!("parse create body for CA: {err}")))?;
+    let root = create
+        .as_object_mut()
+        .ok_or_else(|| DockerApiError::Internal("create body is not an object".into()))?;
+
+    let env = root
+        .entry("Env")
+        .or_insert_with(|| serde_json::Value::Array(Vec::new()));
+    if env.is_null() {
+        *env = serde_json::Value::Array(Vec::new());
+    }
+    if let Some(env) = env.as_array_mut() {
+        for var in CA_ENV_VARS {
+            let prefix = format!("{var}=");
+            let set = env
+                .iter()
+                .any(|e| e.as_str().is_some_and(|e| e.starts_with(&prefix)));
+            if !set {
+                env.push(format!("{prefix}{GUEST_CA_BUNDLE}").into());
+            }
+        }
+    }
+
+    let host_config = root
+        .entry("HostConfig")
+        .or_insert_with(|| serde_json::Value::Object(Default::default()));
+    if let Some(host_config) = host_config.as_object_mut() {
+        let binds = host_config
+            .entry("Binds")
+            .or_insert_with(|| serde_json::Value::Array(Vec::new()));
+        if binds.is_null() {
+            *binds = serde_json::Value::Array(Vec::new());
+        }
+        if let Some(binds) = binds.as_array_mut() {
+            for target in CONTAINER_CA_PATHS {
+                let taken = binds.iter().any(|b| {
+                    b.as_str()
+                        .and_then(|b| b.split(':').nth(1))
+                        .is_some_and(|t| t == *target)
+                });
+                if !taken {
+                    binds.push(format!("{GUEST_CA_BUNDLE}:{target}:ro").into());
+                }
+            }
+        }
+    }
+
+    serde_json::to_vec(&create)
+        .map_err(|err| DockerApiError::Internal(format!("serialize create body with CA: {err}")))
 }
 
 fn rewrite_create_body_bind_mounts(
@@ -1333,5 +1424,60 @@ mod bridge_host_to_guest_tcp_tests {
         );
         assert_eq!(got.len(), TOTAL, "byte count mismatch at downstream client");
         assert_eq!(got, expected, "payload corrupted or reordered in transit");
+    }
+}
+
+#[cfg(test)]
+mod inject_ca_bundle_tests {
+    use super::inject_ca_bundle;
+
+    fn inject(body: serde_json::Value) -> serde_json::Value {
+        let out = inject_ca_bundle(&serde_json::to_vec(&body).unwrap()).unwrap();
+        serde_json::from_slice(&out).unwrap()
+    }
+
+    #[test]
+    fn adds_binds_and_env_to_a_minimal_body() {
+        let out = inject(serde_json::json!({"Image": "alpine"}));
+        let binds = out["HostConfig"]["Binds"].as_array().unwrap();
+        assert!(binds.contains(
+            &"/etc/ssl/certs/ca-certificates.crt:/etc/ssl/certs/ca-certificates.crt:ro".into()
+        ));
+        assert!(binds.contains(
+            &"/etc/ssl/certs/ca-certificates.crt:/etc/pki/tls/certs/ca-bundle.crt:ro".into()
+        ));
+        let env = out["Env"].as_array().unwrap();
+        assert!(env.contains(&"SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt".into()));
+        assert!(env.contains(&"NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt".into()));
+        assert_eq!(out["Image"], "alpine");
+    }
+
+    #[test]
+    fn keeps_user_binds_env_and_null_fields_intact() {
+        let out = inject(serde_json::json!({
+            "Image": "python",
+            "Env": ["REQUESTS_CA_BUNDLE=/custom.pem", "A=1"],
+            "HostConfig": {
+                "Binds": ["/host/ca.pem:/etc/ssl/certs/ca-certificates.crt:ro", "/data:/data"],
+                "Memory": 0
+            }
+        }));
+        let binds = out["HostConfig"]["Binds"].as_array().unwrap();
+        assert_eq!(binds.len(), 3); // user CA bind kept, RHEL path added
+        assert!(binds.contains(&"/host/ca.pem:/etc/ssl/certs/ca-certificates.crt:ro".into()));
+        let env = out["Env"].as_array().unwrap();
+        assert!(env.contains(&"REQUESTS_CA_BUNDLE=/custom.pem".into()));
+        assert_eq!(
+            env.iter()
+                .filter(|e| e.as_str().unwrap().starts_with("REQUESTS_CA_BUNDLE="))
+                .count(),
+            1
+        );
+        assert_eq!(out["HostConfig"]["Memory"], 0);
+
+        let out =
+            inject(serde_json::json!({"Image": "x", "Env": null, "HostConfig": {"Binds": null}}));
+        assert_eq!(out["Env"].as_array().unwrap().len(), 3);
+        assert_eq!(out["HostConfig"]["Binds"].as_array().unwrap().len(), 2);
     }
 }
