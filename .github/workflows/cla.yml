@@ -29,4 +29,4 @@ jobs:
           path-to-signatures: '.github/cla/signatures.json'
           path-to-document: '.github/CLA.md'
           branch: 'main'
-          allowlist: 'piotrek,dependabot[bot],github-actions[bot]'
+          allowlist: 'piotrek,wasilak,dependabot[bot],renovate[bot],github-actions[bot]'
