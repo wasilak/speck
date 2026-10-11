@@ -1,35 +1,35 @@
 class Speck < Formula
-  desc "Ultra-fast container runtime for Apple Silicon — VPN-proof networking"
+  desc "Container runtime for Apple Silicon with VPN-proof networking"
   homepage "https://github.com/wasilak/speck"
-  version "0.1.0"
   license "AGPL-3.0-only"
 
-  depends_on macos: ">= :ventura"
   depends_on arch: :arm64
+  depends_on :macos
 
-  on_arm do
-    url "https://github.com/wasilak/speck/releases/download/v#{version}/spk-#{version}-aarch64-apple-darwin-development-non-notarized-binary.tar.gz"
-    sha256 "b2f16e8a3e6fa57b3ab4572c1e55c7e31262af2a88a4aab5caa8d5cfda73201f"
+  on_macos do
+    on_arm do
+      url "https://github.com/wasilak/speck/releases/download/v1.4.0/spk-v1.4.0-aarch64-apple-darwin.tar.gz"
+      sha256 "f8a02c3f2828a5d50a8cf395358d585fa7f08e76aefdfe73de08e866ea7e1bed"
+    end
   end
 
   def install
     bin.install "spk"
+    generate_completions_from_executable(bin/"spk", "completion")
   end
 
   def caveats
     <<~EOS
-      Development-only Formula: this installs an ad-hoc signed,
-      non-notarized Speck binary. It is not a Developer ID or official
-      notarized distribution path.
+      Start Speck (selects the 'speck' docker context, like colima start):
+        spk start
 
-      First-run note: macOS may quarantine the binary. To clear for local development:
-        xattr -dr com.apple.quarantine #{HOMEBREW_PREFIX}/bin/spk
+      Stop / restart / remove the VM:
+        spk stop
+        spk restart
+        spk delete
 
-      Set up shell integration (once):
-        spk init --set-docker-host
-
-      Start the VM:
-        spk up
+      The binary is ad-hoc signed with the virtualization entitlement and
+      not notarized.
     EOS
   end
 

@@ -19,19 +19,13 @@ Speck routes raw L2 frames through a user-space TCP/IP stack that re-originates 
 
 ## Install
 
-### Download pre-built release
-
-GitHub Releases include a signed `spk` binary plus guest assets (kernel, initrd, rootfs):
-
 ```bash
-# Download latest release
-curl -fsL -o spk.tar.gz "https://github.com/wasilak/speck/releases/latest/download/spk-$(curl -s https://api.github.com/repos/wasilak/speck/releases/latest | grep tag_name | cut -d'"' -f4)-aarch64-apple-darwin.tar.gz"
-tar -xzf spk.tar.gz
-sudo mv spk /usr/local/bin/
-sudo chmod +x /usr/local/bin/spk
+brew install wasilak/tap/speck
 ```
 
-Or download manually from [GitHub Releases](https://github.com/wasilak/speck/releases).
+The binary is ad-hoc signed with the `com.apple.security.virtualization`
+entitlement and not notarized. Pre-built archives are also on
+[GitHub Releases](https://github.com/wasilak/speck/releases).
 
 ### Build from source
 
@@ -41,49 +35,41 @@ Requires Rust stable and Xcode Command Line Tools:
 git clone https://github.com/wasilak/speck
 cd speck
 cargo build --release --package speck-cli --target aarch64-apple-darwin
-codesign --sign - \
-  --entitlements speck.entitlements \
-  --force \
-  target/aarch64-apple-darwin/release/spk
+cargo xtask sign release
 cp target/aarch64-apple-darwin/release/spk /usr/local/bin/spk
 ```
 
-## First boot (step by step)
-
-**1. Start the VM**
+## Usage (same as colima)
 
 ```bash
-spk up
+spk start     # start the VM; selects the 'speck' docker context
+spk status
+spk restart
+spk stop      # stop the VM; switches docker back to the 'default' context
+spk delete    # remove the VM with all containers, images and volumes
 ```
 
-On first run, `spk up` downloads the guest assets (~200 MB: Linux kernel, initrd with `vminitd`, Alpine-based rootfs with dockerd). Subsequent boots use the cached assets and start in milliseconds.
+On first start Speck downloads the guest assets (~200 MB: Linux kernel,
+initrd with `vminitd`, Alpine-based rootfs with dockerd). Later starts use
+the cached assets; after an upgrade only changed assets are downloaded again,
+and containers, images and volumes are kept.
 
-**2. Point your Docker tooling at Speck — one-time setup**
+`docker`, `docker compose` and `docker buildx` work without any setup, through
+the `speck` docker context. Speck starts again automatically at login.
 
-```bash
-spk init --set-docker-host
-# then open a new shell (or source your rc file)
-```
-
-This writes `DOCKER_HOST=unix://$HOME/.speck/run/docker.sock` into your shell config. All `docker` and `docker compose` commands now route through Speck.
-
-For a per-session override instead:
+Tools that ignore docker contexts and only read `DOCKER_HOST` (some
+testcontainers and docker-py setups) need the environment variable:
 
 ```bash
+spk init --set-docker-host   # persist in your shell config, or per session:
 eval $(spk env)
 ```
 
-**3. Verify**
+Check that it works:
 
 ```bash
-docker info          # should show the Speck runtime
+docker context show  # speck
 docker run --rm alpine echo "hello from Speck"
-```
-
-**4. Stop the VM**
-
-```bash
-spk down
 ```
 
 ## Configuration
@@ -104,7 +90,7 @@ ca:
 Per-invocation flags override the config file:
 
 ```bash
-spk up --cpus 8 --memory 8192
+spk start --cpus 8 --memory 8192
 ```
 
 ## Environment variables
@@ -185,7 +171,7 @@ This is an alpha release intended for early testing and feedback. Known areas st
 | Background daemon (launchd LaunchAgent) | ✅ |
 | `spk dashboard` TUI | ✅ |
 | `spk doctor` diagnostics | ✅ |
-| Homebrew Formula distribution | 📋 planned |
+| Homebrew Formula distribution (`wasilak/tap/speck`) | ✅ |
 | testcontainers conformance | ✅ |
 | K3s / Kubernetes | 📋 planned |
 | Developer ID signing + notarization | 📋 planned |
