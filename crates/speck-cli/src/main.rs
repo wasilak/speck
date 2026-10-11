@@ -54,12 +54,42 @@ enum Commands {
     Init(InitArgs),
     /// Run health checks and diagnose Speck configuration
     Doctor(DoctorArgs),
-    /// Show Speck daemon and VM status
-    Status,
+    /// Show Speck status (like `colima status`)
+    Status(StatusArgs),
+    /// List Speck instances (like `colima list`)
+    List(ListArgs),
+    /// Show Speck, runtime and guest versions
+    Version,
+    /// Delete cached downloads Speck no longer uses (like `colima prune`)
+    Prune(PruneArgs),
     /// Show VM boot logs
     Logs(LogsArgs),
     /// Delete the Speck VM with all containers, images and volumes
     Delete(DeleteArgs),
+}
+
+#[derive(Parser)]
+struct StatusArgs {
+    /// Include resources, container counts and versions
+    #[arg(long, short)]
+    extended: bool,
+    /// Print JSON output
+    #[arg(long, short)]
+    json: bool,
+}
+
+#[derive(Parser)]
+struct ListArgs {
+    /// Print JSON output
+    #[arg(long, short)]
+    json: bool,
+}
+
+#[derive(Parser)]
+struct PruneArgs {
+    /// Skip the confirmation prompt
+    #[arg(long, short)]
+    force: bool,
 }
 
 #[derive(Parser)]
@@ -592,9 +622,24 @@ async fn main() -> anyhow::Result<()> {
                 std::process::exit(code);
             }
         }
-        Commands::Status => {
+        Commands::Status(args) => {
             init_tracing(&default_tracing_filter())?;
-            commands::status::run_status(&speck_home).await?
+            let code = commands::status::run_status(&speck_home, args.extended, args.json).await?;
+            if code != 0 {
+                std::process::exit(code);
+            }
+        }
+        Commands::List(args) => {
+            init_tracing(&default_tracing_filter())?;
+            commands::status::run_list(&speck_home, args.json).await?
+        }
+        Commands::Version => {
+            init_tracing(&default_tracing_filter())?;
+            commands::status::run_version(&speck_home).await?
+        }
+        Commands::Prune(args) => {
+            init_tracing(&default_tracing_filter())?;
+            commands::prune::run_prune(args.force, &speck_home)?
         }
         Commands::Logs(args) => {
             init_tracing(&default_tracing_filter())?;

@@ -42,11 +42,14 @@ cp target/aarch64-apple-darwin/release/spk /usr/local/bin/spk
 ## Usage (same as colima)
 
 ```bash
-spk start     # start the VM; selects the 'speck' docker context
-spk status
+spk start       # start the VM; selects the 'speck' docker context
+spk status      # -e: resources, container counts, versions; -j: JSON
+spk list        # colima-style instance table (-j: JSON)
+spk version     # spk, docker and guest versions
 spk restart
-spk stop      # stop the VM; switches docker back to the 'default' context
-spk delete    # remove the VM with all containers, images and volumes
+spk stop        # stop the VM; switches docker back to the 'default' context
+spk prune       # delete cached downloads Speck no longer uses
+spk delete      # remove the VM with all containers, images and volumes
 ```
 
 On first start Speck downloads the guest assets (~200 MB: Linux kernel,

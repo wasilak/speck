@@ -49,18 +49,23 @@ pub fn select(speck_home: &Path) {
     }
 }
 
+/// Name of the currently selected docker context, if the docker CLI is there.
+pub fn current() -> Option<String> {
+    Command::new("docker")
+        .args(["context", "show"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
+}
+
 /// Switch the docker CLI back to `default` if `speck` is selected, so docker
 /// commands do not hang on a stopped Speck.
 pub fn deselect() {
     if !manages_context() {
         return;
     }
-    let current = Command::new("docker")
-        .args(["context", "show"])
-        .output()
-        .ok()
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned());
-    if current.as_deref() == Some(CONTEXT) {
+    if current().as_deref() == Some(CONTEXT) {
         let _ = docker(&["context", "use", "default"]);
     }
 }
