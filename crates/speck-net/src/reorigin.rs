@@ -301,6 +301,11 @@ impl ReoriginBridge {
         self.preconnected.len()
     }
 
+    /// Whether any bridge, fallback connect or pre-connected stream is live.
+    pub fn is_active(&self) -> bool {
+        !self.bridges.is_empty() || !self.pending.is_empty() || !self.preconnected.is_empty()
+    }
+
     /// Whether `handle` is still referenced by an active bridge or pending connect.
     pub fn owns(&self, handle: SocketHandle) -> bool {
         self.bridges.contains_key(&handle) || self.pending.contains_key(&handle)

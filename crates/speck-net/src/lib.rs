@@ -22,6 +22,12 @@ use std::os::unix::io::RawFd;
 use std::time::Duration;
 use tokio::sync::mpsc;
 
+/// Poll interval while connections are live (host→guest data is drained from
+/// bridge channels only when the loop runs).
+const BUSY_POLL: Duration = Duration::from_millis(5);
+/// Poll interval with no connections: only smoltcp timers need servicing.
+const IDLE_POLL: Duration = Duration::from_millis(100);
+
 /// Minimal wrapper around `RawFd` that implements `AsRawFd` for use with
 /// `tokio::io::unix::AsyncFd`.
 struct NetFd(RawFd);
@@ -112,13 +118,18 @@ impl SpeckNet {
             // Poll loop
             loop {
                 // Held SYN frames never make the fd readable again, so only wait
-                // when the device has nothing queued.
+                // when the device has nothing queued. With live connections,
+                // poll every 5 ms so host→guest data is forwarded promptly even
+                // when the guest is waiting (e.g., TLS handshake ServerHello).
+                // When idle, guest packets still wake us via fd readiness, so a
+                // long timeout only delays smoltcp timers and saves wake-ups.
                 if !net.device_mut().has_pending_frames() {
-                    // Use a short timeout so host→guest data is forwarded promptly even
-                    // when the guest is waiting (e.g., TLS handshake ServerHello).
-                    match tokio::time::timeout(Duration::from_millis(5), async_fd.readable())
-                        .await
-                    {
+                    let busy = reorigin.is_active()
+                        || connector.is_active()
+                        || udp.is_active()
+                        || port_publish.bridge_count() > 0;
+                    let wait = if busy { BUSY_POLL } else { IDLE_POLL };
+                    match tokio::time::timeout(wait, async_fd.readable()).await {
                         Ok(Ok(mut guard)) => guard.clear_ready(),
                         Ok(Err(e)) => {
                             return Err(Error::Netstack(format!("readable: {e}")));

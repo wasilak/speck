@@ -105,6 +105,11 @@ impl Connector {
         out
     }
 
+    /// Whether host connects are still in flight.
+    pub fn is_active(&self) -> bool {
+        !self.inflight.is_empty() || !self.failed_now.is_empty()
+    }
+
     #[cfg(test)]
     fn inflight_count(&self) -> usize {
         self.inflight.len()

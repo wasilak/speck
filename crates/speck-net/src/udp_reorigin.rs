@@ -195,6 +195,11 @@ impl UdpReorigin {
         });
     }
 
+    /// Whether any UDP flow is live.
+    pub fn is_active(&self) -> bool {
+        !self.flows.is_empty()
+    }
+
     #[cfg(test)]
     fn flow_count(&self) -> usize {
         self.flows.len()
