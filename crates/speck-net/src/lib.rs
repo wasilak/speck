@@ -1,4 +1,5 @@
 pub mod config;
+pub(crate) mod connector;
 pub mod device;
 pub(crate) mod dhcp;
 pub mod dns;
@@ -103,8 +104,8 @@ impl SpeckNet {
             let mut dhcp = dhcp::DhcpServer::new(&self.config);
             dhcp.add_to_set(net.sockets_mut());
 
-            // Seed the pre-warmed TCP listeners (443/80) for transparent re-origination.
-            tcp_listener::ensure_listeners_for(net.sockets_mut(), &[]);
+            // Host-first connects for guest SYNs (TCP to any destination port).
+            let mut connector = connector::Connector::default();
 
             // Poll loop
             loop {
@@ -124,12 +125,25 @@ impl SpeckNet {
                     }
                 }
 
-                // Open a listener for every guest SYN held by the device (any
-                // destination port), then let smoltcp see those SYNs. Also
-                // replenishes pre-warmed slots consumed by accepted connections.
-                let syn_ports = net.device_mut().held_syn_ports();
-                tcp_listener::ensure_listeners_for(net.sockets_mut(), &syn_ports);
-                net.device_mut().release_held_syns();
+                // Dial the host for every guest SYN the device held back. Once a
+                // connect resolves, release the SYN: with a listener on success
+                // (smoltcp completes the handshake), without one on failure
+                // (smoltcp answers RST, so the guest sees "connection refused").
+                for (syn, frame) in net.device_mut().take_held_syns() {
+                    connector.submit(syn, frame);
+                }
+                for outcome in connector.poll() {
+                    match outcome {
+                        connector::Outcome::Connected { syn, frame, stream } => {
+                            tcp_listener::open_listener_for(net.sockets_mut(), syn.dst);
+                            reorigin.adopt(syn, stream);
+                            net.device_mut().push_ready(frame);
+                        }
+                        connector::Outcome::Failed { frame } => {
+                            net.device_mut().push_ready(frame);
+                        }
+                    }
+                }
 
                 let timestamp = smoltcp::time::Instant::now();
 
@@ -171,7 +185,7 @@ impl SpeckNet {
                     reorigin.owns(h) || port_publish.owns(h)
                 });
                 if !net.device_mut().has_ready_frames() {
-                    tcp_listener::trim_surplus_listeners(net.sockets_mut());
+                    tcp_listener::trim_listeners(net.sockets_mut());
                 }
 
                 // Process egress frames (tx queued during poll/reorigin/dhcp)

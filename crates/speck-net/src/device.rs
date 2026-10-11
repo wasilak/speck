@@ -2,6 +2,7 @@ use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::time::Instant;
 use smoltcp::wire::{EthernetFrame, EthernetProtocol, IpProtocol, Ipv4Packet, TcpPacket};
 use std::collections::VecDeque;
+use std::net::SocketAddrV4;
 use std::os::unix::io::RawFd;
 
 /// A wrapper around a raw file descriptor that implements `smoltcp::phy::Device`.
@@ -11,9 +12,9 @@ use std::os::unix::io::RawFd;
 pub struct FdDevice {
     fd: RawFd,
     mtu: usize,
-    /// Guest TCP SYN frames held back until a listener exists for their port.
-    held_syns: Vec<Vec<u8>>,
-    /// Frames released from `held_syns`, handed to smoltcp before new reads.
+    /// Guest TCP SYN frames held back until the host connect for them resolves.
+    held_syns: Vec<(SynInfo, Vec<u8>)>,
+    /// Released SYN frames, handed to smoltcp before new reads.
     ready: VecDeque<Vec<u8>>,
 }
 
@@ -48,17 +49,14 @@ impl FdDevice {
         }
     }
 
-    /// Destination ports of the held SYN frames, one entry per frame.
-    pub fn held_syn_ports(&self) -> Vec<u16> {
-        self.held_syns
-            .iter()
-            .filter_map(|f| syn_dst_port(f))
-            .collect()
+    /// Take the SYN frames held since the last call.
+    pub fn take_held_syns(&mut self) -> Vec<(SynInfo, Vec<u8>)> {
+        std::mem::take(&mut self.held_syns)
     }
 
-    /// Hand held SYN frames to smoltcp on the next poll (listeners now exist).
-    pub fn release_held_syns(&mut self) {
-        self.ready.extend(self.held_syns.drain(..));
+    /// Queue a previously held frame for smoltcp's next poll.
+    pub fn push_ready(&mut self, frame: Vec<u8>) {
+        self.ready.push_back(frame);
     }
 
     /// Whether frames are waiting that will not trigger fd readiness again.
@@ -72,11 +70,19 @@ impl FdDevice {
     }
 }
 
-/// Destination port of a guest IPv4 TCP SYN (without ACK), else `None`.
+/// Endpoints of a guest TCP connection attempt.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct SynInfo {
+    /// Guest-side source.
+    pub src: SocketAddrV4,
+    /// Destination the guest is dialing.
+    pub dst: SocketAddrV4,
+}
+
+/// Endpoints of a guest IPv4 TCP SYN (without ACK), else `None`.
 ///
-/// Used to open a smoltcp listener on demand before the SYN reaches smoltcp,
-/// so guest connections to any port are accepted instead of reset.
-pub(crate) fn syn_dst_port(frame: &[u8]) -> Option<u16> {
+/// SYNs are held back so the host can connect first (see `connector`).
+pub(crate) fn syn_info(frame: &[u8]) -> Option<SynInfo> {
     let eth = EthernetFrame::new_checked(frame).ok()?;
     if eth.ethertype() != EthernetProtocol::Ipv4 {
         return None;
@@ -86,7 +92,10 @@ pub(crate) fn syn_dst_port(frame: &[u8]) -> Option<u16> {
         return None;
     }
     let tcp = TcpPacket::new_checked(ip.payload()).ok()?;
-    (tcp.syn() && !tcp.ack()).then(|| tcp.dst_port())
+    (tcp.syn() && !tcp.ack()).then(|| SynInfo {
+        src: SocketAddrV4::new(ip.src_addr(), tcp.src_port()),
+        dst: SocketAddrV4::new(ip.dst_addr(), tcp.dst_port()),
+    })
 }
 
 impl Drop for FdDevice {
@@ -152,8 +161,8 @@ impl Device for FdDevice {
             } {
                 n if n > 0 => {
                     rx_buf.truncate(n as usize);
-                    if syn_dst_port(&rx_buf).is_some() {
-                        self.held_syns.push(rx_buf);
+                    if let Some(syn) = syn_info(&rx_buf) {
+                        self.held_syns.push((syn, rx_buf));
                         continue;
                     }
                     return Some((FdRxToken(rx_buf), FdTxToken { fd: self.fd }));
@@ -182,7 +191,12 @@ impl Device for FdDevice {
 
 #[cfg(test)]
 mod tests {
-    use super::syn_dst_port;
+    use super::syn_info;
+    use std::net::{Ipv4Addr, SocketAddrV4};
+
+    fn syn_dst_port(frame: &[u8]) -> Option<u16> {
+        syn_info(frame).map(|s| s.dst.port())
+    }
 
     /// Ethernet + IPv4 + 20-byte TCP header with the given flags and dst port.
     fn frame(proto: u8, flags: u8, dst_port: u16) -> Vec<u8> {
@@ -210,6 +224,19 @@ mod tests {
     fn pure_syn_yields_destination_port() {
         assert_eq!(syn_dst_port(&frame(6, SYN, 22)), Some(22));
         assert_eq!(syn_dst_port(&frame(6, SYN, 5432)), Some(5432));
+    }
+
+    #[test]
+    fn syn_info_carries_both_endpoints() {
+        let s = syn_info(&frame(6, SYN, 443)).unwrap();
+        assert_eq!(
+            s.src,
+            SocketAddrV4::new(Ipv4Addr::new(172, 16, 0, 2), 40000)
+        );
+        assert_eq!(
+            s.dst,
+            SocketAddrV4::new(Ipv4Addr::new(140, 82, 121, 4), 443)
+        );
     }
 
     #[test]

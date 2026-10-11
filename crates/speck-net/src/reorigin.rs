@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::time::Duration;
+use std::time::Instant;
 
 use smoltcp::iface::{SocketHandle, SocketSet};
 use smoltcp::socket::tcp;
@@ -7,7 +7,13 @@ use smoltcp::wire::{IpAddress, IpEndpoint};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{mpsc, oneshot};
 
+use crate::connector;
+use crate::device::SynInfo;
 use crate::mtu;
+
+/// How long a host stream connected for a guest SYN waits for the guest to
+/// finish the handshake before it is dropped.
+const PRECONNECTED_TTL: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Number of 64 KB chunks buffered per direction per bridge.
 /// 128 × 64 KB = 8 MB of read-ahead per active connection.
@@ -148,6 +154,9 @@ pub(crate) struct ReoriginBridge {
     bridges: HashMap<SocketHandle, BridgeState>,
     /// Async connects in flight. Each resolves to a tokio TcpStream (or error).
     pending: HashMap<SocketHandle, oneshot::Receiver<std::io::Result<tokio::net::TcpStream>>>,
+    /// Host streams already connected for a guest SYN, keyed by
+    /// (local = destination, remote = guest) endpoints of the future socket.
+    preconnected: HashMap<(IpEndpoint, IpEndpoint), (tokio::net::TcpStream, Instant)>,
     max_bridges: usize,
     mtu: u16,
 }
@@ -157,12 +166,20 @@ impl ReoriginBridge {
         Self {
             bridges: HashMap::new(),
             pending: HashMap::new(),
+            preconnected: HashMap::new(),
             max_bridges: 256,
             mtu,
         }
     }
 
-    /// Promote completed async connects into active bridges; close sockets on failure.
+    /// Keep the host stream the connector opened for `syn`; it is bridged as
+    /// soon as smoltcp finishes the guest handshake for that SYN.
+    pub fn adopt(&mut self, syn: SynInfo, stream: tokio::net::TcpStream) {
+        let key = (endpoint(syn.dst), endpoint(syn.src));
+        self.preconnected.insert(key, (stream, Instant::now()));
+    }
+
+    /// Promote completed async connects into active bridges; reset sockets on failure.
     pub fn poll_pending(&mut self, sockets: &mut SocketSet) {
         let handles: Vec<SocketHandle> = self.pending.keys().copied().collect();
         for handle in handles {
@@ -179,12 +196,14 @@ impl ReoriginBridge {
                 }
                 Ok(Err(_)) => {
                     self.pending.remove(&handle);
-                    sockets.get_mut::<tcp::Socket>(handle).close();
+                    // RST, not FIN: the guest must see a failed connection,
+                    // not a peer that closed after accepting.
+                    sockets.get_mut::<tcp::Socket>(handle).abort();
                 }
                 Err(oneshot::error::TryRecvError::Empty) => {}
                 Err(oneshot::error::TryRecvError::Closed) => {
                     self.pending.remove(&handle);
-                    sockets.get_mut::<tcp::Socket>(handle).close();
+                    sockets.get_mut::<tcp::Socket>(handle).abort();
                 }
             }
         }
@@ -212,13 +231,17 @@ impl ReoriginBridge {
         }
     }
 
-    /// Detect newly-established smoltcp sockets and spawn async host connects.
+    /// Detect newly-established smoltcp sockets and bridge them to their
+    /// pre-connected host stream (or, as a fallback, dial the host now).
     pub fn handle_new_connections(&mut self, sockets: &mut SocketSet) {
+        self.preconnected
+            .retain(|_, (_, since)| since.elapsed() < PRECONNECTED_TTL);
+
         if self.bridges.len() + self.pending.len() >= self.max_bridges {
             return;
         }
 
-        let new_connections: Vec<(SocketHandle, IpEndpoint)> = sockets
+        let new_connections: Vec<(SocketHandle, IpEndpoint, Option<IpEndpoint>)> = sockets
             .iter()
             .filter_map(|(handle, socket)| {
                 if self.bridges.contains_key(&handle) || self.pending.contains_key(&handle) {
@@ -239,7 +262,7 @@ impl ReoriginBridge {
                                 return None;
                             }
                         }
-                        Some((handle, endpoint))
+                        Some((handle, endpoint, tcp_socket.remote_endpoint()))
                     }
                     _ => None,
                 }
@@ -248,30 +271,22 @@ impl ReoriginBridge {
 
         let _mss = mtu::mss_for_mtu(self.mtu);
 
-        for (handle, endpoint) in new_connections {
-            let addr = format!("{}:{}", endpoint.addr, endpoint.port);
+        for (handle, endpoint, remote) in new_connections {
+            if let Some((stream, _)) = remote.and_then(|r| self.preconnected.remove(&(endpoint, r)))
+            {
+                self.bridges.insert(handle, BridgeState::new(stream));
+                continue;
+            }
+
+            let IpAddress::Ipv4(ip) = endpoint.addr else {
+                sockets.get_mut::<tcp::Socket>(handle).abort();
+                continue;
+            };
+            let dst = std::net::SocketAddrV4::new(ip, endpoint.port);
             let (tx, rx) = oneshot::channel::<std::io::Result<tokio::net::TcpStream>>();
-
             tokio::spawn(async move {
-                let result = async {
-                    let stream = tokio::net::TcpStream::connect(&addr).await?;
-                    // Enable TCP keepalive so WARP/NAT doesn't kill long-lived
-                    // connections mid-transfer (e.g. large blob downloads).
-                    let std_stream = stream.into_std()?;
-                    let sock: socket2::Socket = std_stream.into();
-                    let ka = socket2::TcpKeepalive::new()
-                        .with_time(Duration::from_secs(30))
-                        .with_interval(Duration::from_secs(10));
-                    let _ = sock.set_tcp_keepalive(&ka);
-                    let std_stream: std::net::TcpStream = sock.into();
-                    std_stream.set_nonblocking(true)?;
-                    let stream = tokio::net::TcpStream::from_std(std_stream)?;
-                    Ok(stream)
-                }
-                .await;
-                let _ = tx.send(result);
+                let _ = tx.send(connector::connect_host(dst).await);
             });
-
             self.pending.insert(handle, rx);
         }
     }
@@ -281,8 +296,17 @@ impl ReoriginBridge {
         self.bridges.len()
     }
 
+    #[allow(dead_code)]
+    pub fn preconnected_count(&self) -> usize {
+        self.preconnected.len()
+    }
+
     /// Whether `handle` is still referenced by an active bridge or pending connect.
     pub fn owns(&self, handle: SocketHandle) -> bool {
         self.bridges.contains_key(&handle) || self.pending.contains_key(&handle)
     }
+}
+
+fn endpoint(addr: std::net::SocketAddrV4) -> IpEndpoint {
+    IpEndpoint::new(IpAddress::Ipv4(*addr.ip()), addr.port())
 }

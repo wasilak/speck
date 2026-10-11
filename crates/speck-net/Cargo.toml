@@ -21,5 +21,6 @@ core-foundation = "0.10.1"
 dispatch2 = "0.3.1"
 
 [dev-dependencies]
+tokio = { version = "1.52", features = ["macros", "rt"] }
 serde_json = "1"
 mockall = "0.15.0"
