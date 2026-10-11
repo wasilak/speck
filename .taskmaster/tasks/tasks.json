@@ -497,7 +497,7 @@
   "v1_4-daily-driver": {
     "tasks": [
       {
-        "id": "1",
+        "id": 1,
         "title": "[EGRESS-02] Sweep closed smoltcp sockets from the SocketSet",
         "description": "Closed/TimeWait sockets are never removed (no sockets.remove in crates/speck-net/src); each connection leaks ~2MB and grows the 5ms scan.",
         "details": "Files: crates/speck-net/src/{lib.rs,reorigin.rs,port_publish.rs,tcp_listener.rs}. After close(), remove the handle once state is Closed/TimeWait (periodic sweep in the poll loop), drop bridge entry. Verify: unit test opening/closing N connections asserts SocketSet size stays flat; cargo test -p speck-net.",
@@ -509,7 +509,7 @@
         "updatedAt": "2026-10-11T11:24:57.970Z"
       },
       {
-        "id": "2",
+        "id": 2,
         "title": "[EGRESS-01] Re-originate guest TCP to any destination port",
         "description": "Only ports 443 (8) and 80 (4) have smoltcp listeners (speck-net/src/lib.rs:108-115); ssh/DB/ES/custom ports fail.",
         "details": "Approach: sniff inbound guest frames for TCP SYN to a port without a listener and create a listener on demand before smoltcp processes the frame (any_ip already covers all dst IPs). Keep 443/80 pre-warm. Verify: scripts/egress-smoke.sh TCP 22/5432/9200/8443/27017 PASS; conformance-smoke 26/26.",
@@ -523,7 +523,7 @@
         "updatedAt": "2026-10-11T11:24:57.973Z"
       },
       {
-        "id": "3",
+        "id": 3,
         "title": "[EGRESS-03] RST on host connect failure + bounded connect timeout",
         "description": "Failed host connect closes guest socket with FIN after handshake; no connect timeout (reorigin.rs:180-183,257).",
         "details": "Use tokio::time::timeout around TcpStream::connect (~10s), socket.abort() (RST) instead of close() on failure and for 127.x/gateway destinations (reorigin.rs:233-241). Verify: unit test; container nc to a refusing host port fails fast.",
@@ -537,7 +537,7 @@
         "updatedAt": "2026-10-11T11:40:18.737Z"
       },
       {
-        "id": "4",
+        "id": 4,
         "title": "[EGRESS-04] UDP re-origination via 5-tuple NAT table",
         "description": "No guest UDP egress except DHCP and vsock DNS; NTP/QUIC/any UDP fails.",
         "details": "New crates/speck-net/src/udp_reorigin.rs: per-5-tuple flows, host tokio UdpSocket per flow, idle timeout ~60s, cap on flows. Exclude the DNS path. Verify: egress-smoke udp 123 (ntp) PASS + unit tests.",
@@ -551,7 +551,7 @@
         "updatedAt": "2026-10-11T11:47:04.146Z"
       },
       {
-        "id": "5",
+        "id": 5,
         "title": "[EGRESS-06] Stop faking ICMP echo replies",
         "description": "Netstack answers pings to any IP locally in ~0.2ms (even 192.0.2.1), so container ping health checks lie.",
         "details": "Find the smoltcp auto-reply (any_ip + iface ICMP echo). Forward via unprivileged host ICMP datagram socket (SOCK_DGRAM IPPROTO_ICMP, no root on macOS) or drop. Verify: egress-smoke 'icmp not faked: ok'.",
@@ -564,7 +564,7 @@
         "subtasks": []
       },
       {
-        "id": "6",
+        "id": 6,
         "title": "[EGRESS-05] Event-driven netstack poll loop",
         "description": "Poll loop wakes every 5ms forever (lib.rs:119) - constant CPU/battery cost; per-frame Vec allocations.",
         "details": "Use iface.poll_delay() for the timeout, wake on fd readiness and host bridge readiness; reuse buffers. Verify: idle CPU of spk near 0; no regression in egress-smoke/conformance or large docker pull throughput.",
@@ -578,7 +578,7 @@
         "subtasks": []
       },
       {
-        "id": "7",
+        "id": 7,
         "title": "[OPS-04] Publish initrd release matching HEAD guest",
         "description": "Public initrd-1.3.0 (2026-07-09) predates the transparent proxy and Phase 25; a clean install on another Mac gets a mismatched guest.",
         "details": "Build initrd from the HEAD guest, publish initrd-1.4.0 GitHub release, bump INITRD_VERSION in crates/speck-cli/src/commands/up.rs, release spk. Verify: fresh SPECK_HOME on dev Mac, spk up --wait, conformance-smoke 26/26.",
@@ -589,7 +589,7 @@
         "subtasks": []
       },
       {
-        "id": "8",
+        "id": 8,
         "title": "[M0] Corporate Mac baseline (manual, Piotr)",
         "description": "Run docs/manual-testing.md M0 on the work Mac: scutil --proxy, spk doctor, egress-smoke with/without corporate CA, Colima comparison.",
         "details": "Owner task. Paste the results table + scutil --proxy output into this task (task-master update-task). Decides whether TLS-04 (explicit proxy/PAC) is needed.",
@@ -600,7 +600,7 @@
         "subtasks": []
       },
       {
-        "id": "9",
+        "id": 9,
         "title": "[TLS-01] Fix guest CA injection (survive update-ca-certificates)",
         "description": "vminitd appends certs to ca-certificates.crt then runs update-ca-certificates --fresh which regenerates the bundle and drops them (vminitd.rs:860-930).",
         "details": "Write each cert to /usr/local/share/ca-certificates/<hash>.crt and run update-ca-certificates without --fresh. Verify: test via fs seam if possible; live: cert from config.yaml ca.extra_certs present in the guest bundle.",
@@ -611,7 +611,7 @@
         "subtasks": []
       },
       {
-        "id": "10",
+        "id": 10,
         "title": "[TLS-02] Auto-export Keychain trusted roots to the guest",
         "description": "Corporate TLS-inspection CA must currently be listed manually in config.yaml.",
         "details": "On spk up, export admin/system-trusted roots (security find-certificate -a -p + trust settings) into the ca-certs dir alongside extra_certs; config opt-out ca.keychain: false. Verify: unit test of PEM parsing/dedup; manual on work Mac.",
@@ -624,7 +624,7 @@
         "subtasks": []
       },
       {
-        "id": "11",
+        "id": 11,
         "title": "[TLS-03] Opt-in CA bundle injection into containers",
         "description": "Containers do not trust the corporate CA, so apk/pip/curl fail behind TLS inspection.",
         "details": "In the allowlisted POST /containers/create middleware (D-21 compliant) add a read-only bind of the guest CA bundle + SSL_CERT_FILE env when config ca.inject_into_containers: true. Verify: middleware unit test; manual apk add behind TLS proxy.",
@@ -637,7 +637,7 @@
         "subtasks": []
       },
       {
-        "id": "12",
+        "id": 12,
         "title": "[TLS-04] Explicit proxy / PAC propagation (conditional on M0)",
         "description": "If M0 shows an explicit proxy/PAC, guest dockerd/BuildKit/asset downloads need HTTP(S)_PROXY/NO_PROXY.",
         "details": "Read State:/Network/Global/Proxies from SCDynamicStore, pass proxy env to guest dockerd via vminitd, curl assets with proxy. Cancel this task if M0 shows transparent interception only.",
@@ -650,7 +650,7 @@
         "subtasks": []
       },
       {
-        "id": "13",
+        "id": 13,
         "title": "[RES-01] Daemon exits when the VM stops or errors",
         "description": "run_up waits only for SIGINT/SIGTERM (up.rs:~880); VM death leaves a 'running' daemon and launchd KeepAlive never fires.",
         "details": "Forward delegate stop/error events (speck-vz delegate.rs, vm_thread.rs apply_delegate_event) to a channel, select on it in run_up, exit non-zero. Add ThrottleInterval to the LaunchAgent plist. Verify: unit test; manual kill VM -> launchd restarts Speck.",
@@ -661,7 +661,7 @@
         "subtasks": []
       },
       {
-        "id": "14",
+        "id": 14,
         "title": "[RES-02] Supervise and restart netstack + DNS vsock",
         "description": "Netstack exit is only logged (up.rs:783); one unprompted exit on 2026-08-18 left networking dead.",
         "details": "Restart loop with backoff that reconnects the DNS vsock and recreates SpeckNet; if restart fails, exit via the RES-01 path. Verify: test with injected netstack error.",
@@ -674,7 +674,7 @@
         "subtasks": []
       },
       {
-        "id": "15",
+        "id": 15,
         "title": "[RES-03] Guest clock resync + stale bridge drop after sleep/wake",
         "description": "No power observer; guest clock drifts after lid close, breaking TLS and AWS SigV4.",
         "details": "IORegisterForSystemPower observer on host; on wake send a settimeofday RPC to vminitd, drop stale reorigin bridges. Verify: manual M2 sleep 10min -> guest date within 2s of host.",
@@ -687,19 +687,19 @@
         "subtasks": []
       },
       {
-        "id": "16",
+        "id": 16,
         "title": "[RES-04] DNS proxy: all record types, concurrency, TCP fallback",
         "description": "Only A/AAAA answered (dns.rs:233-300), others NODATA; single blocking thread (dns.rs:80).",
         "details": "Forward raw queries for other types to the resolver chosen by ResolverTable (or system default), per-query workers, retry over TCP on TC bit. Verify: egress-smoke dns TXT/SRV/MX PASS; unit tests with mock resolver.",
         "testStrategy": "",
-        "status": "in-progress",
+        "status": "done",
         "dependencies": [],
         "priority": "high",
         "subtasks": [],
-        "updatedAt": "2026-10-11T11:47:05.677Z"
+        "updatedAt": "2026-10-11T11:54:06.565Z"
       },
       {
-        "id": "17",
+        "id": 17,
         "title": "[OPS-01] Proxy robustness: lock poisoning, bounded forwards, ::1 publish",
         "description": "expect('lock poisoned') in speck-dockerd proxy.rs and restart_503.rs:59; unbounded thread-per-connection port forwards; publish only on 127.0.0.1.",
         "details": "Use unwrap_or_else(|e| e.into_inner()); semaphore on forward threads; also bind ::1. Verify: cargo test -p speck-dockerd; curl http://[::1]:<port>.",
@@ -710,7 +710,7 @@
         "subtasks": []
       },
       {
-        "id": "18",
+        "id": 18,
         "title": "[OPS-02] Guest: dockerd respawn backoff + implement sysctl_write",
         "description": "dockerd respawned with no backoff; vminitd logs 'sysctl_write not yet implemented' so sysctl tuning is a no-op.",
         "details": "Backoff in vminitd spawn_dockerd_with_restart; implement sysctl_write via /proc/sys writes in LibcSyscalls. Verify: mock tests; console.log no longer shows the sysctl error.",
@@ -721,7 +721,7 @@
         "subtasks": []
       },
       {
-        "id": "19",
+        "id": 19,
         "title": "[OPS-03] spk doctor: binary/asset drift, guest CA, guest clock skew",
         "description": "Stale host binary vs guest assets went unnoticed for months; no check for CA or clock.",
         "details": "Add doctor checks for host/guest generation mismatch, CA present in guest, guest clock skew, egress port probe. Verify: doctor unit tests + live run.",
@@ -734,7 +734,7 @@
         "subtasks": []
       },
       {
-        "id": "20",
+        "id": 20,
         "title": "[DOG-01] Dogfood week on the corporate Mac",
         "description": "Speck as the only runtime for 5 working days; exit criterion 0 manual DNS/proxy resets.",
         "details": "Follow docs/manual-testing.md M1-M3. Log every incident as a new task with a regression test.",
@@ -753,16 +753,30 @@
         ],
         "priority": "high",
         "subtasks": []
+      },
+      {
+        "id": 21,
+        "title": "[RES-05] Guest DNS forwarder: TCP:53, >512B answers, concurrent queries",
+        "description": "Guest dns_forwarder.rs only listens on UDP:53 with a 512-byte buffer and handles one query at a time over a single vsock connection; >512B answers reach clients truncated (google.com TXT: 7 of 17 records) and one slow lookup blocks all guest DNS.",
+        "details": "speck-guest/src/dns_forwarder.rs: add a TCP:53 listener (length-prefixed, RFC 7766) sharing the vsock connection under a mutex or a second vsock connection; raise DNS_BUF_SIZE to 4096. For concurrency, match responses by DNS ID or open one vsock connection per in-flight query (host spawn_dns_proxy then accepts multiple). Needs an initrd rebuild (ties into OPS-04 release). Verify: egress-smoke 'dns large answer (>512B)' PASS; concurrent slow lookups do not block each other.",
+        "testStrategy": "",
+        "status": "pending",
+        "dependencies": [],
+        "priority": "medium",
+        "subtasks": []
       }
     ],
     "metadata": {
       "version": "1.0.0",
-      "lastModified": "2026-10-11T11:47:05.677Z",
+      "lastModified": "2026-10-11T11:54:06.565Z",
       "taskCount": 20,
-      "completedCount": 4,
+      "completedCount": 5,
       "tags": [
         "v1_4-daily-driver"
-      ]
+      ],
+      "created": "2026-10-11T11:54:08.107Z",
+      "description": "Tasks for v1_4-daily-driver context",
+      "updated": "2026-10-11T11:54:08.109Z"
     }
   }
 }
