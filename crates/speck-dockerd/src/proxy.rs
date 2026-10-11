@@ -560,7 +560,7 @@ async fn intercept_container_inspect(
         let published = state
             .published_ports
             .lock()
-            .expect("published ports lock poisoned");
+            .unwrap_or_else(|e| e.into_inner());
         resolve_container_id(&published, &id_or_name)
             .and_then(|id| published.by_id.get(&id))
             .map(|entry| !entry.ports.is_empty())
@@ -629,7 +629,7 @@ async fn intercept_container_list(state: ProxyState, req: Request) -> crate::Res
                 let published = state
                     .published_ports
                     .lock()
-                    .expect("published ports lock poisoned");
+                    .unwrap_or_else(|e| e.into_inner());
                 published.by_id.keys().cloned().collect()
             };
 
@@ -943,7 +943,7 @@ fn remember_published_ports(
     let mut published = state
         .published_ports
         .lock()
-        .expect("published ports lock poisoned");
+        .unwrap_or_else(|e| e.into_inner());
     published.by_id.insert(
         id.clone(),
         PublishedPortEntry {
@@ -963,7 +963,7 @@ fn remember_bind_mounts(
     alias: Option<String>,
     binds: Vec<VolumeMountConfig>,
 ) {
-    let mut bind_mounts = state.bind_mounts.lock().expect("bind mounts lock poisoned");
+    let mut bind_mounts = state.bind_mounts.lock().unwrap_or_else(|e| e.into_inner());
     bind_mounts.by_id.insert(id.clone(), binds);
     if let Some(alias) = alias {
         bind_mounts.aliases.insert(alias, id);
@@ -974,7 +974,7 @@ fn has_published_ports(state: &ProxyState, id_or_name: &str) -> bool {
     let published = state
         .published_ports
         .lock()
-        .expect("published ports lock poisoned");
+        .unwrap_or_else(|e| e.into_inner());
     resolve_container_id(&published, id_or_name)
         .and_then(|id| published.by_id.get(&id))
         .map(|entry| !entry.ports.is_empty())
@@ -989,7 +989,7 @@ fn activate_published_ports(
     let mut published = state
         .published_ports
         .lock()
-        .expect("published ports lock poisoned");
+        .unwrap_or_else(|e| e.into_inner());
     let Some(id) = resolve_container_id(&published, id_or_name) else {
         return Vec::new();
     };
@@ -1027,7 +1027,7 @@ fn forget_published_ports(state: &ProxyState, id_or_name: &str) -> Vec<PortMapCo
     let mut published = state
         .published_ports
         .lock()
-        .expect("published ports lock poisoned");
+        .unwrap_or_else(|e| e.into_inner());
     let Some(id) = resolve_container_id(&published, id_or_name) else {
         return Vec::new();
     };
@@ -1040,7 +1040,7 @@ fn forget_published_ports(state: &ProxyState, id_or_name: &str) -> Vec<PortMapCo
 }
 
 fn forget_bind_mounts(state: &ProxyState, id_or_name: &str) -> Vec<VolumeMountConfig> {
-    let mut bind_mounts = state.bind_mounts.lock().expect("bind mounts lock poisoned");
+    let mut bind_mounts = state.bind_mounts.lock().unwrap_or_else(|e| e.into_inner());
     let Some(id) = resolve_bind_mount_container_id(&bind_mounts, id_or_name) else {
         return Vec::new();
     };
@@ -1052,7 +1052,7 @@ fn stop_host_port_forwards(state: &ProxyState, id_or_name: &str) {
     let published = &mut *state
         .published_ports
         .lock()
-        .expect("published ports lock poisoned");
+        .unwrap_or_else(|e| e.into_inner());
     let Some(id) = resolve_container_id(published, id_or_name) else {
         return;
     };
@@ -1073,7 +1073,7 @@ fn register_host_port_forward(state: &ProxyState, id_or_name: &str, forward: Hos
     let published = &mut *state
         .published_ports
         .lock()
-        .expect("published ports lock poisoned");
+        .unwrap_or_else(|e| e.into_inner());
     let Some(id) = resolve_container_id(published, id_or_name) else {
         return;
     };
@@ -1082,46 +1082,98 @@ fn register_host_port_forward(state: &ProxyState, id_or_name: &str, forward: Hos
     }
 }
 
+/// Concurrent connections per published port; extra connections are refused.
+const MAX_FORWARDS_PER_PORT: usize = 256;
+/// How long the accept loop blocks before re-checking its stop flag.
+const ACCEPT_POLL_MS: libc::c_int = 250;
+
 fn spawn_host_port_forward(
     guest: Arc<speck_vz::Guest>,
     config: PortMapConfig,
 ) -> std::io::Result<HostPortForward> {
-    let target_ip = config
-        .target_ip
-        .expect("activated port map must have target_ip");
-    let listener = TcpListener::bind(("127.0.0.1", config.host_port))?;
-    listener.set_nonblocking(true)?;
+    let target_ip = config.target_ip.ok_or_else(|| {
+        std::io::Error::other(format!(
+            "published port {} has no target_ip",
+            config.host_port
+        ))
+    })?;
+    // Bind IPv6 loopback too: `localhost` may resolve to ::1 first.
+    let mut listeners = vec![TcpListener::bind(("127.0.0.1", config.host_port))?];
+    match TcpListener::bind(("::1", config.host_port)) {
+        Ok(v6) => listeners.push(v6),
+        Err(err) => {
+            tracing::debug!(error = %err, host_port = config.host_port, "published port not bound on ::1")
+        }
+    }
+    for listener in &listeners {
+        listener.set_nonblocking(true)?;
+    }
     let stop = Arc::new(AtomicBool::new(false));
     let stop_for_thread = Arc::clone(&stop);
+    let active = Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
     let join = std::thread::spawn(move || {
-        loop {
+        let mut pfds: Vec<libc::pollfd> = listeners
+            .iter()
+            .map(|l| libc::pollfd {
+                fd: std::os::unix::io::AsRawFd::as_raw_fd(l),
+                events: libc::POLLIN,
+                revents: 0,
+            })
+            .collect();
+        'accept: loop {
             if stop_for_thread.load(Ordering::SeqCst) {
                 break;
             }
-            match listener.accept() {
-                Ok((stream, _)) => {
-                    if stop_for_thread.load(Ordering::SeqCst) {
-                        break;
-                    }
-                    let guest = Arc::clone(&guest);
-                    std::thread::spawn(move || {
-                        if let Err(err) = bridge_host_to_guest_tcp(
-                            guest,
-                            target_ip,
-                            config.container_port,
-                            stream,
-                        ) {
-                            tracing::warn!(error = %err, host_port = config.host_port, target_ip = %target_ip, target_port = config.container_port, "published port connection failed");
+            // Block until a connection arrives (or the timeout lets us see
+            // the stop flag) instead of sleep-polling the listeners.
+            let ready = unsafe {
+                libc::poll(
+                    pfds.as_mut_ptr(),
+                    pfds.len() as libc::nfds_t,
+                    ACCEPT_POLL_MS,
+                )
+            };
+            if ready <= 0 {
+                continue;
+            }
+            for (listener, pfd) in listeners.iter().zip(pfds.iter_mut()) {
+                if pfd.revents == 0 {
+                    continue;
+                }
+                pfd.revents = 0;
+                match listener.accept() {
+                    Ok((stream, _)) => {
+                        if stop_for_thread.load(Ordering::SeqCst) {
+                            break 'accept;
                         }
-                    });
-                }
-                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
-                    std::thread::sleep(std::time::Duration::from_millis(25));
-                }
-                Err(err) => {
-                    tracing::warn!(error = %err, host_port = config.host_port, "published port accept loop failed");
-                    break;
+                        if active.load(Ordering::SeqCst) >= MAX_FORWARDS_PER_PORT {
+                            tracing::warn!(
+                                host_port = config.host_port,
+                                "published port at connection limit; refusing"
+                            );
+                            continue;
+                        }
+                        active.fetch_add(1, Ordering::SeqCst);
+                        let guest = Arc::clone(&guest);
+                        let active = Arc::clone(&active);
+                        std::thread::spawn(move || {
+                            if let Err(err) = bridge_host_to_guest_tcp(
+                                guest,
+                                target_ip,
+                                config.container_port,
+                                stream,
+                            ) {
+                                tracing::warn!(error = %err, host_port = config.host_port, target_ip = %target_ip, target_port = config.container_port, "published port connection failed");
+                            }
+                            active.fetch_sub(1, Ordering::SeqCst);
+                        });
+                    }
+                    Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {}
+                    Err(err) => {
+                        tracing::warn!(error = %err, host_port = config.host_port, "published port accept loop failed");
+                        break 'accept;
+                    }
                 }
             }
         }

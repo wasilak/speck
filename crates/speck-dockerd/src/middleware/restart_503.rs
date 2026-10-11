@@ -56,7 +56,7 @@ where
         let state = self
             .vm_state
             .read()
-            .expect("VmState RwLock poisoned")
+            .unwrap_or_else(|e| e.into_inner())
             .clone();
 
         if state == VmState::Restarting {

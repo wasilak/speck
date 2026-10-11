@@ -866,7 +866,7 @@ pub async fn run_up(
                             "PREPARE_RESTART" => {
                                 let _restart_start;
                                 {
-                                    let mut v = state.write().expect("VmState RwLock poisoned");
+                                    let mut v = state.write().unwrap_or_else(|e| e.into_inner());
                                     *v = VmState::Restarting;
                                     _restart_start = Instant::now();
                                 }
@@ -878,7 +878,7 @@ pub async fn run_up(
                                 tokio::spawn(async move {
                                     tokio::time::sleep(Duration::from_secs(60)).await;
                                     let mut v =
-                                        state_clone.write().expect("VmState RwLock poisoned");
+                                        state_clone.write().unwrap_or_else(|e| e.into_inner());
                                     if *v == VmState::Restarting {
                                         *v = VmState::Running;
                                         tracing::warn!(
