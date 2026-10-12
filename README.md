@@ -60,6 +60,10 @@ and containers, images and volumes are kept.
 `docker`, `docker compose` and `docker buildx` work without any setup, through
 the `speck` docker context. Speck starts again automatically at login.
 
+`linux/amd64` images run and build (`--platform linux/amd64`) through Apple's
+Rosetta. If Rosetta is not installed, install it once with
+`softwareupdate --install-rosetta --agree-to-license` and run `spk restart`.
+
 Tools that ignore docker contexts and only read `DOCKER_HOST` (some
 testcontainers and docker-py setups) need the environment variable:
 

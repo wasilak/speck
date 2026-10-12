@@ -178,6 +178,7 @@ mod linux {
         if let Err(e) = configure_sysctl_params(&libc_syscalls) {
             eprintln!("vminitd: sysctl configuration failed: {e}");
         }
+        setup_amd64_emulation();
 
         let dockerd_bin = detect_dockerd_bin();
         eprintln!("vminitd: using dockerd at {dockerd_bin}");
@@ -941,6 +942,49 @@ mod linux {
             "/usr/bin/dockerd"
         } else {
             "/usr/local/bin/dockerd"
+        }
+    }
+
+    /// Let linux/amd64 images run: mount binfmt_misc (registrations by
+    /// `tonistiigi/binfmt` then work too) and register Rosetta when the host
+    /// shares it.
+    fn setup_amd64_emulation() {
+        use speck_guest::binfmt::{ROSETTA_DIR, ROSETTA_RULE, ROSETTA_TAG};
+        let mounted = |source: &str, target: &str, fstype: &str| -> io::Result<()> {
+            let c = |s: &str| std::ffi::CString::new(s).expect("no NUL");
+            let (source, target, fstype) = (c(source), c(target), c(fstype));
+            let rc = unsafe {
+                libc::mount(
+                    source.as_ptr(),
+                    target.as_ptr(),
+                    fstype.as_ptr(),
+                    0,
+                    std::ptr::null(),
+                )
+            };
+            if rc == 0 {
+                Ok(())
+            } else {
+                Err(io::Error::last_os_error())
+            }
+        };
+        if let Err(e) = mounted("binfmt_misc", "/proc/sys/fs/binfmt_misc", "binfmt_misc")
+            && e.raw_os_error() != Some(libc::EBUSY)
+        {
+            eprintln!("vminitd: binfmt_misc mount failed: {e}");
+            return;
+        }
+        if let Err(e) = std::fs::create_dir_all(ROSETTA_DIR) {
+            eprintln!("vminitd: create {ROSETTA_DIR} failed: {e}");
+            return;
+        }
+        if let Err(e) = mounted(ROSETTA_TAG, ROSETTA_DIR, "virtiofs") {
+            eprintln!("vminitd: no Rosetta share ({e}); linux/amd64 images need an emulator");
+            return;
+        }
+        match std::fs::write("/proc/sys/fs/binfmt_misc/register", ROSETTA_RULE) {
+            Ok(()) => eprintln!("vminitd: Rosetta registered for linux/amd64 binaries"),
+            Err(e) => eprintln!("vminitd: Rosetta binfmt registration failed: {e}"),
         }
     }
 

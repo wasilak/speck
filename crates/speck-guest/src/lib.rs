@@ -1,3 +1,4 @@
+pub mod binfmt;
 pub mod ca_trust;
 #[cfg(target_os = "linux")]
 pub mod dns_forwarder;

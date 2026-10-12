@@ -10,9 +10,9 @@ use objc2::runtime::ProtocolObject;
 use objc2_foundation::{NSArray, NSCopying, NSDictionary, NSMutableDictionary, NSString, NSURL};
 #[cfg(target_os = "macos")]
 use objc2_virtualization::{
-    VZDirectoryShare, VZDirectorySharingDeviceConfiguration, VZMultipleDirectoryShare,
-    VZSharedDirectory, VZSingleDirectoryShare, VZVirtioFileSystemDevice,
-    VZVirtioFileSystemDeviceConfiguration,
+    VZDirectoryShare, VZDirectorySharingDeviceConfiguration, VZLinuxRosettaAvailability,
+    VZLinuxRosettaDirectoryShare, VZMultipleDirectoryShare, VZSharedDirectory,
+    VZSingleDirectoryShare, VZVirtioFileSystemDevice, VZVirtioFileSystemDeviceConfiguration,
 };
 
 use crate::config::VolumeMountConfig;
@@ -35,6 +35,10 @@ pub const CA_CERTS_TAG: &str = "speck-ca-certs";
 /// supports updating `VZVirtioFileSystemDevice.share` on a running VM, but does
 /// NOT allow adding new devices after the VM starts — hence the pre-provision.
 pub const BIND_MOUNTS_TAG: &str = "virtiofs-binds";
+
+/// VirtioFS device tag for Apple's Rosetta share. vminitd mounts it and
+/// registers Rosetta in binfmt_misc, so linux/amd64 images run in the guest.
+pub const ROSETTA_TAG: &str = "rosetta";
 
 /// Guest-visible runtime root where the pre-provisioned bind-mount VirtioFS
 /// device is mounted before dockerd consumes rewritten bind sources.
@@ -370,6 +374,11 @@ pub fn configure_virtiofs_devices(
         fs_devices.push(fs_dev);
     }
 
+    // Rosetta for linux/amd64 images, when installed on the Mac.
+    if let Some(rosetta) = rosetta_device() {
+        fs_devices.push(rosetta);
+    }
+
     // Build reference slice for NSArray (coerces via Deref)
     let refs: Vec<&VZDirectorySharingDeviceConfiguration> = fs_devices
         .iter()
@@ -381,6 +390,37 @@ pub fn configure_virtiofs_devices(
     }
 
     Ok(())
+}
+
+/// The Rosetta share device, or `None` when Rosetta is not installed.
+#[cfg(target_os = "macos")]
+fn rosetta_device() -> Option<Retained<VZVirtioFileSystemDeviceConfiguration>> {
+    let availability = unsafe { VZLinuxRosettaDirectoryShare::availability() };
+    if availability != VZLinuxRosettaAvailability::Installed {
+        tracing::warn!(
+            "Rosetta is not installed: linux/amd64 images will not run \
+             (install it with: softwareupdate --install-rosetta --agree-to-license)"
+        );
+        return None;
+    }
+    let share = match unsafe {
+        VZLinuxRosettaDirectoryShare::initWithError(VZLinuxRosettaDirectoryShare::alloc())
+    } {
+        Ok(share) => share,
+        Err(err) => {
+            tracing::warn!(error = %err.localizedDescription(), "Rosetta share unavailable");
+            return None;
+        }
+    };
+    let fs_dev = unsafe {
+        VZVirtioFileSystemDeviceConfiguration::initWithTag(
+            VZVirtioFileSystemDeviceConfiguration::alloc(),
+            &NSString::from_str(ROSETTA_TAG),
+        )
+    };
+    let share_ref: &VZDirectoryShare = &share;
+    unsafe { fs_dev.setShare(Some(share_ref)) };
+    Some(fs_dev)
 }
 
 /// Update the pre-provisioned `virtiofs-binds` device on a running VM.
