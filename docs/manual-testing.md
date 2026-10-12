@@ -7,34 +7,33 @@ are run by hand on the work Mac. Each run produces a short results table that go
 
 Automated gates run on the dev Mac: `scripts/conformance-smoke.sh`, `scripts/egress-smoke.sh`.
 
-## Install a HEAD build
-
-`initrd-1.4.0` (published from `scripts/build-initrd.sh`) matches the HEAD
-guest, and a binary built from HEAD downloads it on the first `spk up`. Do
-not reuse a `~/.speck` populated by an older build: `spk up` refuses stale
-assets; run `spk up --pull` once to refresh them.
-
-On the dev Mac:
+## Install on the work Mac
 
 ```bash
-cargo build --release --target aarch64-apple-darwin -p speck-cli
-cargo xtask sign release
-# copy target/aarch64-apple-darwin/release/spk to the work Mac
+brew install wasilak/tap/speck
+spk start --wait                        # downloads kernel, initrd, rootfs; selects the 'speck' docker context
+docker run --rm alpine wget -qO- https://example.com >/dev/null && echo OK
 ```
 
-On the work Mac:
+`spk start` also registers Speck to start at login. Upgrade with
+`brew upgrade wasilak/tap/speck && spk restart`; only changed guest assets are
+downloaded again.
+
+Keep Colima installed. Switch back at any time with `docker context use colima`
+(or `spk stop`). A `DOCKER_HOST` in your shell overrides the docker context:
+`spk start` warns about it. Remove an old Colima `DOCKER_HOST` from your shell
+config and run `spk init --set-docker-host` for tools that only read
+`DOCKER_HOST` (testcontainers).
+
+If `spk start` cannot download assets (proxy blocks GitHub), copy `~/.speck/kernel/`,
+`~/.speck/initrd/` and `~/.speck/rootfs.img` + `~/.speck/rootfs.version` from the dev Mac.
+
+The checks below use `scripts/egress-smoke.sh`. Without a repo checkout:
 
 ```bash
-rm -f ~/bin/spk && cp spk ~/bin/spk     # rm first: overwriting a signed binary in place → SIGKILL
-spk --version
-spk up --wait                           # downloads kernel, initrd 1.4.0, rootfs
-docker context create speck --docker "host=unix://$HOME/.speck/speck.sock"
+curl -fsSLO https://raw.githubusercontent.com/wasilak/speck/main/scripts/egress-smoke.sh
+chmod +x egress-smoke.sh
 ```
-
-Keep Colima installed. Switch back at any time with `docker context use colima`.
-
-If `spk up` cannot download assets (proxy blocks GitHub), copy `~/.speck/kernel/`,
-`~/.speck/initrd/` and `~/.speck/rootfs.img` + `~/.speck/rootfs.version` from the dev Mac too.
 
 Corporate CA handling (v1.4):
 
@@ -92,8 +91,8 @@ an explicit proxy/PAC (TLS-04) is required.
    ```
 
 Record: a ✅/❌ table per check for Speck without and with CA injection, and
-Colima, plus the `scutil --proxy` output. On the dev Mac (no VPN) the HEAD
-build passes 20/20.
+Colima, plus the `scutil --proxy` output. On the dev Mac (no VPN) spk 1.4.1
+passes 23/23.
 
 ## M1 — Real workloads (after Phases 26 + 27)
 
@@ -127,7 +126,7 @@ docker run --rm alpine wget -qO- https://<internal host> >/dev/null && echo OK
 
 ## M3 — Dogfood week (Phase 30)
 
-Use Speck as the only runtime: `docker context use speck`, `colima stop`.
+Use Speck as the only runtime: `spk start` (selects the `speck` context), `colima stop`.
 Keep an incident log:
 
 | Date/time | Symptom | What I did to recover | Fixed by reset? |
