@@ -886,13 +886,25 @@
         "priority": "high",
         "subtasks": [],
         "updatedAt": "2026-10-12T13:41:01.010Z"
+      },
+      {
+        "id": "31",
+        "title": "[FIX-1.4.3] linux/amd64 images via Rosetta",
+        "description": "amd64 run/build failed with exec format error (no emulation, binfmt_misc not mounted). Host shares VZLinuxRosettaDirectoryShare (tag rosetta); vminitd mounts binfmt_misc and registers Rosetta (flags CF). Released spk 1.4.3 + initrd 1.4.3.",
+        "details": "",
+        "testStrategy": "",
+        "status": "done",
+        "dependencies": [],
+        "priority": "high",
+        "subtasks": [],
+        "updatedAt": "2026-10-12T15:09:56.123Z"
       }
     ],
     "metadata": {
       "version": "1.0.0",
-      "lastModified": "2026-10-12T13:41:01.010Z",
-      "taskCount": 30,
-      "completedCount": 25,
+      "lastModified": "2026-10-12T15:09:56.123Z",
+      "taskCount": 31,
+      "completedCount": 26,
       "tags": [
         "v1_4-daily-driver"
       ]
