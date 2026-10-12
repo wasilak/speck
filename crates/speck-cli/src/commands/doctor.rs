@@ -266,7 +266,10 @@ fn trace_dns(hostname: &str) -> anyhow::Result<DnsTraceResult> {
     use std::net::ToSocketAddrs;
 
     // Validate hostname (T-13-01 ASVS V5 input validation).
-    if hostname.chars().any(|c| " ;|&$`'\"\\n".contains(c)) {
+    if hostname
+        .chars()
+        .any(|c| c.is_whitespace() || ";|&$`'\"\\".contains(c))
+    {
         anyhow::bail!("invalid hostname: contains shell metacharacters or whitespace");
     }
 
@@ -390,6 +393,18 @@ pub async fn run_doctor(speck_home: &Path, args: DoctorArgs) -> anyhow::Result<i
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn dns_trace_accepts_hostnames_with_n_and_rejects_metacharacters() {
+        for bad in ["a b", "a;b", "a\nb", "a\\b", "a$b", "a`b"] {
+            assert!(super::trace_dns(bad).is_err(), "{bad:?} must be rejected");
+        }
+        let err = super::trace_dns("nonexistent.invalid")
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_default();
+        assert!(!err.contains("metacharacters"), "{err}");
+    }
+
     const DOCTOR_SOURCE: &str = include_str!("doctor.rs");
 
     /// Slice production code only — everything before `#[cfg(test)]` — so tests do not
