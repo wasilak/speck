@@ -66,6 +66,8 @@ enum Commands {
     Logs(LogsArgs),
     /// Delete the Speck VM with all containers, images and volumes
     Delete(DeleteArgs),
+    /// Delete the Speck VM and start a fresh one (keeps downloads and config)
+    Recreate(DeleteArgs),
 }
 
 #[derive(Parser)]
@@ -526,6 +528,12 @@ async fn main() -> anyhow::Result<()> {
             let sock_path = speck_home.join("speck.sock");
             unsafe { std::env::set_var("SPECK_SOCK", sock_path.to_string_lossy().to_string()) };
             if !args.foreground && std::env::var("SPECK_DAEMONIZED").is_err() {
+                // The launchd agent belongs to the default SPECK_HOME; starting
+                // another instance through it would replace the default one.
+                anyhow::ensure!(
+                    docker_context::manages_context(),
+                    "a custom SPECK_HOME runs in the foreground only: use `spk up --foreground`"
+                );
                 if let Some(warning) = docker_context::docker_host_override_warning(&speck_home) {
                     eprintln!("warning: {warning}");
                 }
@@ -589,7 +597,13 @@ async fn main() -> anyhow::Result<()> {
         }
         Commands::Delete(args) => {
             init_tracing(&default_tracing_filter())?;
-            commands::delete::run_delete(args.force, &speck_home).await?
+            if commands::delete::run_delete(args.force, &speck_home).await? {
+                println!("Run `spk start` to create a fresh one.");
+            }
+        }
+        Commands::Recreate(args) => {
+            init_tracing(&default_tracing_filter())?;
+            commands::recreate::run_recreate(args.force, &speck_home).await?
         }
         Commands::Rm(args) => {
             init_tracing(&default_tracing_filter())?;

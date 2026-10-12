@@ -11,6 +11,7 @@ pub mod logging;
 pub mod logs;
 pub mod prune;
 pub mod ps;
+pub mod recreate;
 pub mod restart;
 pub mod rm;
 pub mod run;

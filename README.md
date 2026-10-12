@@ -50,6 +50,7 @@ spk restart
 spk stop        # stop the VM; switches docker back to the 'default' context
 spk prune       # delete cached downloads Speck no longer uses
 spk delete      # remove the VM with all containers, images and volumes
+spk recreate    # delete the VM and start a fresh one (keeps downloads and config)
 ```
 
 On first start Speck downloads the guest assets (~200 MB: Linux kernel,

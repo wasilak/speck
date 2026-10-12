@@ -19,8 +19,8 @@ const INSTANCE_PATHS: &[&str] = &[
 ];
 
 /// `spk delete`: stop Speck and remove the VM, including all containers,
-/// images and volumes (colima delete).
-pub async fn run_delete(force: bool, speck_home: &Path) -> anyhow::Result<()> {
+/// images and volumes (colima delete). Returns `false` when the user aborted.
+pub async fn run_delete(force: bool, speck_home: &Path) -> anyhow::Result<bool> {
     if !force {
         anyhow::ensure!(
             std::io::stdin().is_terminal(),
@@ -34,7 +34,7 @@ pub async fn run_delete(force: bool, speck_home: &Path) -> anyhow::Result<()> {
         std::io::stdin().lock().read_line(&mut answer)?;
         if !matches!(answer.trim(), "y" | "Y" | "yes") {
             println!("Aborted.");
-            return Ok(());
+            return Ok(false);
         }
     }
 
@@ -61,6 +61,6 @@ pub async fn run_delete(force: bool, speck_home: &Path) -> anyhow::Result<()> {
         }
     }
 
-    println!("{NEON_CYAN}Speck VM deleted.\x1b[0m Run `spk start` to create a fresh one.");
-    Ok(())
+    println!("{NEON_CYAN}Speck VM deleted.\x1b[0m");
+    Ok(true)
 }
