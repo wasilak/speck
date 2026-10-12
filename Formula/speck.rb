@@ -8,8 +8,8 @@ class Speck < Formula
 
   on_macos do
     on_arm do
-      url "https://github.com/wasilak/speck/releases/download/v1.4.1/spk-v1.4.1-aarch64-apple-darwin.tar.gz"
-      sha256 "371c9fc4ae99f9b3ed638c7bc8069eb3dd81659004686cb8daf8a7badf441871"
+      url "https://github.com/wasilak/speck/releases/download/v1.4.2/spk-v1.4.2-aarch64-apple-darwin.tar.gz"
+      sha256 "b93454ffb6d84ddf3d6e9d7385eafbe92b0451e855333adc7c5c1663f35706ca"
     end
   end
 
