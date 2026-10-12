@@ -28,38 +28,44 @@ pub async fn run_down(speck_home: &Path) -> anyhow::Result<()> {
     if alive {
         tracing::info!("daemon is alive, proceeding with shutdown");
 
-        // Step 2 — Stop the daemon. Try launchctl bootout first (launchd-managed case);
-        // if it fails (daemon was started directly, e.g. spk up --foreground), fall back
-        // to SIGTERM via the PID file.
-        let out = std::process::Command::new("id")
-            .arg("-u")
-            .output()
-            .context("failed to run id -u")?;
-        let uid_str = std::str::from_utf8(&out.stdout)
-            .context("non-UTF8 uid")?
-            .trim()
-            .to_owned();
-        let bootout_ok = tokio::process::Command::new("launchctl")
-            .args(["bootout", &format!("gui/{uid_str}/{LAUNCHD_LABEL}")])
-            .status()
-            .await
-            .context("launchctl bootout failed")?
-            .success();
-
-        if !bootout_ok {
-            tracing::info!("launchctl bootout failed — trying pid file fallback");
+        // The launchd agent runs the default SPECK_HOME only: another
+        // instance (a custom SPECK_HOME) must not boot it out.
+        if !crate::docker_context::manages_context() {
             kill_via_pid_file(speck_home)?;
-        }
+        } else {
+            // Step 2 — Stop the daemon. Try launchctl bootout first (launchd-managed case);
+            // if it fails (daemon was started directly, e.g. spk up --foreground), fall back
+            // to SIGTERM via the PID file.
+            let out = std::process::Command::new("id")
+                .arg("-u")
+                .output()
+                .context("failed to run id -u")?;
+            let uid_str = std::str::from_utf8(&out.stdout)
+                .context("non-UTF8 uid")?
+                .trim()
+                .to_owned();
+            let bootout_ok = tokio::process::Command::new("launchctl")
+                .args(["bootout", &format!("gui/{uid_str}/{LAUNCHD_LABEL}")])
+                .status()
+                .await
+                .context("launchctl bootout failed")?
+                .success();
 
-        // Step 3 — Remove io.speck.vm.plist to prevent auto-registration on next login
-        let home = std::env::var("HOME").context("HOME not set")?;
-        let plist_path = PathBuf::from(home)
-            .join("Library/LaunchAgents")
-            .join("io.speck.vm.plist");
-        match std::fs::remove_file(&plist_path) {
-            Ok(()) => tracing::info!("plist removed"),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => tracing::warn!(error = %e, "failed to remove plist"),
+            if !bootout_ok {
+                tracing::info!("launchctl bootout failed — trying pid file fallback");
+                kill_via_pid_file(speck_home)?;
+            }
+
+            // Step 3 — Remove io.speck.vm.plist to prevent auto-registration on next login
+            let home = std::env::var("HOME").context("HOME not set")?;
+            let plist_path = PathBuf::from(home)
+                .join("Library/LaunchAgents")
+                .join("io.speck.vm.plist");
+            match std::fs::remove_file(&plist_path) {
+                Ok(()) => tracing::info!("plist removed"),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => tracing::warn!(error = %e, "failed to remove plist"),
+            }
         }
 
         // Step 4 — Poll for clean shutdown: wait until control.sock disappears (timeout 30s)
