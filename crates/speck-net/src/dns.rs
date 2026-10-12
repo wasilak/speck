@@ -127,63 +127,103 @@ pub fn spawn_dns_proxy(
         );
 
         let mut buf = vec![0u8; 4096];
-
-        loop {
-            // Read u16 BE length prefix
-            let mut len_buf = [0u8; 2];
-            tracing::debug!(fd = vsock_fd, "dns-proxy waiting for query");
-            if !read_exact_fd(vsock_fd, &mut len_buf) {
-                tracing::debug!(fd = vsock_fd, "dns-proxy EOF, exiting");
-                return Ok(());
-            }
-
-            let query_len = u16::from_be_bytes(len_buf) as usize;
-            tracing::debug!(fd = vsock_fd, len = query_len, "dns-proxy query received");
-            if query_len == 0 {
-                continue;
-            }
-            if query_len > buf.len() {
-                // Consume and discard the oversized payload so the length-prefixed
-                // stream stays in sync for subsequent queries (CR-01).
-                let mut discard = vec![0u8; query_len];
-                if !read_exact_fd(vsock_fd, &mut discard) {
-                    return Ok(());
-                }
-                tracing::warn!(
-                    fd = vsock_fd,
-                    query_len,
-                    "dns-proxy: oversized query discarded"
-                );
-                continue;
-            }
-
-            if !read_exact_fd(vsock_fd, &mut buf[..query_len]) {
-                return Ok(());
-            }
-
-            let qname = extract_qname(&buf[..query_len]);
-            tracing::debug!(domain = ?qname, "dns-proxy resolving");
-            let current_table = resolver_rx.borrow_and_update().clone();
-            let to_send = if let Some(domain) = qname {
-                let response = resolve_with_table(
-                    resolver.as_ref(),
-                    &current_table,
-                    &domain,
-                    &buf[..query_len],
-                );
-                tracing::debug!(bytes = response.len(), "dns-proxy resolved ok");
-                response
-            } else {
-                tracing::debug!(fd = vsock_fd, "dns-proxy resolve failed, sending SERVFAIL");
-                build_servfail_response(&buf[..query_len])
-            };
-
-            let len_bytes = (to_send.len() as u16).to_be_bytes();
-            if !write_exact_fd(vsock_fd, &len_bytes) || !write_exact_fd(vsock_fd, &to_send) {
-                return Ok(());
-            }
-        }
+        let runtime = tokio::runtime::Handle::current();
+        let writer = std::sync::Arc::new(AnswerWriter {
+            fd: vsock_fd,
+            closed: std::sync::Mutex::new(false),
+        });
+        let result = serve_queries(
+            vsock_fd,
+            &mut buf,
+            &mut resolver_rx,
+            &resolver,
+            &writer,
+            &runtime,
+        );
+        writer.close();
+        result
     })
+}
+
+fn serve_queries(
+    vsock_fd: RawFd,
+    buf: &mut [u8],
+    resolver_rx: &mut tokio::sync::watch::Receiver<crate::resolver_table::ResolverTable>,
+    resolver: &std::sync::Arc<dyn Resolver>,
+    writer: &std::sync::Arc<AnswerWriter>,
+    runtime: &tokio::runtime::Handle,
+) -> std::result::Result<(), error::Error> {
+    loop {
+        // Read u16 BE length prefix
+        let mut len_buf = [0u8; 2];
+        tracing::debug!(fd = vsock_fd, "dns-proxy waiting for query");
+        if !read_exact_fd(vsock_fd, &mut len_buf) {
+            tracing::debug!(fd = vsock_fd, "dns-proxy EOF, exiting");
+            return Ok(());
+        }
+
+        let query_len = u16::from_be_bytes(len_buf) as usize;
+        tracing::debug!(fd = vsock_fd, len = query_len, "dns-proxy query received");
+        if query_len == 0 {
+            continue;
+        }
+        if query_len > buf.len() {
+            // Consume and discard the oversized payload so the length-prefixed
+            // stream stays in sync for subsequent queries (CR-01).
+            let mut discard = vec![0u8; query_len];
+            if !read_exact_fd(vsock_fd, &mut discard) {
+                return Ok(());
+            }
+            tracing::warn!(
+                fd = vsock_fd,
+                query_len,
+                "dns-proxy: oversized query discarded"
+            );
+            continue;
+        }
+
+        if !read_exact_fd(vsock_fd, &mut buf[..query_len]) {
+            return Ok(());
+        }
+
+        // Resolve concurrently: one slow name (a VPN resolver, a stuck
+        // getaddrinfo) must not hold up every other query. The guest
+        // matches answers to queries by ID.
+        let query = buf[..query_len].to_vec();
+        let table = resolver_rx.borrow_and_update().clone();
+        let resolver = std::sync::Arc::clone(resolver);
+        let writer = std::sync::Arc::clone(writer);
+        runtime.spawn_blocking(move || {
+            let to_send = match extract_qname(&query) {
+                Some(domain) => resolve_with_table(resolver.as_ref(), &table, &domain, &query),
+                None => build_servfail_response(&query),
+            };
+            writer.send(&to_send);
+        });
+    }
+}
+
+/// Writes whole answers to the guest from concurrent resolver tasks.
+struct AnswerWriter {
+    fd: RawFd,
+    /// `true` once the proxy loop ended: the fd may be closed and reused.
+    closed: std::sync::Mutex<bool>,
+}
+
+impl AnswerWriter {
+    fn send(&self, answer: &[u8]) {
+        let mut frame = Vec::with_capacity(answer.len() + 2);
+        frame.extend_from_slice(&(answer.len() as u16).to_be_bytes());
+        frame.extend_from_slice(answer);
+        let closed = self.closed.lock().unwrap_or_else(|e| e.into_inner());
+        if !*closed {
+            write_exact_fd(self.fd, &frame);
+        }
+    }
+
+    fn close(&self) {
+        *self.closed.lock().unwrap_or_else(|e| e.into_inner()) = true;
+    }
 }
 
 fn read_exact_fd(fd: RawFd, buf: &mut [u8]) -> bool {
@@ -402,19 +442,20 @@ fn find_qname_end(data: &[u8], mut start: usize) -> Option<usize> {
 
 /// Forward a DNS query directly to a nameserver via UDP (DNS-04), retrying
 /// over TCP when the UDP answer is truncated (TC bit).
-/// Uses a 500ms read timeout to avoid blocking the proxy loop indefinitely.
+/// Sends the query twice, 1 s apart: the first lookup of a name behind a VPN
+/// resolver often takes longer than a cached one.
 /// Returns None on any socket error, send failure, or receive timeout.
 fn direct_dns_query(nameserver: std::net::IpAddr, query: &[u8]) -> Option<Vec<u8>> {
     use std::net::{SocketAddr, UdpSocket};
     use std::time::Duration;
     let socket = UdpSocket::bind("0.0.0.0:0").ok()?;
-    socket
-        .set_read_timeout(Some(Duration::from_millis(500)))
-        .ok()?;
+    socket.set_read_timeout(Some(Duration::from_secs(1))).ok()?;
     let ns_addr = SocketAddr::new(nameserver, 53);
-    socket.send_to(query, ns_addr).ok()?;
     let mut resp_buf = vec![0u8; 4096];
-    let n = socket.recv_from(&mut resp_buf).ok()?.0;
+    let n = (0..2).find_map(|_| {
+        socket.send_to(query, ns_addr).ok()?;
+        socket.recv_from(&mut resp_buf).ok().map(|(n, _)| n)
+    })?;
     let resp = &resp_buf[..n];
     // On truncation the full answer may only go back over UDP if it fits the
     // size the client advertised (EDNS, else 512). Otherwise keep the

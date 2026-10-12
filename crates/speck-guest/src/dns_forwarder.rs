@@ -14,6 +14,8 @@
 
 use std::io;
 
+use crate::dns_mux::Pending;
+
 const DNS_BUF_SIZE: usize = 512;
 
 /// Run a DNS forwarder on the given vsock port.
@@ -130,68 +132,135 @@ pub fn serve(dns_vsock_port: u32) -> io::Result<()> {
     };
 
     // --- Step 3: Poll loop ---
+    // Queries go to the host as soon as they arrive; the host answers them
+    // concurrently and `pending` routes each answer back to its client.
     let mut buf = [0u8; DNS_BUF_SIZE];
     let mut resp = vec![0u8; u16::MAX as usize];
+    let mut pending: Pending<Client> = Pending::default();
+    let mut tcp_clients: Vec<TcpClient> = Vec::new();
+    let mut next_client_id = 0u64;
 
     loop {
-        let mut fds = [
-            libc::pollfd {
-                fd: udp_fd,
+        let mut fds: Vec<libc::pollfd> = [udp_fd, vsock_fd, tcp_fd] // negative fd is ignored by poll
+            .into_iter()
+            .chain(tcp_clients.iter().map(|c| c.fd))
+            .map(|fd| libc::pollfd {
+                fd,
                 events: libc::POLLIN,
                 revents: 0,
-            },
-            libc::pollfd {
-                fd: vsock_fd,
-                events: libc::POLLIN,
-                revents: 0,
-            },
-            libc::pollfd {
-                fd: tcp_fd, // negative fd is ignored by poll
-                events: libc::POLLIN,
-                revents: 0,
-            },
-        ];
+            })
+            .collect();
 
-        let ret = unsafe { libc::poll(fds.as_mut_ptr(), 3, -1) };
+        let ret = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, 1000) };
         if ret < 0 {
-            return Err(io::Error::last_os_error());
+            let err = io::Error::last_os_error();
+            if err.kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(err);
+        }
+        let now = std::time::Instant::now();
+
+        // Host answer: route it to the client that asked.
+        if fds[1].revents & (libc::POLLIN | libc::POLLHUP | libc::POLLERR) != 0 {
+            let len = read_frame(vsock_fd, &mut resp)?;
+            match pending.complete(&mut resp[..len]) {
+                Some(Client::Udp { addr, local }) => send_reply(udp_fd, &resp[..len], &addr, local),
+                Some(Client::Tcp(id)) => {
+                    if let Some(client) = tcp_clients.iter_mut().find(|c| c.id == id) {
+                        client.last_active = now;
+                        if write_frame(client.fd, &resp[..len]).is_err() {
+                            client.closed = true;
+                        }
+                    }
+                }
+                None => {}
+            }
         }
 
-        // UDP:53 has data — DNS query from guest app
-        if fds[0].revents & libc::POLLIN != 0 {
-            // Capture the client address and the address the query was sent
-            // to, so the reply can come from that same address.
-            let Some((n, client_addr, local_addr)) = recv_query(udp_fd, &mut buf) else {
+        // UDP:53 query from a guest app.
+        if fds[0].revents & libc::POLLIN != 0
+            && let Some((n, addr, local)) = recv_query(udp_fd, &mut buf)
+        {
+            let mut query = buf[..n].to_vec();
+            if pending.register(&mut query, Client::Udp { addr, local }, now) {
+                write_frame(vsock_fd, &query)?;
+            }
+        }
+
+        // New TCP:53 client (retry after a truncated UDP answer).
+        if fds[2].revents & libc::POLLIN != 0 {
+            let fd = unsafe { libc::accept(tcp_fd, std::ptr::null_mut(), std::ptr::null_mut()) };
+            if fd >= 0 {
+                if tcp_clients.len() < MAX_TCP_CLIENTS {
+                    set_timeouts(fd);
+                    tcp_clients.push(TcpClient {
+                        id: next_client_id,
+                        fd,
+                        last_active: now,
+                        closed: false,
+                    });
+                    next_client_id += 1;
+                } else {
+                    unsafe { libc::close(fd) };
+                }
+            }
+        }
+
+        // Queries from TCP clients.
+        for (client, pfd) in tcp_clients.iter_mut().zip(&fds[3..]) {
+            if pfd.revents & (libc::POLLIN | libc::POLLHUP | libc::POLLERR) == 0 {
+                continue;
+            }
+            let Ok(len) = read_frame(client.fd, &mut resp) else {
+                client.closed = true;
                 continue;
             };
-
-            let resp_len = forward(vsock_fd, &buf[..n], &mut resp)?;
-            if resp_len == 0 {
-                continue;
-            }
-
-            send_reply(udp_fd, &resp[..resp_len], &client_addr, local_addr);
-        }
-
-        // TCP:53 client — serve its queries inline (clients send one query
-        // and close; a 2 s timeout bounds how long UDP waits behind it).
-        if fds[2].revents & libc::POLLIN != 0 {
-            let client =
-                unsafe { libc::accept(tcp_fd, std::ptr::null_mut(), std::ptr::null_mut()) };
-            if client >= 0 {
-                let result = serve_tcp_client(client, vsock_fd, &mut resp);
-                unsafe { libc::close(client) };
-                result?;
+            client.last_active = now;
+            // A TCP client accepts answers of any size; tell the host so.
+            let mut query =
+                crate::dns_wire::with_edns(&resp[..len], crate::dns_wire::TCP_EDNS_PAYLOAD);
+            if pending.register(&mut query, Client::Tcp(client.id), now) {
+                write_frame(vsock_fd, &query)?;
             }
         }
 
-        // Vsock data arriving without a prior query (rare/protocol error) — drain
-        if fds[1].revents & libc::POLLIN != 0 {
-            let mut drain = [0u8; 4];
-            let _ = unsafe { libc::read(vsock_fd, drain.as_mut_ptr() as *mut libc::c_void, 4) };
+        // Drop closed and idle TCP clients, and the answers they wait for.
+        let before = tcp_clients.len();
+        tcp_clients.retain(|c| {
+            let keep = !c.closed && now.duration_since(c.last_active) < TCP_IDLE;
+            if !keep {
+                unsafe { libc::close(c.fd) };
+            }
+            keep
+        });
+        if tcp_clients.len() != before {
+            pending.forget(|client| match client {
+                Client::Tcp(id) => !tcp_clients.iter().any(|c| c.id == *id),
+                Client::Udp { .. } => false,
+            });
         }
     }
 }
+
+/// Where a host answer goes.
+enum Client {
+    Udp {
+        addr: libc::sockaddr_in,
+        local: Option<libc::in_addr>,
+    },
+    Tcp(u64),
+}
+
+struct TcpClient {
+    id: u64,
+    fd: libc::c_int,
+    last_active: std::time::Instant,
+    closed: bool,
+}
+
+const MAX_TCP_CLIENTS: usize = 64;
+const TCP_IDLE: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// Receive one query. Returns its length, the client address and the local
 /// address the query was sent to (from IP_PKTINFO), if the kernel reported it.
@@ -310,17 +379,22 @@ fn read_exact(fd: libc::c_int, buf: &mut [u8]) -> io::Result<()> {
     Ok(())
 }
 
-/// Send one length-prefixed query to the host over vsock and read the whole
-/// response into `resp`. Always reads the full response, whatever its size:
-/// a partial read would desynchronise the stream for every later query.
-fn forward(vsock_fd: libc::c_int, query: &[u8], resp: &mut [u8]) -> io::Result<usize> {
-    write_all(vsock_fd, &(query.len() as u16).to_be_bytes())?;
-    write_all(vsock_fd, query)?;
+/// Write one length-prefixed DNS message.
+fn write_frame(fd: libc::c_int, msg: &[u8]) -> io::Result<()> {
+    let mut frame = Vec::with_capacity(msg.len() + 2);
+    frame.extend_from_slice(&(msg.len() as u16).to_be_bytes());
+    frame.extend_from_slice(msg);
+    write_all(fd, &frame)
+}
+
+/// Read one whole length-prefixed DNS message into `buf`. Always reads the
+/// full message: a partial read would desynchronise the stream.
+fn read_frame(fd: libc::c_int, buf: &mut [u8]) -> io::Result<usize> {
     let mut len_buf = [0u8; 2];
-    read_exact(vsock_fd, &mut len_buf)?;
-    let resp_len = u16::from_be_bytes(len_buf) as usize;
-    read_exact(vsock_fd, &mut resp[..resp_len])?;
-    Ok(resp_len)
+    read_exact(fd, &mut len_buf)?;
+    let len = u16::from_be_bytes(len_buf) as usize;
+    read_exact(fd, &mut buf[..len])?;
+    Ok(len)
 }
 
 fn tcp_listener(port: u16) -> io::Result<libc::c_int> {
@@ -360,9 +434,8 @@ fn tcp_listener(port: u16) -> io::Result<libc::c_int> {
     Ok(fd)
 }
 
-/// Serve DNS-over-TCP queries from one client until it closes or idles.
-/// Client-side failures end the connection; only vsock failures are errors.
-fn serve_tcp_client(client: libc::c_int, vsock_fd: libc::c_int, resp: &mut [u8]) -> io::Result<()> {
+/// Bound blocking reads and writes on a TCP client socket to 2 s.
+fn set_timeouts(fd: libc::c_int) {
     let timeout = libc::timeval {
         tv_sec: 2,
         tv_usec: 0,
@@ -370,31 +443,12 @@ fn serve_tcp_client(client: libc::c_int, vsock_fd: libc::c_int, resp: &mut [u8])
     for opt in [libc::SO_RCVTIMEO, libc::SO_SNDTIMEO] {
         unsafe {
             libc::setsockopt(
-                client,
+                fd,
                 libc::SOL_SOCKET,
                 opt,
                 &timeout as *const libc::timeval as *const libc::c_void,
                 std::mem::size_of::<libc::timeval>() as libc::socklen_t,
             );
-        }
-    }
-    let mut query = vec![0u8; u16::MAX as usize];
-    loop {
-        let mut len_buf = [0u8; 2];
-        if read_exact(client, &mut len_buf).is_err() {
-            return Ok(());
-        }
-        let len = u16::from_be_bytes(len_buf) as usize;
-        if read_exact(client, &mut query[..len]).is_err() {
-            return Ok(());
-        }
-        // A TCP client accepts answers of any size; tell the host so.
-        let q = crate::dns_wire::with_edns(&query[..len], crate::dns_wire::TCP_EDNS_PAYLOAD);
-        let resp_len = forward(vsock_fd, &q, resp)?;
-        if write_all(client, &(resp_len as u16).to_be_bytes()).is_err()
-            || write_all(client, &resp[..resp_len]).is_err()
-        {
-            return Ok(());
         }
     }
 }

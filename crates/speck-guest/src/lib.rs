@@ -1,6 +1,7 @@
 pub mod ca_trust;
 #[cfg(target_os = "linux")]
 pub mod dns_forwarder;
+pub mod dns_mux;
 pub mod dns_wire;
 #[cfg(target_os = "linux")]
 pub mod log_relay;
