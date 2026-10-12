@@ -144,6 +144,9 @@ pub fn build_proxy_router_with_options(
         bind_mounts: Arc::new(Mutex::new(BindMountState::default())),
         next_bind_namespace: Arc::new(AtomicU64::new(1)),
     };
+    if state.guest.is_some() {
+        tokio::spawn(reconcile_running_containers(state.clone()));
+    }
 
     Router::new()
         .fallback(passthrough)
@@ -162,6 +165,7 @@ async fn passthrough(State(state): State<ProxyState>, mut req: Request) -> crate
     }
     if req.method() == hyper::Method::POST
         && let Some(id) = extract_container_id(stripped_path, "/containers/", "/start")
+            .or_else(|| extract_container_id(stripped_path, "/containers/", "/restart"))
     {
         tracing::info!(container = %id, "routing request into intercept_container_start");
         return intercept_container_start(state, req, id.to_owned()).await;
@@ -480,39 +484,118 @@ async fn intercept_container_start(
     req: Request,
     id_or_name: String,
 ) -> crate::Result<Response> {
-    tracing::info!(container = %id_or_name, "intercept container start before forward");
     let response = forward_plain(&state, req).await?;
-    tracing::info!(container = %id_or_name, "intercept container start after forward");
     tracing::info!(status = %response.status(), container = %id_or_name, "intercepted container start response");
     if response.status() == StatusCode::NO_CONTENT
-        && let Some(guest) = state.guest.as_ref()
+        && let Err(err) = expose_published_ports(&state, &id_or_name).await
     {
-        if !has_published_ports(&state, &id_or_name) {
-            return Ok(response);
-        }
-        let Some(container_ip) = wait_for_container_ip(&state, &id_or_name).await? else {
-            best_effort_stop_container(&state, &id_or_name).await;
-            return Err(DockerApiError::Internal(format!(
-                "failed to resolve published-port target IP for started container {id_or_name}"
-            )));
-        };
-        let ports = activate_published_ports(&state, &id_or_name, container_ip);
-        tracing::info!(container = %id_or_name, port_count = ports.len(), "published ports activated for container");
-        for port in ports {
-            match spawn_host_port_forward(guest.clone(), port) {
-                Ok(forward) => register_host_port_forward(&state, &id_or_name, forward),
-                Err(err) => {
-                    stop_host_port_forwards(&state, &id_or_name);
-                    best_effort_stop_container(&state, &id_or_name).await;
-                    return Err(DockerApiError::Internal(format!(
-                        "failed to expose published port {} for container {id_or_name}: {err}",
-                        port.host_port,
-                    )));
-                }
+        best_effort_stop_container(&state, &id_or_name).await;
+        return Err(err);
+    }
+    Ok(response)
+}
+
+/// Forward the published ports of a running container to the host. The
+/// ports come from the container's inspect data, not from the create call,
+/// so containers created before a Speck restart (or with random host ports)
+/// get their ports back on `docker start`/`restart`.
+async fn expose_published_ports(state: &ProxyState, id_or_name: &str) -> crate::Result<()> {
+    let Some(guest) = state.guest.as_ref() else {
+        return Ok(());
+    };
+    // A container that exited on its own never went through the stop
+    // intercept: drop its forwards, they may target a stale IP.
+    stop_host_port_forwards(state, id_or_name);
+    let inspect = get_json(state, &format!("/containers/{id_or_name}/json")).await?;
+    learn_published_ports(state, &inspect);
+    if !has_published_ports(state, id_or_name) {
+        return Ok(());
+    }
+    let Some(container_ip) = wait_for_container_ip(state, id_or_name).await? else {
+        return Err(DockerApiError::Internal(format!(
+            "failed to resolve published-port target IP for started container {id_or_name}"
+        )));
+    };
+    let ports = activate_published_ports(state, id_or_name, container_ip);
+    tracing::info!(container = %id_or_name, port_count = ports.len(), "published ports activated for container");
+    for port in ports {
+        match spawn_host_port_forward(guest.clone(), port) {
+            Ok(forward) => register_host_port_forward(state, id_or_name, forward),
+            Err(err) => {
+                stop_host_port_forwards(state, id_or_name);
+                return Err(DockerApiError::Internal(format!(
+                    "failed to expose published port {} for container {id_or_name}: {err}",
+                    port.host_port,
+                )));
             }
         }
     }
-    Ok(response)
+    Ok(())
+}
+
+/// Record the published ports from a container's inspect data
+/// (`NetworkSettings.Ports`: the host ports dockerd actually bound).
+fn learn_published_ports(state: &ProxyState, inspect: &serde_json::Value) {
+    let ports = ports_from_inspect(inspect);
+    let Some(id) = inspect.get("Id").and_then(|v| v.as_str()) else {
+        return;
+    };
+    if ports.is_empty() {
+        return;
+    }
+    let name = inspect
+        .get("Name")
+        .and_then(|v| v.as_str())
+        .map(|n| n.trim_start_matches('/').to_owned());
+    remember_published_ports(state, id.to_owned(), name, ports, false);
+}
+
+fn ports_from_inspect(inspect: &serde_json::Value) -> Vec<PortMapConfig> {
+    let bindings: HashMap<String, Vec<PortBindingBody>> = inspect
+        .pointer("/NetworkSettings/Ports")
+        .cloned()
+        .and_then(|ports| {
+            serde_json::from_value::<HashMap<String, Option<Vec<PortBindingBody>>>>(ports).ok()
+        })
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|(key, bindings)| Some((key, bindings?)))
+        .collect();
+    // dockerd lists each host port once per address family (0.0.0.0, ::).
+    let mut ports = extract_port_maps(Some(bindings));
+    ports.sort_by_key(|port| (port.host_port, port.container_port));
+    ports.dedup_by_key(|port| port.host_port);
+    ports
+}
+
+/// After a Speck restart the published-port table is empty, while guest
+/// dockerd may already run containers (restart policies). Expose their ports
+/// once dockerd answers.
+async fn reconcile_running_containers(state: ProxyState) {
+    let mut containers = None;
+    for _ in 0..60 {
+        match get_json(&state, "/containers/json").await {
+            Ok(list) => {
+                containers = Some(list);
+                break;
+            }
+            Err(_) => tokio::time::sleep(std::time::Duration::from_secs(1)).await,
+        }
+    }
+    let Some(containers) = containers else {
+        tracing::warn!("guest dockerd unreachable; running containers keep no published ports");
+        return;
+    };
+    let ids = containers
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|c| c.get("Id").and_then(|v| v.as_str()));
+    for id in ids {
+        if let Err(err) = expose_published_ports(&state, id).await {
+            tracing::warn!(container = %id, error = %err, "could not restore published ports");
+        }
+    }
 }
 
 async fn intercept_container_stop(
@@ -1337,19 +1420,30 @@ fn allocate_bind_namespace(state: &ProxyState) -> String {
     )
 }
 
-async fn inspect_container_ip(state: &ProxyState, id: &str) -> crate::Result<Option<Ipv4Addr>> {
-    let uri: hyper::Uri = format!("http://localhost/containers/{id}/json")
+/// `GET` a guest dockerd API path and parse the JSON body.
+async fn get_json(state: &ProxyState, path: &str) -> crate::Result<serde_json::Value> {
+    let uri: hyper::Uri = format!("http://localhost{path}")
         .parse()
-        .map_err(|err| DockerApiError::Internal(format!("invalid inspect URI: {err}")))?;
+        .map_err(|err| DockerApiError::Internal(format!("invalid URI {path}: {err}")))?;
     let req = Request::builder()
         .method(hyper::Method::GET)
         .uri(uri)
         .body(Body::empty())
-        .map_err(|err| DockerApiError::Internal(format!("build inspect request: {err}")))?;
+        .map_err(|err| DockerApiError::Internal(format!("build request {path}: {err}")))?;
     let backend_resp = forward_request(state, req).await?;
-    let (_parts, body_bytes) = collect_response(backend_resp).await?;
-    let inspect: serde_json::Value = serde_json::from_slice(&body_bytes)
-        .map_err(|err| DockerApiError::Internal(format!("parse inspect response: {err}")))?;
+    let (parts, body_bytes) = collect_response(backend_resp).await?;
+    if !parts.status.is_success() {
+        return Err(DockerApiError::Internal(format!(
+            "GET {path}: guest dockerd returned {}",
+            parts.status
+        )));
+    }
+    serde_json::from_slice(&body_bytes)
+        .map_err(|err| DockerApiError::Internal(format!("parse {path} response: {err}")))
+}
+
+async fn inspect_container_ip(state: &ProxyState, id: &str) -> crate::Result<Option<Ipv4Addr>> {
+    let inspect = get_json(state, &format!("/containers/{id}/json")).await?;
 
     if let Some(networks) = inspect
         .get("NetworkSettings")
@@ -1531,5 +1625,37 @@ mod inject_ca_bundle_tests {
             inject(serde_json::json!({"Image": "x", "Env": null, "HostConfig": {"Binds": null}}));
         assert_eq!(out["Env"].as_array().unwrap().len(), 3);
         assert_eq!(out["HostConfig"]["Binds"].as_array().unwrap().len(), 2);
+    }
+}
+
+#[cfg(test)]
+mod ports_from_inspect_tests {
+    use super::ports_from_inspect;
+
+    #[test]
+    fn reads_bound_host_ports_once_per_port() {
+        let inspect = serde_json::json!({
+            "Id": "5b1498d6b22f",
+            "NetworkSettings": {"Ports": {
+                "18888/tcp": [
+                    {"HostIp": "0.0.0.0", "HostPort": "18888"},
+                    {"HostIp": "::", "HostPort": "18888"}
+                ],
+                "18889/tcp": [{"HostIp": "0.0.0.0", "HostPort": "4317"}],
+                "18890/tcp": null
+            }}
+        });
+        let ports: Vec<_> = ports_from_inspect(&inspect)
+            .iter()
+            .map(|p| (p.host_port, p.container_port))
+            .collect();
+        assert_eq!(ports, vec![(4317, 18889), (18888, 18888)]);
+    }
+
+    #[test]
+    fn stopped_container_has_no_ports() {
+        let inspect = serde_json::json!({"Id": "x", "NetworkSettings": {"Ports": {}}});
+        assert!(ports_from_inspect(&inspect).is_empty());
+        assert!(ports_from_inspect(&serde_json::json!({"Id": "x"})).is_empty());
     }
 }
