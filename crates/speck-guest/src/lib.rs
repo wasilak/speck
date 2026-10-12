@@ -4,6 +4,7 @@ pub mod dns_forwarder;
 pub mod dns_wire;
 #[cfg(target_os = "linux")]
 pub mod log_relay;
+pub mod shutdown;
 #[cfg(target_os = "linux")]
 pub mod sock_forwarder;
 #[cfg(target_os = "linux")]

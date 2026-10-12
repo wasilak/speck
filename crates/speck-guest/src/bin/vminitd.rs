@@ -123,6 +123,14 @@ mod linux {
             }
         });
 
+        // Stop dockerd cleanly before the host powers the VM off.
+        std::thread::spawn(|| {
+            let port = speck_guest::shutdown::SHUTDOWN_VSOCK_PORT;
+            if let Err(e) = speck_guest::shutdown::serve(port, shut_down_guest) {
+                eprintln!("vminitd: shutdown listener error: {e}");
+            }
+        });
+
         // Bring up loopback first so 127.0.0.1 routes locally (kernel adds
         // 127.0.0.0/8 to its local table only when lo is UP).
         bring_up_loopback();
@@ -936,6 +944,32 @@ mod linux {
         }
     }
 
+    /// PID of the running dockerd, 0 when none.
+    static DOCKERD_PID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    /// Set once the host asked for shutdown: dockerd is not restarted.
+    static SHUTTING_DOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    /// How long dockerd gets to stop its containers (its own default
+    /// shutdown timeout is 15 s).
+    const DOCKERD_STOP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);
+
+    /// Stop dockerd so it stops the containers and records their state
+    /// (restart policies then apply on the next start), then flush the disks.
+    fn shut_down_guest() {
+        use std::sync::atomic::Ordering;
+        SHUTTING_DOWN.store(true, Ordering::SeqCst);
+        let pid = DOCKERD_PID.load(Ordering::SeqCst);
+        if pid != 0 {
+            eprintln!("vminitd: host requested shutdown; stopping dockerd (pid {pid})");
+            unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
+            let deadline = std::time::Instant::now() + DOCKERD_STOP_TIMEOUT;
+            while DOCKERD_PID.load(Ordering::SeqCst) != 0 && std::time::Instant::now() < deadline {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+        }
+        unsafe { libc::sync() };
+        eprintln!("vminitd: guest ready for power-off");
+    }
+
     /// Spawn dockerd with automatic restart.
     ///
     /// dockerd now runs directly in the switched root (/) — no chroot needed.
@@ -1020,7 +1054,14 @@ mod linux {
                 match cmd.spawn() {
                     Ok(mut child) => {
                         eprintln!("vminitd: started dockerd (pid {})", child.id());
-                        match child.wait() {
+                        DOCKERD_PID.store(child.id(), std::sync::atomic::Ordering::SeqCst);
+                        let waited = child.wait();
+                        DOCKERD_PID.store(0, std::sync::atomic::Ordering::SeqCst);
+                        if SHUTTING_DOWN.load(std::sync::atomic::Ordering::SeqCst) {
+                            eprintln!("vminitd: dockerd stopped for shutdown");
+                            return;
+                        }
+                        match waited {
                             Ok(status) => {
                                 eprintln!("vminitd: dockerd exited {status} — restarting")
                             }

@@ -953,6 +953,39 @@ pub async fn run_up(
     Ok(())
 }
 
+/// vsock port of vminitd's shutdown listener (`speck_guest::shutdown`).
+const SHUTDOWN_VSOCK_PORT: u32 = 9008;
+/// dockerd's own shutdown timeout is 15 s; the guest allows it 25 s.
+const GUEST_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Ask vminitd to stop dockerd and flush its disks before the VM is powered
+/// off. `false` when the guest does not answer (older initrd, hung guest).
+async fn guest_shutdown(guest: &Arc<speck_vz::Guest>) -> bool {
+    let g = Arc::clone(guest);
+    let request = tokio::task::spawn_blocking(move || -> anyhow::Result<bool> {
+        use std::io::{Read as _, Write as _};
+        // VZ may hand out a non-blocking fd; block until the guest answers.
+        let mut socket = g.vsock_connect(SHUTDOWN_VSOCK_PORT)?.into_unix_stream();
+        socket.set_nonblocking(false)?;
+        socket.set_read_timeout(Some(GUEST_SHUTDOWN_TIMEOUT))?;
+        socket.write_all(b"S")?;
+        let mut ack = [0u8; 1];
+        socket.read_exact(&mut ack)?;
+        Ok(ack[0] == b'K')
+    });
+    match tokio::time::timeout(GUEST_SHUTDOWN_TIMEOUT, request).await {
+        Ok(Ok(Ok(acked))) => acked,
+        Ok(Ok(Err(e))) => {
+            tracing::debug!(error = %e, "guest shutdown request failed");
+            false
+        }
+        _ => {
+            tracing::warn!("guest did not confirm shutdown in time");
+            false
+        }
+    }
+}
+
 /// vsock port of vminitd's time sync listener (`speck_guest::time_sync`).
 const TIME_SYNC_VSOCK_PORT: u32 = 9007;
 const TIME_SYNC_INTERVAL: Duration = Duration::from_secs(30);
@@ -1036,7 +1069,13 @@ async fn shutdown_gracefully(
     speck_home: &Path,
 ) -> anyhow::Result<()> {
     let client = DockerClient::new(speck_home.join("speck.sock"));
-    if let Ok(containers) = client.get("/containers/json").await
+    // Let the guest stop dockerd itself: it stops the containers and keeps
+    // their restart policies. Stopping each container through the API
+    // instead marks them as stopped by the user. Older guests lack the
+    // shutdown listener and get the API stops.
+    if guest_shutdown(guest).await {
+        tracing::info!("guest stopped dockerd and flushed its disks");
+    } else if let Ok(containers) = client.get("/containers/json").await
         && let Some(containers) = containers.as_array()
     {
         for container in containers {
