@@ -898,13 +898,25 @@
         "priority": "high",
         "subtasks": [],
         "updatedAt": "2026-10-12T15:09:56.123Z"
+      },
+      {
+        "id": "32",
+        "title": "[UX-05] spk recreate",
+        "description": "spk recreate: delete the VM and start a fresh one, keeping downloads and config. Released in 1.4.4.",
+        "details": "",
+        "testStrategy": "",
+        "status": "done",
+        "dependencies": [],
+        "priority": "medium",
+        "subtasks": [],
+        "updatedAt": "2026-10-12T16:28:23.056Z"
       }
     ],
     "metadata": {
       "version": "1.0.0",
-      "lastModified": "2026-10-12T15:09:56.123Z",
-      "taskCount": 31,
-      "completedCount": 26,
+      "lastModified": "2026-10-12T16:28:23.056Z",
+      "taskCount": 32,
+      "completedCount": 27,
       "tags": [
         "v1_4-daily-driver"
       ]
