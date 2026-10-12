@@ -67,10 +67,26 @@ pub fn resolve_with_table(
             .unwrap_or_else(|| build_servfail_response(query))
     } else {
         // Default path: macOS system resolver via getaddrinfo (DNS-02, DNS-03)
-        resolver
-            .resolve(domain, query)
+        let resp = resolver.resolve(domain, query);
+        if resp.as_deref().is_some_and(is_noerror) {
+            return resp.unwrap_or_default();
+        }
+        // mDNSResponder can keep failing a name (seen under WARP: Chrome and
+        // getaddrinfo fail while dig against the WARP resolver works). Ask
+        // the system nameservers directly before reporting the failure.
+        table
+            .default_servers()
+            .iter()
+            .find_map(|&ns| resolver.direct_query(ns, query))
+            .filter(|direct| is_noerror(direct))
+            .or(resp)
             .unwrap_or_else(|| build_servfail_response(query))
     }
+}
+
+/// RCODE of a DNS response is NOERROR.
+fn is_noerror(response: &[u8]) -> bool {
+    response.get(3).is_some_and(|flags| flags & 0x0f == 0)
 }
 
 /// QTYPE of the first question, or `None` for a malformed query.
@@ -557,6 +573,44 @@ mod tests {
         // SERVFAIL header: bytes [2..4] = 0x81 0x82
         assert_eq!(result.len(), 12);
         assert_eq!(result[3] & 0x0f, 2);
+    }
+
+    #[test]
+    fn system_resolver_failure_retries_default_servers() {
+        let ns: std::net::IpAddr = "127.0.2.2".parse().unwrap();
+        let mut nxdomain = vec![0u8; 12];
+        nxdomain[3] = 0x03;
+        let mut answer = vec![0u8; 12];
+        answer[7] = 1; // ANCOUNT = 1
+        let mut mock = MockResolver::new();
+        mock.expect_resolve()
+            .returning(move |_, _| Some(nxdomain.clone()));
+        mock.expect_direct_query()
+            .with(mockall::predicate::eq(ns), mockall::predicate::always())
+            .returning(move |_, _| Some(answer.clone()));
+
+        let mut table = ResolverTable::default();
+        table.set_default_servers(vec![ns]);
+        let result = resolve_with_table(&mock, &table, "grafana.example", b"\x00\x01");
+        assert_eq!(result[3] & 0x0f, 0);
+        assert_eq!(result[7], 1);
+    }
+
+    #[test]
+    fn real_nxdomain_is_kept_when_default_servers_agree() {
+        let mut nxdomain = vec![0u8; 12];
+        nxdomain[3] = 0x03;
+        let direct = nxdomain.clone();
+        let mut mock = MockResolver::new();
+        mock.expect_resolve()
+            .returning(move |_, _| Some(nxdomain.clone()));
+        mock.expect_direct_query()
+            .returning(move |_, _| Some(direct.clone()));
+
+        let mut table = ResolverTable::default();
+        table.set_default_servers(vec!["127.0.2.2".parse().unwrap()]);
+        let result = resolve_with_table(&mock, &table, "nope.example", b"\x00\x01");
+        assert_eq!(result[3] & 0x0f, 3);
     }
 
     #[test]

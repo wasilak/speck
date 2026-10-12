@@ -194,9 +194,11 @@ fn address_types_still_use_getaddrinfo_with_defaults_known() {
     let query = make_query("example.com");
     let mut mock = MockProxyResolver::new();
     mock.expect_direct_query().never();
+    // NOERROR answer from getaddrinfo: no direct query.
+    let answer = vec![0x12, 0x34, 0x81, 0x80, 0, 1, 0, 1, 0, 0, 0, 0];
     mock.expect_resolve()
         .times(1)
-        .return_const(Some(vec![1, 2, 3]));
+        .return_const(Some(answer.clone()));
     let resp = speck_net::dns::resolve_with_table(&mock, &table, "example.com", &query);
-    assert_eq!(resp, vec![1, 2, 3]);
+    assert_eq!(resp, answer);
 }
