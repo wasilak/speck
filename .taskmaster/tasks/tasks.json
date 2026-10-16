@@ -910,13 +910,73 @@
         "priority": "medium",
         "subtasks": [],
         "updatedAt": "2026-10-12T16:28:23.056Z"
+      },
+      {
+        "id": "33",
+        "title": "[COMPAT-01] containerd image store (multi-platform builds)",
+        "description": "Colima parity, released in 1.4.5. Covered by conformance-smoke/egress-smoke.",
+        "details": "",
+        "testStrategy": "",
+        "status": "done",
+        "dependencies": [],
+        "priority": "medium",
+        "subtasks": [],
+        "updatedAt": "2026-10-16T09:05:53.037Z"
+      },
+      {
+        "id": "34",
+        "title": "[COMPAT-02] Docker socket mounts (Ryuk, devcontainers)",
+        "description": "Colima parity, released in 1.4.5. Covered by conformance-smoke/egress-smoke.",
+        "details": "",
+        "testStrategy": "",
+        "status": "done",
+        "dependencies": [],
+        "priority": "medium",
+        "subtasks": [],
+        "updatedAt": "2026-10-16T09:05:56.023Z"
+      },
+      {
+        "id": "35",
+        "title": "[COMPAT-03] host.docker.internal and host-gateway",
+        "description": "Colima parity, released in 1.4.5. Covered by conformance-smoke/egress-smoke.",
+        "details": "",
+        "testStrategy": "",
+        "status": "done",
+        "dependencies": [],
+        "priority": "medium",
+        "subtasks": [],
+        "updatedAt": "2026-10-16T09:05:59.017Z"
+      },
+      {
+        "id": "36",
+        "title": "[COMPAT-04] UDP published ports",
+        "description": "Colima parity, released in 1.4.5. Covered by conformance-smoke/egress-smoke.",
+        "details": "",
+        "testStrategy": "",
+        "status": "done",
+        "dependencies": [],
+        "priority": "medium",
+        "subtasks": [],
+        "updatedAt": "2026-10-16T09:06:02.037Z"
+      },
+      {
+        "id": "37",
+        "title": "[COMPAT-05] default data disk 100 GB",
+        "description": "Colima parity, released in 1.4.5. Covered by conformance-smoke/egress-smoke.",
+        "details": "",
+        "testStrategy": "",
+        "status": "done",
+        "dependencies": [],
+        "priority": "medium",
+        "subtasks": [],
+        "updatedAt": "2026-10-16T09:06:05.087Z"
       }
     ],
     "metadata": {
       "version": "1.0.0",
-      "lastModified": "2026-10-12T16:28:23.056Z",
-      "taskCount": 32,
-      "completedCount": 27,
+      "lastModified": "2026-10-16T09:06:05.087Z",
+      "taskCount": 37,
+      "completedCount": 32,
       "tags": [
         "v1_4-daily-driver"
       ]
