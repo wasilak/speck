@@ -116,19 +116,32 @@ impl Connector {
     }
 }
 
+/// The netstack gateway. Traffic to it goes to the Mac's own loopback, so
+/// `host.docker.internal` (and `host-gateway`) reach services on the Mac,
+/// as in Docker Desktop and Colima.
+pub(crate) const HOST_ALIAS: Ipv4Addr = Ipv4Addr::new(172, 16, 0, 1);
+
 /// Destinations that must never be dialed from the host on the guest's
-/// behalf: loopback and unspecified would hit host-local services, and the
-/// netstack gateway (172.16.0.1/.2) is Speck itself.
+/// behalf: loopback and unspecified would hit host-local services, and
+/// 172.16.0.2 is the guest itself.
 pub(crate) fn is_unroutable(ip: Ipv4Addr) -> bool {
-    ip.is_loopback()
-        || ip.is_unspecified()
-        || ip == Ipv4Addr::new(172, 16, 0, 1)
-        || ip == Ipv4Addr::new(172, 16, 0, 2)
+    ip.is_loopback() || ip.is_unspecified() || ip == Ipv4Addr::new(172, 16, 0, 2)
+}
+
+/// The host-side address to dial for a guest destination: the gateway maps
+/// to the Mac's loopback and never leaves the Mac (172.16.0.1 may be a real
+/// host on a corporate network).
+pub(crate) fn host_destination(dst: SocketAddrV4) -> SocketAddrV4 {
+    if *dst.ip() == HOST_ALIAS {
+        SocketAddrV4::new(Ipv4Addr::LOCALHOST, dst.port())
+    } else {
+        dst
+    }
 }
 
 /// Connect to `dst` from the host network stack (live host routing/DNS).
 pub(crate) async fn connect_host(dst: SocketAddrV4) -> std::io::Result<TcpStream> {
-    let stream = TcpStream::connect(dst).await?;
+    let stream = TcpStream::connect(host_destination(dst)).await?;
     // Enable TCP keepalive so WARP/NAT doesn't kill long-lived
     // connections mid-transfer (e.g. large blob downloads).
     let std_stream = stream.into_std()?;
@@ -154,11 +167,32 @@ mod tests {
     }
 
     #[test]
-    fn unroutable_covers_loopback_unspecified_and_gateway() {
+    fn unroutable_covers_loopback_unspecified_and_guest() {
         assert!(is_unroutable(Ipv4Addr::new(127, 0, 0, 1)));
         assert!(is_unroutable(Ipv4Addr::UNSPECIFIED));
-        assert!(is_unroutable(Ipv4Addr::new(172, 16, 0, 1)));
+        assert!(is_unroutable(Ipv4Addr::new(172, 16, 0, 2)));
+        assert!(!is_unroutable(HOST_ALIAS));
         assert!(!is_unroutable(Ipv4Addr::new(140, 82, 121, 4)));
+    }
+
+    #[test]
+    fn gateway_maps_to_host_loopback() {
+        assert_eq!(
+            host_destination(SocketAddrV4::new(HOST_ALIAS, 5432)),
+            SocketAddrV4::new(Ipv4Addr::LOCALHOST, 5432)
+        );
+        let remote = SocketAddrV4::new(Ipv4Addr::new(140, 82, 121, 4), 443);
+        assert_eq!(host_destination(remote), remote);
+    }
+
+    /// A guest connect to the gateway reaches a server on the Mac's loopback.
+    #[tokio::test]
+    async fn gateway_connect_reaches_host_loopback() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let stream = connect_host(SocketAddrV4::new(HOST_ALIAS, port)).await;
+        assert!(stream.is_ok());
+        assert!(listener.accept().await.is_ok());
     }
 
     #[tokio::test]

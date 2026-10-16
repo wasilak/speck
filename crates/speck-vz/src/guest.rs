@@ -89,6 +89,7 @@ impl Guest {
             host_port,
             container_port,
             target_ip: None,
+            udp: false,
         })
     }
 
@@ -97,6 +98,7 @@ impl Guest {
             host_port,
             container_port,
             target_ip: None,
+            udp: false,
         })
     }
 

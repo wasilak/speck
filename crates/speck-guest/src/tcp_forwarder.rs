@@ -5,11 +5,16 @@
 //! bytes bidirectionally. This is used for host-side published port forwarding,
 //! where the guest can reach Docker bridge container IPs directly but the host
 //! cannot.
+//!
+//! A target line `udp <ipv4>:<port>\n` forwards one UDP flow instead: each
+//! datagram travels over the vsock stream as a 2-byte big-endian length plus
+//! payload, in both directions. The host closes the stream when the flow
+//! goes idle.
 
 #![cfg(target_os = "linux")]
 
 use std::io;
-use std::net::{SocketAddrV4, TcpStream};
+use std::net::{SocketAddrV4, TcpStream, UdpSocket};
 use std::os::fd::IntoRawFd;
 use std::str::FromStr;
 
@@ -57,7 +62,11 @@ pub fn serve(vsock_port: u32) -> io::Result<()> {
 
 fn handle_client(vsock_fd: libc::c_int) {
     let target = match read_target_line(vsock_fd) {
-        Ok(target) => target,
+        Ok(Target::Udp(target)) => {
+            handle_udp_client(vsock_fd, target);
+            return;
+        }
+        Ok(Target::Tcp(target)) => target,
         Err(err) => {
             eprintln!("tcp_forwarder: failed to read target: {err}");
             unsafe { libc::close(vsock_fd) };
@@ -98,7 +107,103 @@ fn handle_client(vsock_fd: libc::c_int) {
     });
 }
 
-fn read_target_line(fd: libc::c_int) -> io::Result<SocketAddrV4> {
+enum Target {
+    Tcp(SocketAddrV4),
+    Udp(SocketAddrV4),
+}
+
+/// Relay one UDP flow between the vsock stream and `target`.
+fn handle_udp_client(vsock_fd: libc::c_int, target: SocketAddrV4) {
+    let socket = match UdpSocket::bind("0.0.0.0:0").and_then(|s| s.connect(target).map(|()| s)) {
+        Ok(socket) => socket,
+        Err(err) => {
+            eprintln!("tcp_forwarder: udp socket for {target} failed: {err}");
+            unsafe { libc::close(vsock_fd) };
+            return;
+        }
+    };
+    let _ = socket.set_read_timeout(Some(std::time::Duration::from_secs(1)));
+    let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+    let replies = {
+        let socket = match socket.try_clone() {
+            Ok(socket) => socket,
+            Err(_) => {
+                unsafe { libc::close(vsock_fd) };
+                return;
+            }
+        };
+        let done = std::sync::Arc::clone(&done);
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 65535];
+            while !done.load(std::sync::atomic::Ordering::SeqCst) {
+                let Ok(n) = socket.recv(&mut buf) else {
+                    continue; // timeout: re-check `done`
+                };
+                let mut frame = Vec::with_capacity(n + 2);
+                frame.extend_from_slice(&(n as u16).to_be_bytes());
+                frame.extend_from_slice(&buf[..n]);
+                if !write_all(vsock_fd, &frame) {
+                    break;
+                }
+            }
+        })
+    };
+
+    let mut buf = vec![0u8; 65535];
+    loop {
+        let mut len = [0u8; 2];
+        if !read_exact(vsock_fd, &mut len) {
+            break;
+        }
+        let len = u16::from_be_bytes(len) as usize;
+        if !read_exact(vsock_fd, &mut buf[..len]) {
+            break;
+        }
+        let _ = socket.send(&buf[..len]);
+    }
+    done.store(true, std::sync::atomic::Ordering::SeqCst);
+    let _ = replies.join();
+    unsafe { libc::close(vsock_fd) };
+}
+
+fn read_exact(fd: libc::c_int, buf: &mut [u8]) -> bool {
+    let mut off = 0;
+    while off < buf.len() {
+        let n = unsafe {
+            libc::read(
+                fd,
+                buf[off..].as_mut_ptr() as *mut libc::c_void,
+                buf.len() - off,
+            )
+        };
+        if n <= 0 {
+            return false;
+        }
+        off += n as usize;
+    }
+    true
+}
+
+fn write_all(fd: libc::c_int, buf: &[u8]) -> bool {
+    let mut off = 0;
+    while off < buf.len() {
+        let n = unsafe {
+            libc::write(
+                fd,
+                buf[off..].as_ptr() as *const libc::c_void,
+                buf.len() - off,
+            )
+        };
+        if n <= 0 {
+            return false;
+        }
+        off += n as usize;
+    }
+    true
+}
+
+fn read_target_line(fd: libc::c_int) -> io::Result<Target> {
     let mut buf = Vec::with_capacity(64);
     let mut byte = [0u8; 1];
     loop {
@@ -125,11 +230,20 @@ fn read_target_line(fd: libc::c_int) -> io::Result<SocketAddrV4> {
     }
     let line = std::str::from_utf8(&buf)
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "target line not utf-8"))?;
-    SocketAddrV4::from_str(line).map_err(|_| {
+    let (udp, addr) = match line.strip_prefix("udp ") {
+        Some(addr) => (true, addr),
+        None => (false, line),
+    };
+    let addr = SocketAddrV4::from_str(addr).map_err(|_| {
         io::Error::new(
             io::ErrorKind::InvalidData,
             format!("invalid target: {line}"),
         )
+    })?;
+    Ok(if udp {
+        Target::Udp(addr)
+    } else {
+        Target::Tcp(addr)
     })
 }
 

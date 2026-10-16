@@ -17,7 +17,7 @@ use smoltcp::wire::{IpAddress, IpEndpoint};
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 
-use crate::connector::is_unroutable;
+use crate::connector::{host_destination, is_unroutable};
 
 /// Idle time after which a flow (and its host socket) is dropped.
 const FLOW_IDLE: Duration = Duration::from_secs(60);
@@ -142,7 +142,7 @@ impl UdpReorigin {
                 tracing::debug!(dst = %key.dst, "udp flow table full; dropping datagram");
                 return None;
             }
-            let (host, recv) = match host_socket(key.dst) {
+            let (host, recv) = match host_socket(host_destination(key.dst)) {
                 Ok(s) => s,
                 Err(e) => {
                     tracing::debug!(dst = %key.dst, error = %e, "udp host socket failed");

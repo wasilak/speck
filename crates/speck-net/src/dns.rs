@@ -46,6 +46,9 @@ pub fn resolve_with_table(
     domain: &str,
     query: &[u8],
 ) -> Vec<u8> {
+    if let Some(resp) = host_alias_response(domain, query) {
+        return resp;
+    }
     if let Some(servers) = table.find_resolver(domain) {
         // VPN-scoped path: direct UDP to first matching VPN nameserver (DNS-04)
         let mut resp = servers
@@ -81,6 +84,30 @@ pub fn resolve_with_table(
             .filter(|direct| is_noerror(direct))
             .or(resp)
             .unwrap_or_else(|| build_servfail_response(query))
+    }
+}
+
+/// Names that point at the Mac itself, as in Docker Desktop. The netstack
+/// maps the gateway address to the Mac's loopback.
+const HOST_ALIAS_NAMES: [&str; 2] = ["host.docker.internal", "gateway.docker.internal"];
+
+/// Local answer for a host alias name: A → the gateway, other types → NODATA.
+fn host_alias_response(domain: &str, query: &[u8]) -> Option<Vec<u8>> {
+    let domain = domain.trim_end_matches('.');
+    if !HOST_ALIAS_NAMES
+        .iter()
+        .any(|name| name.eq_ignore_ascii_case(domain))
+    {
+        return None;
+    }
+    let question_end = find_qname_end(query, 12)? + 5;
+    let question = query.get(12..question_end)?;
+    let id = [query[0], query[1]];
+    if query_type(query) == Some(1) {
+        let answers = build_a_answers(&[crate::connector::HOST_ALIAS]);
+        Some(build_dns_response(id, question, 1, &answers, 0))
+    } else {
+        Some(build_dns_response(id, question, 0, &[], 0))
     }
 }
 
@@ -635,6 +662,41 @@ mod tests {
         let result = resolve_with_table(&mock, &table, "grafana.example", b"\x00\x01");
         assert_eq!(result[3] & 0x0f, 0);
         assert_eq!(result[7], 1);
+    }
+
+    fn query_for(name: &str, qtype: u16) -> Vec<u8> {
+        let mut q = vec![0xab, 0xcd, 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0];
+        for label in name.split('.') {
+            q.push(label.len() as u8);
+            q.extend_from_slice(label.as_bytes());
+        }
+        q.push(0);
+        q.extend_from_slice(&qtype.to_be_bytes());
+        q.extend_from_slice(&[0, 1]);
+        q
+    }
+
+    /// host.docker.internal is answered locally with the gateway, which the
+    /// netstack maps to the Mac's loopback; the system resolver is not asked.
+    #[test]
+    fn host_docker_internal_resolves_to_the_gateway() {
+        let mock = MockResolver::new(); // any resolver call would panic
+        let table = ResolverTable::default();
+        let query = query_for("host.docker.internal", 1);
+        let resp = resolve_with_table(&mock, &table, "Host.Docker.Internal", &query);
+        assert_eq!(&resp[..2], &[0xab, 0xcd]);
+        assert_eq!(resp[3] & 0x0f, 0);
+        assert_eq!(resp[7], 1);
+        assert_eq!(&resp[resp.len() - 4..], &[172, 16, 0, 1]);
+
+        let aaaa = resolve_with_table(
+            &mock,
+            &table,
+            "host.docker.internal",
+            &query_for("host.docker.internal", 28),
+        );
+        assert_eq!(aaaa[3] & 0x0f, 0);
+        assert_eq!(aaaa[7], 0);
     }
 
     #[test]

@@ -138,6 +138,9 @@ mod linux {
         // Bring up the virtio-net interface so containers can reach external
         // registries.  This is required even though DNS goes through the vsock
         // proxy — image pulls and other TCP/UDP traffic need a live network.
+        // The netstack maps the gateway to the Mac's loopback, so it is what
+        // host.docker.internal and `--add-host x:host-gateway` point at.
+        let host_gateway = gateway.clone();
         if let (Some(ip_str), Some(gw_str)) = (guest_ip, gateway) {
             bring_up_network(&ip_str, &gw_str);
         }
@@ -183,7 +186,7 @@ mod linux {
 
         let dockerd_bin = detect_dockerd_bin();
         eprintln!("vminitd: using dockerd at {dockerd_bin}");
-        spawn_dockerd_with_restart(dockerd_bin);
+        spawn_dockerd_with_restart(dockerd_bin, host_gateway);
 
         if !wait_for_dockerd_socket(150) {
             eprintln!("vminitd: dockerd socket did not become ready within timeout");
@@ -1033,7 +1036,7 @@ mod linux {
     /// Spawn dockerd with automatic restart.
     ///
     /// dockerd now runs directly in the switched root (/) — no chroot needed.
-    fn spawn_dockerd_with_restart(dockerd_bin: &'static str) {
+    fn spawn_dockerd_with_restart(dockerd_bin: &'static str, host_gateway: Option<String>) {
         std::thread::spawn(move || {
             // Exponential backoff for a crash-looping dockerd, reset once it
             // has stayed up for a minute.
@@ -1044,6 +1047,11 @@ mod linux {
                 cmd.args([
                     "--host",
                     "unix:///run/speck/dockerd.sock",
+                    // Containers that mount the Docker socket (Ryuk,
+                    // devcontainers, docker:cli) get it at the usual path;
+                    // the host proxy rewrites such binds to this socket.
+                    "--host",
+                    "unix:///var/run/docker.sock",
                     "--data-root",
                     "/var/lib/containerd",
                     // dockerd creates its default "docker0" bridge
@@ -1109,6 +1117,9 @@ mod linux {
                     // with --dns=127.0.0.1, fixed by using the bridge IP).
                     "--dns=172.17.0.1",
                 ]);
+                if let Some(gw) = host_gateway.as_deref() {
+                    cmd.arg(format!("--host-gateway-ip={gw}"));
+                }
                 cmd.env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin");
 
                 match cmd.spawn() {

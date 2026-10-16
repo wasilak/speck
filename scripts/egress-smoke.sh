@@ -110,6 +110,16 @@ check "icmp ping 1.1.1.1"         in_c "ping -c2 -W3 1.1.1.1"
 check "icmp ping fragmented (8000B)" in_c "ping -c2 -W3 -s 8000 1.1.1.1"
 check "icmp ping gateway"         in_c "ping -c1 -W2 172.16.0.1"
 
+# Services on the Mac (Docker Desktop/Colima parity): host.docker.internal
+# and --add-host x:host-gateway reach the Mac's loopback.
+HOST_PORT=$((20000 + RANDOM % 10000))
+python3 -m http.server "$HOST_PORT" --bind 127.0.0.1 --directory /tmp >/dev/null 2>&1 &
+HTTP_PID=$!
+sleep 1
+check "host.docker.internal"      in_c "wget -q -T5 -O /dev/null http://host.docker.internal:$HOST_PORT/"
+check "host-gateway"              docker run --rm --add-host mac:host-gateway alpine wget -q -T5 -O /dev/null "http://mac:$HOST_PORT/"
+kill "$HTTP_PID" 2>/dev/null
+
 docker rm -f "$C" >/dev/null 2>&1
 
 echo

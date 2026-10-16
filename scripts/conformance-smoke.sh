@@ -40,6 +40,16 @@ check "run image CMD fallback"    docker run -d --name smoke2 nginx:alpine
 check "port publish"              sh -c 'docker rm -f smoke2 >/dev/null 2>&1; docker run -d --name smoke2 -p 18099:80 nginx:alpine && sleep 3 && curl -sf --max-time 5 http://localhost:18099/ >/dev/null'
 check "port inspect HostIp"       sh -c 'docker inspect smoke2 | grep -q '"'"'"HostIp": "127.0.0.1"'"'"''
 check "docker port output"        sh -c 'docker port smoke2 | grep -q "127.0.0.1:18099"'
+check "udp port publish"          sh -c 'docker rm -f smokeudp >/dev/null 2>&1; docker run -d --name smokeudp -p 18098:9999/udp alpine sh -c "while true; do nc -u -l -p 9999 -e cat; done" && sleep 2 && python3 -c "
+import socket; s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.settimeout(5)
+s.sendto(b\"speck-udp\", (\"127.0.0.1\", 18098)); assert s.recvfrom(64)[0] == b\"speck-udp\"
+"; rc=$?; docker rm -f smokeudp >/dev/null; exit $rc'
+# Ryuk, devcontainers and docker:cli mount the Docker socket; testcontainers
+# mounts the DOCKER_HOST path.
+check "docker socket mount"       docker run --rm -v /var/run/docker.sock:/var/run/docker.sock docker:cli docker version
+check "DOCKER_HOST socket mount"  docker run --rm -v "${DOCKER_HOST#unix://}":/var/run/docker.sock docker:cli docker version
+# The containerd image store lets the default builder do multi-platform.
+check "multi-platform build"      sh -c 'printf "FROM alpine\nRUN uname -m\n" | docker buildx build --platform linux/amd64,linux/arm64 -o type=cacheonly -'
 check "wait"                      sh -c 'docker run -d --name smokew alpine true && docker wait smokew && docker rm smokew'
 check "events (2s window)"        sh -c 'timeout 2 docker events; [ $? -eq 124 -o $? -eq 0 ]'
 check "volume create/ls/rm"       sh -c 'docker volume create smokevol && docker volume ls | grep -q smokevol && docker volume rm smokevol'

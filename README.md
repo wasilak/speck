@@ -69,6 +69,14 @@ dockerd uses the containerd image store, like Colima, so multi-platform
 builds (`docker buildx build --platform linux/amd64,linux/arm64 --push`) work
 with the default builder.
 
+As in Docker Desktop and Colima:
+
+- containers reach services on the Mac at `host.docker.internal`, and
+  `--add-host name:host-gateway` (compose `extra_hosts`) points at the Mac;
+- `-v /var/run/docker.sock:/var/run/docker.sock` gives a container the Speck
+  Docker socket (testcontainers Ryuk, devcontainers, `docker:cli`);
+- `-p` publishes TCP and UDP ports on `localhost`.
+
 Tools that ignore docker contexts and only read `DOCKER_HOST` (some
 testcontainers and docker-py setups) need the environment variable:
 
@@ -113,7 +121,7 @@ spk start --cpus 8 --memory 8192
 | `DOCKER_HOST` | *(not set)* | Set by `spk init --set-docker-host` or `eval $(spk env)` to `unix://$SPECK_HOME/speck.sock`. Directs Docker-compatible clients to Speck. |
 | `SPECK_VM_CPUS` | config / 2 | vCPU count for the VM. Takes precedence over `config.yaml` and `--cpus`. |
 | `SPECK_VM_MEMORY_MB` | config / 2048 | VM memory in MiB. Takes precedence over `config.yaml` and `--memory`. |
-| `SPECK_VM_DISK_GB` | config / 20 | VM data disk size in GiB. Takes precedence over `config.yaml` and `--disk`. |
+| `SPECK_VM_DISK_GB` | config / 100 | VM data disk size in GiB. Takes precedence over `config.yaml` and `--disk`. |
 | `SPECK_LOG_LEVEL` | config / `info` | [tracing `EnvFilter`](https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html) directive. Takes precedence over `config.yaml` `log_level`. |
 | `SPECK_DAEMONIZED` | *(not set)* | Set to `1` internally by the launchd LaunchAgent. Switches the process to file-appender logging and suppresses progress output. Do not set manually. |
 

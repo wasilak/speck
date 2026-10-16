@@ -18,6 +18,9 @@ pub struct PortMapConfig {
     pub host_port: u16,
     pub container_port: u16,
     pub target_ip: Option<Ipv4Addr>,
+    /// A `/udp` publish; forwarded by the Docker API proxy, not by smoltcp.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub udp: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -364,6 +367,7 @@ mod tests {
             host_port: 8080,
             container_port: 80,
             target_ip: None,
+            udp: false,
         };
 
         let encoded = serde_json::to_string(&config).unwrap();
@@ -388,6 +392,7 @@ mod tests {
             host_port: 38081,
             container_port: 80,
             target_ip: None,
+            udp: false,
         };
 
         bridge.add_port_map(config).expect("bind listener");

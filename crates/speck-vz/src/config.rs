@@ -572,6 +572,7 @@ mod tests {
                 host_port: 8080,
                 container_port: 80,
                 target_ip: None,
+                udp: false,
             })
             .build();
 
@@ -581,6 +582,7 @@ mod tests {
                 host_port: 8080,
                 container_port: 80,
                 target_ip: None,
+                udp: false,
             }]
         );
         assert!(config.validate().is_ok());
@@ -591,6 +593,7 @@ mod tests {
                 host_port: 1024,
                 container_port: 80,
                 target_ip: None,
+                udp: false,
             })
             .build();
 

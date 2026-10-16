@@ -258,7 +258,17 @@ impl ReoriginBridge {
                             if o[0] == 127 || o == [0, 0, 0, 0] {
                                 return None;
                             }
-                            if o == [172, 16, 0, 1] || o == [172, 16, 0, 2] {
+                            if o == [172, 16, 0, 2] {
+                                return None;
+                            }
+                            // Gateway-local sockets belong to port publishing,
+                            // except guest connects to the host alias, which
+                            // the connector already dialed and adopted.
+                            if o == [172, 16, 0, 1]
+                                && !self
+                                    .preconnected
+                                    .contains_key(&(endpoint, tcp_socket.remote_endpoint()?))
+                            {
                                 return None;
                             }
                         }

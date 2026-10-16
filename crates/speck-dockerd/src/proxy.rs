@@ -268,7 +268,7 @@ async fn intercept_container_create(state: ProxyState, req: Request) -> crate::R
                 volume_name: None,
                 runtime_namespace: bind_namespace.clone(),
             }),
-            DockerMountSpec::Passthrough(_) => None,
+            DockerMountSpec::Passthrough(_) | DockerMountSpec::DockerSocket(_) => None,
         })
         .collect();
 
@@ -279,7 +279,10 @@ async fn intercept_container_create(state: ProxyState, req: Request) -> crate::R
         "intercepted container create"
     );
 
-    let forward_body_bytes = if bind_mounts.is_empty() {
+    let rewrites_socket = parsed_binds
+        .iter()
+        .any(|bind| matches!(bind, DockerMountSpec::DockerSocket(_)));
+    let forward_body_bytes = if bind_mounts.is_empty() && !rewrites_socket {
         body_bytes
     } else {
         Bytes::from(rewrite_create_body_bind_mounts(
@@ -464,7 +467,7 @@ fn render_rewritten_bind_mount(bind: &DockerMountSpec, namespace: Option<&str>) 
                 )
             }
         }
-        DockerMountSpec::Passthrough(bind) => bind.clone(),
+        DockerMountSpec::Passthrough(bind) | DockerMountSpec::DockerSocket(bind) => bind.clone(),
     }
 }
 
@@ -563,8 +566,8 @@ fn ports_from_inspect(inspect: &serde_json::Value) -> Vec<PortMapConfig> {
         .collect();
     // dockerd lists each host port once per address family (0.0.0.0, ::).
     let mut ports = extract_port_maps(Some(bindings));
-    ports.sort_by_key(|port| (port.host_port, port.container_port));
-    ports.dedup_by_key(|port| port.host_port);
+    ports.sort_by_key(|port| (port.host_port, port.udp, port.container_port));
+    ports.dedup_by_key(|port| (port.host_port, port.udp));
     ports
 }
 
@@ -907,6 +910,30 @@ struct DockerBind {
 enum DockerMountSpec {
     HostBind(DockerBind),
     Passthrough(String),
+    /// The Docker socket itself (Ryuk, devcontainers, docker:cli). Rewritten
+    /// to the guest dockerd socket, like Colima and Docker Desktop do.
+    DockerSocket(String),
+}
+
+/// Where dockerd listens inside the guest for containers that mount the
+/// Docker socket.
+const GUEST_DOCKER_SOCKET: &str = "/var/run/docker.sock";
+
+/// True for a bind source that means "the Docker socket": the well-known
+/// paths (they are guest paths under Colima and Docker Desktop) or a Speck
+/// API socket, e.g. the `DOCKER_HOST` path testcontainers mounts for Ryuk.
+fn is_docker_socket_path(host: &std::path::Path) -> bool {
+    use std::os::unix::fs::FileTypeExt;
+    if host == std::path::Path::new("/var/run/docker.sock")
+        || host == std::path::Path::new("/run/docker.sock")
+    {
+        return true;
+    }
+    let Ok(canonical) = std::fs::canonicalize(host) else {
+        return false;
+    };
+    canonical.file_name() == Some(std::ffi::OsStr::new("speck.sock"))
+        && std::fs::metadata(&canonical).is_ok_and(|meta| meta.file_type().is_socket())
 }
 
 fn extract_port_maps(
@@ -936,6 +963,7 @@ fn extract_port_maps(
                 host_port,
                 container_port,
                 target_ip: None,
+                udp: port_proto.ends_with("/udp"),
             });
         }
     }
@@ -976,6 +1004,14 @@ fn parse_docker_bind(s: &str) -> crate::Result<DockerMountSpec> {
         )));
     }
     let host_path = PathBuf::from(host);
+    if is_docker_socket_path(&host_path) {
+        let rewritten = if suffix.is_empty() {
+            format!("{GUEST_DOCKER_SOCKET}:{container}")
+        } else {
+            format!("{GUEST_DOCKER_SOCKET}:{container}:{suffix}")
+        };
+        return Ok(DockerMountSpec::DockerSocket(rewritten));
+    }
     if !host_path.is_absolute() {
         if host.contains('/') || host.starts_with('.') {
             return Err(DockerApiError::BadRequest(format!(
@@ -1087,9 +1123,8 @@ fn activate_published_ports(
         .ports
         .iter()
         .map(|port| PortMapConfig {
-            host_port: port.host_port,
-            container_port: port.container_port,
             target_ip: Some(container_ip),
+            ..*port
         })
         .collect();
     entry.ports = activated.clone();
@@ -1180,6 +1215,9 @@ fn spawn_host_port_forward(
             config.host_port
         ))
     })?;
+    if config.udp {
+        return spawn_host_udp_forward(guest, config, target_ip);
+    }
     // Bind IPv6 loopback too: `localhost` may resolve to ::1 first.
     let mut listeners = vec![TcpListener::bind(("127.0.0.1", config.host_port))?];
     match TcpListener::bind(("::1", config.host_port)) {
@@ -1267,6 +1305,175 @@ fn spawn_host_port_forward(
         stop,
         join,
     })
+}
+
+/// A UDP client flow with no traffic for this long is closed.
+const UDP_FLOW_IDLE: std::time::Duration = std::time::Duration::from_secs(60);
+/// Concurrent UDP client flows per published port.
+const MAX_UDP_FLOWS_PER_PORT: usize = 256;
+
+struct UdpFlow {
+    to_guest: std::os::unix::net::UnixStream,
+    last_used: std::time::Instant,
+}
+
+/// Forward a published UDP port: one guest forwarder stream per client
+/// address, datagrams framed as a 2-byte length plus payload.
+fn spawn_host_udp_forward(
+    guest: Arc<speck_vz::Guest>,
+    config: PortMapConfig,
+    target_ip: Ipv4Addr,
+) -> std::io::Result<HostPortForward> {
+    let mut sockets = vec![std::net::UdpSocket::bind(("127.0.0.1", config.host_port))?];
+    match std::net::UdpSocket::bind(("::1", config.host_port)) {
+        Ok(v6) => sockets.push(v6),
+        Err(err) => {
+            tracing::debug!(error = %err, host_port = config.host_port, "published udp port not bound on ::1")
+        }
+    }
+    for socket in &sockets {
+        socket.set_nonblocking(true)?;
+    }
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop_for_thread = Arc::clone(&stop);
+
+    let join = std::thread::spawn(move || {
+        let mut flows: HashMap<(usize, std::net::SocketAddr), UdpFlow> = HashMap::new();
+        let mut pfds: Vec<libc::pollfd> = sockets
+            .iter()
+            .map(|s| libc::pollfd {
+                fd: std::os::unix::io::AsRawFd::as_raw_fd(s),
+                events: libc::POLLIN,
+                revents: 0,
+            })
+            .collect();
+        let mut buf = vec![0u8; 65535];
+        while !stop_for_thread.load(Ordering::SeqCst) {
+            flows.retain(|_, flow| {
+                let alive = flow.last_used.elapsed() < UDP_FLOW_IDLE;
+                if !alive {
+                    let _ = flow.to_guest.shutdown(Shutdown::Both);
+                }
+                alive
+            });
+            let ready = unsafe {
+                libc::poll(
+                    pfds.as_mut_ptr(),
+                    pfds.len() as libc::nfds_t,
+                    ACCEPT_POLL_MS,
+                )
+            };
+            if ready <= 0 {
+                continue;
+            }
+            for (index, (socket, pfd)) in sockets.iter().zip(pfds.iter_mut()).enumerate() {
+                if pfd.revents == 0 {
+                    continue;
+                }
+                pfd.revents = 0;
+                while let Ok((n, client)) = socket.recv_from(&mut buf) {
+                    let key = (index, client);
+                    if !flows.contains_key(&key) {
+                        if flows.len() >= MAX_UDP_FLOWS_PER_PORT {
+                            continue;
+                        }
+                        match open_udp_flow(
+                            &guest,
+                            socket,
+                            client,
+                            target_ip,
+                            config.container_port,
+                        ) {
+                            Ok(flow) => {
+                                flows.insert(key, flow);
+                            }
+                            Err(err) => {
+                                tracing::warn!(error = %err, host_port = config.host_port, "published udp flow failed");
+                                continue;
+                            }
+                        }
+                    }
+                    let flow = flows.get_mut(&key).expect("inserted above");
+                    flow.last_used = std::time::Instant::now();
+                    let mut frame = Vec::with_capacity(n + 2);
+                    frame.extend_from_slice(&(n as u16).to_be_bytes());
+                    frame.extend_from_slice(&buf[..n]);
+                    if write_all_retrying_wouldblock(&mut flow.to_guest, &frame).is_err() {
+                        flows.remove(&key);
+                    }
+                }
+            }
+        }
+        for flow in flows.values() {
+            let _ = flow.to_guest.shutdown(Shutdown::Both);
+        }
+    });
+
+    Ok(HostPortForward {
+        host_port: config.host_port,
+        stop,
+        join,
+    })
+}
+
+/// Open a guest forwarder stream for one UDP client and start relaying the
+/// guest's replies back to that client.
+fn open_udp_flow(
+    guest: &Arc<speck_vz::Guest>,
+    socket: &std::net::UdpSocket,
+    client: std::net::SocketAddr,
+    target_ip: Ipv4Addr,
+    target_port: u16,
+) -> std::io::Result<UdpFlow> {
+    let mut to_guest = guest
+        .vsock_connect(TCP_FORWARDER_VSOCK_PORT)
+        .map_err(|err| std::io::Error::other(err.to_string()))?
+        .into_unix_stream();
+    write_all_retrying_wouldblock(
+        &mut to_guest,
+        format!("udp {target_ip}:{target_port}\n").as_bytes(),
+    )?;
+    let mut from_guest = to_guest.try_clone()?;
+    let reply_socket = socket.try_clone()?;
+    std::thread::spawn(move || {
+        let mut buf = vec![0u8; 65535];
+        loop {
+            let mut len = [0u8; 2];
+            if read_exact_retrying_wouldblock(&mut from_guest, &mut len).is_err() {
+                break;
+            }
+            let len = u16::from_be_bytes(len) as usize;
+            if read_exact_retrying_wouldblock(&mut from_guest, &mut buf[..len]).is_err() {
+                break;
+            }
+            let _ = reply_socket.send_to(&buf[..len], client);
+        }
+    });
+    Ok(UdpFlow {
+        to_guest,
+        last_used: std::time::Instant::now(),
+    })
+}
+
+/// `read_exact` that waits out `WouldBlock` on VZ vsock fds (see
+/// [`copy_retrying_wouldblock`]).
+fn read_exact_retrying_wouldblock<R: std::io::Read + std::os::unix::io::AsRawFd>(
+    src: &mut R,
+    buf: &mut [u8],
+) -> std::io::Result<()> {
+    let mut off = 0;
+    while off < buf.len() {
+        match src.read(&mut buf[off..]) {
+            Ok(0) => return Err(ErrorKind::UnexpectedEof.into()),
+            Ok(n) => off += n,
+            Err(e) if e.kind() == ErrorKind::WouldBlock => {
+                wait_for_fd(src.as_raw_fd(), libc::POLLIN)?
+            }
+            Err(e) if e.kind() == ErrorKind::Interrupted => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(())
 }
 
 fn bridge_host_to_guest_tcp(
@@ -1653,9 +1860,85 @@ mod ports_from_inspect_tests {
     }
 
     #[test]
+    fn same_host_port_over_tcp_and_udp_gives_two_forwards() {
+        let inspect = serde_json::json!({
+            "Id": "x",
+            "NetworkSettings": {"Ports": {
+                "53/tcp": [{"HostIp": "0.0.0.0", "HostPort": "5353"}],
+                "53/udp": [
+                    {"HostIp": "0.0.0.0", "HostPort": "5353"},
+                    {"HostIp": "::", "HostPort": "5353"}
+                ]
+            }}
+        });
+        let ports: Vec<_> = ports_from_inspect(&inspect)
+            .iter()
+            .map(|p| (p.host_port, p.udp))
+            .collect();
+        assert_eq!(ports, vec![(5353, false), (5353, true)]);
+    }
+
+    #[test]
     fn stopped_container_has_no_ports() {
         let inspect = serde_json::json!({"Id": "x", "NetworkSettings": {"Ports": {}}});
         assert!(ports_from_inspect(&inspect).is_empty());
         assert!(ports_from_inspect(&serde_json::json!({"Id": "x"})).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod docker_socket_bind_tests {
+    use super::*;
+
+    fn rewritten(bind: &str) -> Option<String> {
+        match parse_docker_bind(bind).ok()? {
+            DockerMountSpec::DockerSocket(rewritten) => Some(rewritten),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn well_known_socket_paths_map_to_the_guest_socket() {
+        assert_eq!(
+            rewritten("/var/run/docker.sock:/var/run/docker.sock").as_deref(),
+            Some("/var/run/docker.sock:/var/run/docker.sock")
+        );
+        assert_eq!(
+            rewritten("/run/docker.sock:/sock:ro").as_deref(),
+            Some("/var/run/docker.sock:/sock:ro")
+        );
+    }
+
+    #[test]
+    fn speck_api_socket_maps_to_the_guest_socket_but_other_sockets_do_not() {
+        let dir = std::env::temp_dir().join(format!("spk-sock-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let speck = dir.join("speck.sock");
+        let agent = dir.join("agent.sock");
+        let _speck_listener = std::os::unix::net::UnixListener::bind(&speck).unwrap();
+        let _agent_listener = std::os::unix::net::UnixListener::bind(&agent).unwrap();
+
+        assert_eq!(
+            rewritten(&format!("{}:/var/run/docker.sock", speck.display())).as_deref(),
+            Some("/var/run/docker.sock:/var/run/docker.sock")
+        );
+        assert_eq!(rewritten(&format!("{}:/agent.sock", agent.display())), None);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn socket_bind_forces_a_create_body_rewrite() {
+        let body = br#"{"Image":"x","HostConfig":{"Binds":["/var/run/docker.sock:/var/run/docker.sock"]}}"#;
+        let binds = extract_bind_mounts(Some(vec![
+            "/var/run/docker.sock:/var/run/docker.sock".into(),
+        ]))
+        .unwrap();
+        let out: serde_json::Value =
+            serde_json::from_slice(&rewrite_create_body_bind_mounts(body, &binds, None).unwrap())
+                .unwrap();
+        assert_eq!(
+            out["HostConfig"]["Binds"][0],
+            "/var/run/docker.sock:/var/run/docker.sock"
+        );
     }
 }
