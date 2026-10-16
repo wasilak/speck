@@ -107,6 +107,14 @@ ca:
     - /etc/ssl/certs/corporate-ca.pem
 ```
 
+Corporate CA (TLS inspection): Speck adds the certificates you trust in the
+Keychain (`ca.keychain`, on by default) and `ca.extra_certs` to the VM, so
+`docker pull` works. Set `ca.inject_into_containers: true` to give containers
+the same bundle (with `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE` and
+`NODE_EXTRA_CA_CERTS` set). Build `RUN` steps do not get it, as in Docker
+Desktop and Colima; copy the CA into the image in the Dockerfile when a build
+step needs it.
+
 Per-invocation flags override the config file:
 
 ```bash

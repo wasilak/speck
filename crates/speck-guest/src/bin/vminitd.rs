@@ -135,6 +135,10 @@ mod linux {
         // 127.0.0.0/8 to its local table only when lo is UP).
         bring_up_loopback();
 
+        // dockerd reports the kernel hostname as the engine name in
+        // `docker info`; without it the name shows as "(none)".
+        set_hostname(GUEST_HOSTNAME);
+
         // Bring up the virtio-net interface so containers can reach external
         // registries.  This is required even though DNS goes through the vsock
         // proxy — image pulls and other TCP/UDP traffic need a live network.
@@ -1156,6 +1160,17 @@ mod linux {
     // ---------------------------------------------------------------------------
     // Guest networking (static IP via ioctl)
     // ---------------------------------------------------------------------------
+
+    const GUEST_HOSTNAME: &str = "speck";
+
+    fn set_hostname(name: &str) {
+        if unsafe { libc::sethostname(name.as_ptr().cast(), name.len()) } != 0 {
+            eprintln!(
+                "vminitd: sethostname failed: {:?}",
+                std::io::Error::last_os_error()
+            );
+        }
+    }
 
     /// Bring up the virtio-net interface with a static IP and default route.
     ///
