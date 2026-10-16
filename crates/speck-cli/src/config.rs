@@ -87,7 +87,7 @@ impl Default for EffectiveVmConfig {
         Self {
             cpus: 2,
             memory_mb: 2048,
-            disk_gb: 20,
+            disk_gb: 100,
         }
     }
 }
@@ -539,7 +539,7 @@ mod tests {
 
             assert_eq!(effective.vm.cpus, 8);
             assert_eq!(effective.vm.memory_mb, 2048);
-            assert_eq!(effective.vm.disk_gb, 20);
+            assert_eq!(effective.vm.disk_gb, 100);
         });
     }
 

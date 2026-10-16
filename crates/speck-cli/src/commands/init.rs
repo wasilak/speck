@@ -18,8 +18,8 @@ vm:
   # Memory in MiB (default: 2048, minimum: 512)
   # memory_mb: 2048
 
-  # Data disk size in GiB (default: 20, minimum: 1)
-  # disk_gb: 20
+  # Data disk size in GiB (default: 100, minimum: 1)
+  # disk_gb: 100
 
 # Log level — tracing EnvFilter directive (default: info)
 # Levels: error, warn, info, debug, trace
