@@ -171,6 +171,7 @@ mod linux {
         // the container runtime (CERT-02, CERT-03).
         install_ca_certs();
         write_containerd_hosts_toml();
+        write_dockerd_config();
 
         // Configure kernel parameters needed by the container runtime
         // before spawning dockerd.  Failures are logged but non-fatal —
@@ -929,6 +930,21 @@ mod linux {
         match std::fs::write(&hosts_path, hosts_toml) {
             Ok(()) => eprintln!("vminitd: wrote containerd hosts.toml to {hosts_path}"),
             Err(e) => eprintln!("vminitd: failed to write hosts.toml: {e}"),
+        }
+    }
+
+    /// Write /etc/docker/daemon.json with the containerd image store on, like
+    /// Colima does. Without it the built-in buildx `docker` driver rejects
+    /// multi-platform builds (`--platform linux/amd64,linux/arm64`).
+    /// dockerd 26 has no `--feature` flag, so this needs the config file.
+    fn write_dockerd_config() {
+        let config = r#"{"features":{"buildkit":true,"containerd-snapshotter":true}}
+"#;
+        let result = std::fs::create_dir_all("/etc/docker")
+            .and_then(|()| std::fs::write("/etc/docker/daemon.json", config));
+        match result {
+            Ok(()) => eprintln!("vminitd: wrote /etc/docker/daemon.json (containerd image store)"),
+            Err(e) => eprintln!("vminitd: failed to write /etc/docker/daemon.json: {e}"),
         }
     }
 

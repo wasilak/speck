@@ -65,6 +65,10 @@ the `speck` docker context. Speck starts again automatically at login.
 Rosetta. If Rosetta is not installed, install it once with
 `softwareupdate --install-rosetta --agree-to-license` and run `spk restart`.
 
+dockerd uses the containerd image store, like Colima, so multi-platform
+builds (`docker buildx build --platform linux/amd64,linux/arm64 --push`) work
+with the default builder.
+
 Tools that ignore docker contexts and only read `DOCKER_HOST` (some
 testcontainers and docker-py setups) need the environment variable:
 
