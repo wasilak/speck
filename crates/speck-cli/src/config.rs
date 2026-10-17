@@ -158,6 +158,53 @@ pub fn load_config_file(speck_home: &Path) -> anyhow::Result<(AppConfig, Vec<Con
     Ok((config, warnings))
 }
 
+/// Save `spk up --cpus/--memory/--disk` into config.yaml, like `colima start`
+/// does. The launchd daemon reads only the config file, so without this the
+/// flags would be ignored. Returns the `vm.<key>=<value>` pairs written.
+pub fn persist_vm_overrides(speck_home: &Path, cli: &crate::UpArgs) -> anyhow::Result<Vec<String>> {
+    let overrides = [
+        ("cpus", cli.cpus),
+        ("memory_mb", cli.memory),
+        ("disk_gb", cli.disk),
+    ];
+    if overrides.iter().all(|(_, v)| v.is_none()) {
+        return Ok(Vec::new());
+    }
+    let (file_config, _) = load_config_file(speck_home)?;
+    resolve_effective_config(file_config, cli)?;
+
+    let path = speck_home.join(CONFIG_FILE);
+    let mut root = match std::fs::read_to_string(&path) {
+        Ok(contents) => serde_yaml::from_str(&contents)
+            .with_context(|| format!("failed to parse {}", path.display()))?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => serde_yaml::Value::Null,
+        Err(e) => return Err(e).with_context(|| format!("failed to read {}", path.display())),
+    };
+    if !root.is_mapping() {
+        let mut fresh = serde_yaml::Mapping::new();
+        fresh.insert("version".into(), CONFIG_VERSION.into());
+        root = fresh.into();
+    }
+    let top = root.as_mapping_mut().expect("mapping");
+    let vm = top
+        .entry("vm".into())
+        .or_insert_with(|| serde_yaml::Mapping::new().into());
+    if !vm.is_mapping() {
+        *vm = serde_yaml::Mapping::new().into();
+    }
+    let vm = vm.as_mapping_mut().expect("mapping");
+    let mut written = Vec::new();
+    for (key, value) in overrides {
+        if let Some(value) = value {
+            vm.insert(key.into(), value.into());
+            written.push(format!("vm.{key}={value}"));
+        }
+    }
+    std::fs::write(&path, serde_yaml::to_string(&root)?)
+        .with_context(|| format!("failed to write {}", path.display()))?;
+    Ok(written)
+}
+
 pub fn collect_unknown_keys(value: &serde_yaml::Value) -> Vec<ConfigWarning> {
     let mut warnings = Vec::new();
     let Some(top) = value.as_mapping() else {
@@ -642,6 +689,44 @@ mod tests {
             .to_string();
 
         assert!(err.contains("512 MiB"));
+    }
+
+    #[test]
+    fn persist_vm_overrides_writes_flags_and_keeps_other_keys() {
+        let home = temp_speck_home("persist");
+        let mut cli = empty_cli_args();
+        assert!(persist_vm_overrides(&home, &cli).unwrap().is_empty());
+        assert!(!home.join(CONFIG_FILE).exists());
+
+        std::fs::write(
+            home.join(CONFIG_FILE),
+            "version: 1\nvm:\n  cpus: 2\nca:\n  keychain: false\n",
+        )
+        .unwrap();
+        cli.memory = Some(8192);
+        assert_eq!(
+            persist_vm_overrides(&home, &cli).unwrap(),
+            vec!["vm.memory_mb=8192"]
+        );
+        let (config, warnings) = load_config_file(&home).unwrap();
+        assert!(warnings.is_empty());
+        assert_eq!(config.vm.memory_mb, Some(8192));
+        assert_eq!(config.vm.cpus, Some(2));
+        assert_eq!(config.ca.keychain, Some(false));
+    }
+
+    #[test]
+    fn persist_vm_overrides_creates_config_and_rejects_invalid_values() {
+        let home = temp_speck_home("persist-new");
+        let mut cli = empty_cli_args();
+        cli.memory = Some(256);
+        assert!(persist_vm_overrides(&home, &cli).is_err());
+        assert!(!home.join(CONFIG_FILE).exists());
+
+        cli.memory = Some(4096);
+        persist_vm_overrides(&home, &cli).unwrap();
+        let (config, _) = load_config_file(&home).unwrap();
+        assert_eq!(config.vm.memory_mb, Some(4096));
     }
 
     fn empty_cli_args() -> crate::UpArgs {

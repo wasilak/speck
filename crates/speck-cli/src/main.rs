@@ -537,6 +537,12 @@ async fn main() -> anyhow::Result<()> {
                 if let Some(warning) = docker_context::docker_host_override_warning(&speck_home) {
                     eprintln!("warning: {warning}");
                 }
+                for saved in config::persist_vm_overrides(&speck_home, &args)? {
+                    eprintln!(
+                        "saved {saved} to {}",
+                        speck_home.join("config.yaml").display()
+                    );
+                }
                 let binary = std::env::current_exe().context("cannot find own binary")?;
                 commands::up::daemonize(&speck_home, &binary)?;
                 if args.wait {
