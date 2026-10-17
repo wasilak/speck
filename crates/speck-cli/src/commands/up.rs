@@ -1082,10 +1082,11 @@ async fn wait_for_vm_failure(
         if vm_has_exited(&state) {
             return format!("VM state {state:?}");
         }
-        for victim in oom.new_kills() {
+        let victims = oom.new_kills();
+        if !victims.is_empty() {
             tracing::warn!(
-                process = %victim,
-                "guest ran out of memory and killed a process; raise vm.memory_mb in config.yaml"
+                killed = %summarize_victims(&victims),
+                "guest ran out of memory and killed processes; raise vm.memory_mb in config.yaml"
             );
         }
         let alive = tokio::time::timeout(LIVENESS_TIMEOUT, client.ping())
@@ -1162,6 +1163,28 @@ impl OomWatcher {
         let text = String::from_utf8_lossy(&bytes[..complete]);
         oom_victims(&text)
     }
+}
+
+/// "java x3, postgres" — one log line per probe instead of one per kill.
+fn summarize_victims(victims: &[String]) -> String {
+    let mut counts: Vec<(&str, usize)> = Vec::new();
+    for v in victims {
+        match counts.iter_mut().find(|(name, _)| *name == v.as_str()) {
+            Some((_, n)) => *n += 1,
+            None => counts.push((v, 1)),
+        }
+    }
+    counts
+        .iter()
+        .map(|(name, n)| {
+            if *n > 1 {
+                format!("{name} x{n}")
+            } else {
+                (*name).to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Process names from kernel "Out of memory: Killed process <pid> (<name>)" lines.
@@ -1250,6 +1273,12 @@ pub async fn wait_for_socket(sock_path: &std::path::Path, timeout_secs: u64) -> 
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn oom_victims_are_summarized_per_name() {
+        let v: Vec<String> = ["java", "pg", "java", "java"].map(String::from).into();
+        assert_eq!(super::summarize_victims(&v), "java x3, pg");
+    }
+
     #[test]
     fn oom_victims_come_from_kernel_kill_lines() {
         let console = "[   81.8] Out of memory: Killed process 1092 (java) total-vm:834172kB\n\
