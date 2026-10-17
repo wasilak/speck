@@ -188,6 +188,13 @@ mod linux {
         }
         setup_amd64_emulation();
         prevent_memory_thrashing();
+        match speck_guest::memory::reserve_for_runtime() {
+            Ok(max) => eprintln!(
+                "vminitd: containers capped at {} MiB; the rest is kept for the runtime",
+                max / (1024 * 1024)
+            ),
+            Err(e) => eprintln!("vminitd: cannot cap container memory: {e}"),
+        }
 
         let dockerd_bin = detect_dockerd_bin();
         eprintln!("vminitd: using dockerd at {dockerd_bin}");
