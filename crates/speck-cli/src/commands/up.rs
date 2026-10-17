@@ -1187,12 +1187,13 @@ fn summarize_victims(victims: &[String]) -> String {
         .join(", ")
 }
 
-/// Process names from kernel "Out of memory: Killed process <pid> (<name>)" lines.
+/// Process names from kernel "[Memory cgroup] Out of memory: Killed process <pid> (<name>)" lines.
 fn oom_victims(console: &str) -> Vec<String> {
     console
         .lines()
         .filter_map(|line| {
-            let rest = line.split("Out of memory: Killed process ").nth(1)?;
+            // "Out of memory: ..." (global) or "Memory cgroup out of memory: ..."
+            let rest = line.split("of memory: Killed process ").nth(1)?;
             let name = rest.split_once('(')?.1.split_once(')')?.0;
             Some(name.to_owned())
         })
@@ -1283,8 +1284,12 @@ mod tests {
     fn oom_victims_come_from_kernel_kill_lines() {
         let console = "[   81.8] Out of memory: Killed process 1092 (java) total-vm:834172kB\n\
                        [   82.0] something else\n\
-                       [   82.2] Out of memory: Killed process 1094 (stress-ng-vm) total-vm:1kB\n";
-        assert_eq!(super::oom_victims(console), vec!["java", "stress-ng-vm"]);
+                       [   82.2] Out of memory: Killed process 1094 (stress-ng-vm) total-vm:1kB\n\
+                       [   90.1] Memory cgroup out of memory: Killed process 7 (postgres) x\n";
+        assert_eq!(
+            super::oom_victims(console),
+            vec!["java", "stress-ng-vm", "postgres"]
+        );
     }
 
     #[test]

@@ -7,6 +7,56 @@ use tokio::net::UnixStream;
 
 const LAUNCHD_LABEL: &str = "io.speck.vm";
 
+/// Like `colima stop --force`: kill the daemon (and with it the VM) at once,
+/// without stopping the guest gracefully. For a guest that hangs.
+pub async fn run_force_stop(speck_home: &Path) -> anyhow::Result<()> {
+    let pid = std::fs::read_to_string(speck_home.join("run/speck.pid"))
+        .ok()
+        .and_then(|p| p.trim().parse::<u32>().ok());
+
+    // Unregister first so launchd's KeepAlive does not start it again.
+    // bootout blocks until the job exits, so it runs while we kill.
+    let mut bootout = None;
+    if crate::docker_context::manages_context() {
+        let uid = std::process::Command::new("id")
+            .arg("-u")
+            .output()
+            .context("failed to run id -u")?;
+        let uid = String::from_utf8_lossy(&uid.stdout).trim().to_owned();
+        bootout = tokio::process::Command::new("launchctl")
+            .args(["bootout", &format!("gui/{uid}/{LAUNCHD_LABEL}")])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .ok();
+        let home = std::env::var("HOME").context("HOME not set")?;
+        let _ = std::fs::remove_file(
+            PathBuf::from(home)
+                .join("Library/LaunchAgents")
+                .join(format!("{LAUNCHD_LABEL}.plist")),
+        );
+    }
+    if let Some(pid) = pid {
+        let _ = std::process::Command::new("kill")
+            .args(["-KILL", &pid.to_string()])
+            .stderr(std::process::Stdio::null())
+            .status();
+        tracing::info!(pid, "killed the Speck daemon");
+    }
+    if let Some(mut bootout) = bootout {
+        let _ = tokio::time::timeout(Duration::from_secs(10), bootout.wait()).await;
+    }
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while crate::commands::up::launchd_job_loaded() && Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    for stale in ["run/control.sock", "run/speck.pid"] {
+        let _ = std::fs::remove_file(speck_home.join(stale));
+    }
+    println!("Speck stopped (forced).");
+    Ok(())
+}
+
 pub async fn run_down(speck_home: &Path) -> anyhow::Result<()> {
     // Step 1 — Liveness check: confirm the daemon is running before issuing bootout
     let sock_path = speck_home.join("run/control.sock");

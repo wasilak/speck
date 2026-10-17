@@ -158,6 +158,9 @@ struct ExecArgs {
 struct StopArgs {
     /// Container to stop; without it, Speck itself is stopped
     container: Option<String>,
+    /// Kill Speck and its VM at once, without a graceful guest shutdown
+    #[arg(short, long, conflicts_with = "container")]
+    force: bool,
 }
 
 #[derive(Parser)]
@@ -605,6 +608,10 @@ async fn main() -> anyhow::Result<()> {
             init_tracing(&default_tracing_filter())?;
             match args.container {
                 Some(container) => commands::stop::run_stop(&container, &speck_home).await?,
+                None if args.force => {
+                    commands::down::run_force_stop(&speck_home).await?;
+                    docker_context::deselect();
+                }
                 None => {
                     commands::down::run_down(&speck_home).await?;
                     docker_context::deselect();
