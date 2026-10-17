@@ -537,14 +537,24 @@ async fn main() -> anyhow::Result<()> {
                 if let Some(warning) = docker_context::docker_host_override_warning(&speck_home) {
                     eprintln!("warning: {warning}");
                 }
-                for saved in config::persist_vm_overrides(&speck_home, &args)? {
+                let saved = config::persist_vm_overrides(&speck_home, &args)?;
+                for saved in &saved {
                     eprintln!(
                         "saved {saved} to {}",
                         speck_home.join("config.yaml").display()
                     );
                 }
-                let binary = std::env::current_exe().context("cannot find own binary")?;
-                commands::up::daemonize(&speck_home, &binary)?;
+                // Like `colima start`: starting a running instance does
+                // nothing. Re-registering the agent would stop the daemon.
+                if commands::up::launchd_job_loaded() {
+                    println!("Speck is already running.");
+                    if !saved.is_empty() {
+                        println!("Run `spk restart` to apply the new settings.");
+                    }
+                } else {
+                    let binary = std::env::current_exe().context("cannot find own binary")?;
+                    commands::up::daemonize(&speck_home, &binary)?;
+                }
                 if args.wait {
                     let sock = speck_home.join("speck.sock");
                     if let Err(e) = commands::up::wait_for_socket(&sock, args.timeout).await {

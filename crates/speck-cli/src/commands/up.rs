@@ -40,6 +40,26 @@ fn is_interactive() -> bool {
     std::env::var("SPECK_DAEMONIZED").as_deref() != Ok("1") && std::io::stderr().is_terminal()
 }
 
+/// Whether the Speck launchd agent is loaded, i.e. the daemon is running or
+/// launchd is about to restart it.
+pub fn launchd_job_loaded() -> bool {
+    let Some(uid) = std::process::Command::new("id")
+        .arg("-u")
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+    else {
+        return false;
+    };
+    let uid = uid.trim();
+    std::process::Command::new("launchctl")
+        .args(["print", &format!("gui/{uid}/{LAUNCHD_LABEL}")])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
 pub fn daemonize(speck_home: &Path, binary: &Path) -> anyhow::Result<()> {
     let _ = speck_home;
     let home_dir = std::env::var("HOME").context("HOME not set")?;
@@ -86,8 +106,12 @@ pub fn daemonize(speck_home: &Path, binary: &Path) -> anyhow::Result<()> {
         .stderr(Stdio::null())
         .status();
     if bootout.is_ok_and(|s| s.success()) {
-        // Give launchd a moment to fully tear down the old job before bootstrap.
-        std::thread::sleep(Duration::from_millis(500));
+        // The old daemon stops the guest gracefully first, which takes
+        // seconds; bootstrap fails with EIO until the job is gone.
+        let deadline = std::time::Instant::now() + Duration::from_secs(60);
+        while launchd_job_loaded() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(500));
+        }
     }
 
     let plist = format!(

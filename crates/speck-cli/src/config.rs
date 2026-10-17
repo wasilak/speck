@@ -693,40 +693,57 @@ mod tests {
 
     #[test]
     fn persist_vm_overrides_writes_flags_and_keeps_other_keys() {
-        let home = temp_speck_home("persist");
-        let mut cli = empty_cli_args();
-        assert!(persist_vm_overrides(&home, &cli).unwrap().is_empty());
-        assert!(!home.join(CONFIG_FILE).exists());
+        without_vm_env(|| {
+            let home = temp_speck_home("persist");
+            let mut cli = empty_cli_args();
+            assert!(persist_vm_overrides(&home, &cli).unwrap().is_empty());
+            assert!(!home.join(CONFIG_FILE).exists());
 
-        std::fs::write(
-            home.join(CONFIG_FILE),
-            "version: 1\nvm:\n  cpus: 2\nca:\n  keychain: false\n",
-        )
-        .unwrap();
-        cli.memory = Some(8192);
-        assert_eq!(
-            persist_vm_overrides(&home, &cli).unwrap(),
-            vec!["vm.memory_mb=8192"]
-        );
-        let (config, warnings) = load_config_file(&home).unwrap();
-        assert!(warnings.is_empty());
-        assert_eq!(config.vm.memory_mb, Some(8192));
-        assert_eq!(config.vm.cpus, Some(2));
-        assert_eq!(config.ca.keychain, Some(false));
+            std::fs::write(
+                home.join(CONFIG_FILE),
+                "version: 1\nvm:\n  cpus: 2\nca:\n  keychain: false\n",
+            )
+            .unwrap();
+            cli.memory = Some(8192);
+            assert_eq!(
+                persist_vm_overrides(&home, &cli).unwrap(),
+                vec!["vm.memory_mb=8192"]
+            );
+            let (config, warnings) = load_config_file(&home).unwrap();
+            assert!(warnings.is_empty());
+            assert_eq!(config.vm.memory_mb, Some(8192));
+            assert_eq!(config.vm.cpus, Some(2));
+            assert_eq!(config.ca.keychain, Some(false));
+        });
     }
 
     #[test]
     fn persist_vm_overrides_creates_config_and_rejects_invalid_values() {
-        let home = temp_speck_home("persist-new");
-        let mut cli = empty_cli_args();
-        cli.memory = Some(256);
-        assert!(persist_vm_overrides(&home, &cli).is_err());
-        assert!(!home.join(CONFIG_FILE).exists());
+        without_vm_env(|| {
+            let home = temp_speck_home("persist-new");
+            let mut cli = empty_cli_args();
+            cli.memory = Some(256);
+            assert!(persist_vm_overrides(&home, &cli).is_err());
+            assert!(!home.join(CONFIG_FILE).exists());
 
-        cli.memory = Some(4096);
-        persist_vm_overrides(&home, &cli).unwrap();
-        let (config, _) = load_config_file(&home).unwrap();
-        assert_eq!(config.vm.memory_mb, Some(4096));
+            cli.memory = Some(4096);
+            persist_vm_overrides(&home, &cli).unwrap();
+            let (config, _) = load_config_file(&home).unwrap();
+            assert_eq!(config.vm.memory_mb, Some(4096));
+        });
+    }
+
+    /// Env overrides from parallel tests must not leak into resolution.
+    fn without_vm_env(f: impl FnOnce()) {
+        temp_env::with_vars(
+            [
+                ("SPECK_VM_CPUS", None::<&str>),
+                ("SPECK_VM_MEMORY_MB", None),
+                ("SPECK_VM_DISK_GB", None),
+                ("SPECK_LOG_LEVEL", None),
+            ],
+            f,
+        );
     }
 
     fn empty_cli_args() -> crate::UpArgs {

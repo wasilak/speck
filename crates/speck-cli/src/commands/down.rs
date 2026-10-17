@@ -66,6 +66,13 @@ pub async fn run_down(speck_home: &Path) -> anyhow::Result<()> {
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                 Err(e) => tracing::warn!(error = %e, "failed to remove plist"),
             }
+
+            // bootout returns before the daemon has stopped the guest; a
+            // `spk start` right after must not find the job still loaded.
+            let deadline = Instant::now() + Duration::from_secs(60);
+            while crate::commands::up::launchd_job_loaded() && Instant::now() < deadline {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
         }
 
         // Step 4 — Poll for clean shutdown: wait until control.sock disappears (timeout 30s)
