@@ -939,7 +939,11 @@ pub async fn run_up(
             shutdown_gracefully(&guest, &ctrl_sock_path, speck_home).await?;
             anyhow::bail!("networking is gone: {reason}");
         }
-        reason = wait_for_vm_failure(guest.clone(), speck_home.join("speck.sock")) => {
+        reason = wait_for_vm_failure(
+            guest.clone(),
+            speck_home.join("speck.sock"),
+            speck_home.join("console.log"),
+        ) => {
             // Exit non-zero so launchd (KeepAlive) restarts Speck with a fresh
             // VM, instead of a daemon that reports "running" with a dead VM.
             tracing::error!(%reason, "VM is gone - exiting so launchd restarts Speck");
@@ -1031,8 +1035,19 @@ const LIVENESS_FAILURES: u32 = 3;
 /// or the guest stopped answering. The second case matters because a guest
 /// that halts or hangs (kernel panic, `reboot -f`) is not always reported by
 /// VZ, which would leave a daemon that says "running" with a dead VM.
-async fn wait_for_vm_failure(guest: Arc<speck_vz::Guest>, docker_sock: PathBuf) -> String {
+///
+/// A dockerd that does not answer is not enough: under memory pressure it
+/// can stall for minutes while the guest is fine. Restarting the VM then
+/// brings back every `restart: unless-stopped` container and fills the memory
+/// again, in a loop. So the VM only counts as gone when vminitd's Docker
+/// forwarder stops accepting connections too.
+async fn wait_for_vm_failure(
+    guest: Arc<speck_vz::Guest>,
+    docker_sock: PathBuf,
+    console_log: PathBuf,
+) -> String {
     let client = DockerClient::new(docker_sock);
+    let mut oom = OomWatcher::new(console_log);
     let mut failures = 0;
     loop {
         tokio::time::sleep(LIVENESS_INTERVAL).await;
@@ -1043,17 +1058,98 @@ async fn wait_for_vm_failure(guest: Arc<speck_vz::Guest>, docker_sock: PathBuf) 
         if vm_has_exited(&state) {
             return format!("VM state {state:?}");
         }
+        for victim in oom.new_kills() {
+            tracing::warn!(
+                process = %victim,
+                "guest ran out of memory and killed a process; raise vm.memory_mb in config.yaml"
+            );
+        }
         let alive = tokio::time::timeout(LIVENESS_TIMEOUT, client.ping())
             .await
             .unwrap_or(false);
         failures = if alive { 0 } else { failures + 1 };
-        if failures >= LIVENESS_FAILURES {
-            return format!("guest dockerd did not answer {failures} consecutive pings");
+        if failures == 0 {
+            continue;
         }
-        if failures > 0 {
+        if failures < LIVENESS_FAILURES {
             tracing::warn!(failures, "guest liveness probe failed");
+            continue;
         }
+        if guest_answers(&guest).await {
+            if failures == LIVENESS_FAILURES || failures % 6 == 0 {
+                tracing::warn!(
+                    failures,
+                    "guest dockerd is not answering but the VM is alive; not restarting \
+                     (often a full guest memory: check `docker stats`, raise vm.memory_mb)"
+                );
+            }
+            continue;
+        }
+        return format!(
+            "guest did not answer {failures} consecutive pings and its Docker bridge is down"
+        );
     }
+}
+
+/// Whether the guest side of the Docker bridge (vminitd's forwarder) is alive.
+async fn guest_answers(guest: &Arc<speck_vz::Guest>) -> bool {
+    let g = Arc::clone(guest);
+    let probe = tokio::task::spawn_blocking(move || g.probe_docker_forwarder());
+    matches!(
+        tokio::time::timeout(LIVENESS_TIMEOUT, probe).await,
+        Ok(Ok(Ok(())))
+    )
+}
+
+/// Reports the guest kernel's OOM kills from the serial console log, which
+/// is otherwise only visible in `console.log`.
+struct OomWatcher {
+    path: PathBuf,
+    offset: u64,
+}
+
+impl OomWatcher {
+    fn new(path: PathBuf) -> Self {
+        Self { path, offset: 0 }
+    }
+
+    /// Processes killed since the last call.
+    fn new_kills(&mut self) -> Vec<String> {
+        use std::io::{Read, Seek, SeekFrom};
+        let Ok(mut file) = std::fs::File::open(&self.path) else {
+            return Vec::new();
+        };
+        let len = file.metadata().map(|m| m.len()).unwrap_or(0);
+        if len < self.offset {
+            self.offset = 0; // a new boot truncated the log
+        }
+        let mut bytes = Vec::new();
+        if file.seek(SeekFrom::Start(self.offset)).is_err()
+            || file
+                .take(len - self.offset)
+                .read_to_end(&mut bytes)
+                .is_err()
+        {
+            return Vec::new();
+        }
+        // Only consume complete lines; a partial one is read again next time.
+        let complete = bytes.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
+        self.offset += complete as u64;
+        let text = String::from_utf8_lossy(&bytes[..complete]);
+        oom_victims(&text)
+    }
+}
+
+/// Process names from kernel "Out of memory: Killed process <pid> (<name>)" lines.
+fn oom_victims(console: &str) -> Vec<String> {
+    console
+        .lines()
+        .filter_map(|line| {
+            let rest = line.split("Out of memory: Killed process ").nth(1)?;
+            let name = rest.split_once('(')?.1.split_once(')')?.0;
+            Some(name.to_owned())
+        })
+        .collect()
 }
 
 fn vm_has_exited(state: &speck_core::VmState) -> bool {
@@ -1130,6 +1226,36 @@ pub async fn wait_for_socket(sock_path: &std::path::Path, timeout_secs: u64) -> 
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn oom_victims_come_from_kernel_kill_lines() {
+        let console = "[   81.8] Out of memory: Killed process 1092 (java) total-vm:834172kB\n\
+                       [   82.0] something else\n\
+                       [   82.2] Out of memory: Killed process 1094 (stress-ng-vm) total-vm:1kB\n";
+        assert_eq!(super::oom_victims(console), vec!["java", "stress-ng-vm"]);
+    }
+
+    #[test]
+    fn oom_watcher_reports_each_kill_once_and_survives_truncation() {
+        let path = std::env::temp_dir().join(format!("speck-oom-{}.log", std::process::id()));
+        std::fs::write(
+            &path,
+            "[1] Out of memory: Killed process 1 (a) x\n[2] Out of mem",
+        )
+        .unwrap();
+        let mut watcher = super::OomWatcher::new(path.clone());
+        assert_eq!(watcher.new_kills(), vec!["a"]);
+        assert!(watcher.new_kills().is_empty());
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        std::io::Write::write_all(&mut f, b"ory: Killed process 2 (b) x\n").unwrap();
+        assert_eq!(watcher.new_kills(), vec!["b"]);
+        std::fs::write(&path, "[1] Out of memory: Killed process 3 (c) x\n").unwrap();
+        assert_eq!(watcher.new_kills(), vec!["c"]);
+        let _ = std::fs::remove_file(&path);
+    }
+
     use super::*;
 
     #[test]

@@ -60,6 +60,15 @@ impl Guest {
         self.thread.vsock_connect(port)
     }
 
+    /// Open and drop a connection to vminitd's dockerd forwarder. It accepts
+    /// even while dockerd itself is stalled, so success means the guest side
+    /// of the Docker bridge is alive; after a guest crash or silent reboot
+    /// the connection is refused.
+    pub fn probe_docker_forwarder(&self) -> Result<(), Error> {
+        self.vsock_connect(self.config.docker_vsock_port.unwrap_or(9003))
+            .map(drop)
+    }
+
     pub fn join(&mut self) -> Result<(), Error> {
         self.thread.join()
     }
