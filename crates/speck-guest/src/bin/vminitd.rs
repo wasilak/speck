@@ -187,6 +187,7 @@ mod linux {
             eprintln!("vminitd: sysctl configuration failed: {e}");
         }
         setup_amd64_emulation();
+        prevent_memory_thrashing();
 
         let dockerd_bin = detect_dockerd_bin();
         eprintln!("vminitd: using dockerd at {dockerd_bin}");
@@ -1039,6 +1040,21 @@ mod linux {
     /// Spawn dockerd with automatic restart.
     ///
     /// dockerd now runs directly in the switched root (/) — no chroot needed.
+    /// The guest has no swap. When anonymous memory fills it, the kernel keeps
+    /// evicting program code and reading it back instead of OOM-killing,
+    /// and dockerd hangs for hours. MGLRU's `min_ttl_ms` protects the working
+    /// set of the last second and calls the OOM killer when it cannot be kept.
+    fn prevent_memory_thrashing() {
+        for (path, value) in [
+            ("/sys/kernel/mm/lru_gen/enabled", "y"),
+            ("/sys/kernel/mm/lru_gen/min_ttl_ms", "1000"),
+        ] {
+            if let Err(e) = std::fs::write(path, value) {
+                eprintln!("vminitd: cannot write {value} to {path}: {e}");
+            }
+        }
+    }
+
     /// `OOMScoreAdjust` of Docker's docker.service.
     const DOCKERD_OOM_SCORE_ADJ: &str = "-500";
 
