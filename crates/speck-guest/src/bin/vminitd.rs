@@ -243,10 +243,9 @@ mod linux {
             }
         });
 
-        // PID 1 must never exit
-        loop {
-            std::thread::sleep(std::time::Duration::from_secs(3600));
-        }
+        // PID 1 must never exit; it reaps orphaned processes (exited
+        // containerd shims) for the rest of the guest's life.
+        speck_guest::reaper::run()
     }
 
     // ---------------------------------------------------------------------------
@@ -1040,6 +1039,9 @@ mod linux {
     /// Spawn dockerd with automatic restart.
     ///
     /// dockerd now runs directly in the switched root (/) — no chroot needed.
+    /// `OOMScoreAdjust` of Docker's docker.service.
+    const DOCKERD_OOM_SCORE_ADJ: &str = "-500";
+
     fn spawn_dockerd_with_restart(dockerd_bin: &'static str, host_gateway: Option<String>) {
         std::thread::spawn(move || {
             // Exponential backoff for a crash-looping dockerd, reset once it
@@ -1129,6 +1131,15 @@ mod linux {
                 match cmd.spawn() {
                     Ok(mut child) => {
                         eprintln!("vminitd: started dockerd (pid {})", child.id());
+                        // Like Docker's systemd unit: under memory pressure
+                        // the kernel kills container processes before
+                        // dockerd. containerd and its shims inherit the value.
+                        if let Err(e) = std::fs::write(
+                            format!("/proc/{}/oom_score_adj", child.id()),
+                            DOCKERD_OOM_SCORE_ADJ,
+                        ) {
+                            eprintln!("vminitd: cannot set dockerd oom_score_adj: {e}");
+                        }
                         DOCKERD_PID.store(child.id(), std::sync::atomic::Ordering::SeqCst);
                         let waited = child.wait();
                         DOCKERD_PID.store(0, std::sync::atomic::Ordering::SeqCst);

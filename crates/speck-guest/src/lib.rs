@@ -6,6 +6,7 @@ pub mod dns_mux;
 pub mod dns_wire;
 #[cfg(target_os = "linux")]
 pub mod log_relay;
+pub mod reaper;
 pub mod shutdown;
 #[cfg(target_os = "linux")]
 pub mod sock_forwarder;
