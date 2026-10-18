@@ -605,6 +605,19 @@ mod tests {
     }
 }
 
+/// Let `spk status -o json | head -1` end quietly, like other CLI tools.
+/// Rust ignores SIGPIPE, so a closed pipe made `println!` panic. Only for
+/// commands that print reports; the daemon must keep ignoring SIGPIPE.
+fn restore_sigpipe() {
+    unsafe extern "C" {
+        fn signal(signum: i32, handler: usize) -> usize;
+    }
+    const SIGPIPE: i32 = 13;
+    const SIG_DFL: usize = 0;
+    // SAFETY: called once at startup, before any threads write to stdout.
+    unsafe { signal(SIGPIPE, SIG_DFL) };
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
@@ -614,6 +627,14 @@ async fn main() -> anyhow::Result<()> {
          config, version and doctor"
     );
     let format = cli.output;
+    if cli.command.supports_output()
+        || matches!(
+            cli.command,
+            Commands::Logs(_) | Commands::Completion(_) | Commands::Env(_)
+        )
+    {
+        restore_sigpipe();
+    }
     let profile = profile::select(cli.profile.as_deref())?;
     if profile.managed() {
         // Child `spk` processes (restart, recreate) act on the same profile.
