@@ -50,6 +50,7 @@ spk restart
 spk stop        # stop the VM; switches docker back to the 'default' context
 spk stop -f     # kill a hung VM at once, without a graceful shutdown
 spk config      # validate config.yaml and show effective settings and their sources
+spk template    # edit config.yaml in $EDITOR (starts from a commented template)
 spk prune       # delete cached downloads Speck no longer uses
 spk delete      # remove the VM with all containers, images and volumes
 spk recreate    # delete the VM and start a fresh one (keeps downloads and config)
@@ -136,6 +137,12 @@ until `spk restart`.
 ```bash
 spk start --cpus 8 --memory 8g
 ```
+
+`spk template` opens the config file in `$VISUAL` or `$EDITOR`. If the file
+does not exist yet, it starts from a commented template with every key and
+its default. Speck checks the file after you close the editor and offers to
+open it again when it is invalid. `spk start --edit` does the same, then
+starts Speck.
 
 Containers get the VM memory minus a reserve (1/8, 512 MiB to 1 GiB) kept for
 dockerd and containerd, so a full container memory never makes `docker`

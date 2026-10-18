@@ -978,23 +978,24 @@
         "description": "Watchdog restarted the VM when dockerd stalled under full guest memory; with restart: unless-stopped containers this looped. Plus zombie shims, dockerd OOM priority, spk up --memory ignored in daemon mode.",
         "details": "Fixed in 545a39c, 1bc7870, 7b066a9. Verified on /tmp/spkt: SIGSTOP dockerd 85s -> VM survives with warning; reboot -f in guest -> detected and exit 1; OOM kill logged; zombies=0; dockerd/containerd adj=-500; conformance 30/30, egress 25/25.",
         "testStrategy": "",
-        "status": "pending",
+        "status": "done",
         "dependencies": [],
         "priority": "high",
-        "subtasks": []
+        "subtasks": [],
+        "updatedAt": "2026-10-18T20:10:45.147Z"
       }
     ],
     "metadata": {
       "version": "1.0.0",
-      "lastModified": "2026-10-16T09:06:05.087Z",
-      "taskCount": 37,
-      "completedCount": 32,
+      "lastModified": "2026-10-18T20:10:45.147Z",
+      "taskCount": 38,
+      "completedCount": 33,
       "tags": [
         "v1_4-daily-driver"
       ],
-      "created": "2026-10-17T13:15:58.498Z",
+      "created": "2026-10-18T20:10:48.231Z",
       "description": "Tasks for v1_4-daily-driver context",
-      "updated": "2026-10-17T16:47:00.653Z"
+      "updated": "2026-10-18T20:10:48.231Z"
     }
   },
   "v1_5-cli-parity": {
@@ -1073,8 +1074,9 @@
         "dependencies": [
           "1"
         ],
-        "status": "pending",
-        "subtasks": []
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2026-10-18T20:24:06.442Z"
       },
       {
         "id": "7",
@@ -1169,9 +1171,9 @@
     ],
     "metadata": {
       "version": "1.0.0",
-      "lastModified": "2026-10-18T18:29:58.650Z",
+      "lastModified": "2026-10-18T20:24:06.442Z",
       "taskCount": 12,
-      "completedCount": 5,
+      "completedCount": 6,
       "tags": [
         "v1_5-cli-parity"
       ]

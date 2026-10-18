@@ -72,6 +72,12 @@ fn build(speck_home: &Path) -> ConfigDoc {
     doc
 }
 
+/// Errors and warnings for `<home>/config.yaml`, as `spk config` reports them.
+pub fn problems(speck_home: &Path) -> (Vec<String>, Vec<String>) {
+    let doc = build(speck_home);
+    (doc.errors, doc.warnings)
+}
+
 /// Exit code 0 when the configuration is valid, 1 otherwise.
 pub fn run_config(speck_home: &Path, format: Output) -> anyhow::Result<i32> {
     let doc = build(speck_home);

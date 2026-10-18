@@ -65,6 +65,8 @@ enum Commands {
     Doctor(DoctorArgs),
     /// Validate config.yaml and show the effective settings and their sources
     Config,
+    /// Edit config.yaml in $VISUAL/$EDITOR; creates a commented template first
+    Template,
     /// Show Speck status (like `colima status`)
     Status(StatusArgs),
     /// List Speck instances (like `colima list`)
@@ -207,6 +209,9 @@ struct UpArgs {
     /// reboot (for CI). Saved to config.yaml as `autostart: false`
     #[arg(long)]
     no_autostart: bool,
+    /// Edit config.yaml in $VISUAL/$EDITOR before starting (like `colima start --edit`)
+    #[arg(long)]
+    edit: bool,
 }
 
 #[derive(Parser)]
@@ -629,6 +634,9 @@ async fn main() -> anyhow::Result<()> {
                     "a custom SPECK_HOME runs in the foreground only: use `spk up --foreground`"
                 );
                 profile::check_socket_path(&sock_path)?;
+                if args.edit && !commands::template::edit_config(&speck_home, profile)? {
+                    std::process::exit(1);
+                }
                 if let Some(warning) = docker_context::docker_host_override_warning(&speck_home) {
                     eprintln!("warning: {warning}");
                 }
@@ -768,6 +776,12 @@ async fn main() -> anyhow::Result<()> {
         Commands::Doctor(args) => {
             init_tracing(&default_tracing_filter())?;
             let code = commands::doctor::run_doctor(&speck_home, args, format).await?;
+            if code != 0 {
+                std::process::exit(code);
+            }
+        }
+        Commands::Template => {
+            let code = commands::template::run_template(&speck_home, profile)?;
             if code != 0 {
                 std::process::exit(code);
             }

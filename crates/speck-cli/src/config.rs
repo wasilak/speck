@@ -619,6 +619,7 @@ mod tests {
                 wait: false,
                 timeout: 300,
                 no_autostart: false,
+                edit: false,
             };
             let file = AppConfig {
                 vm: FileVmConfig {
@@ -659,6 +660,7 @@ mod tests {
                     wait: false,
                     timeout: 300,
                     no_autostart: false,
+                    edit: false,
                 };
                 let file = AppConfig {
                     vm: FileVmConfig {
@@ -846,6 +848,7 @@ mod tests {
             wait: false,
             timeout: 300,
             no_autostart: false,
+            edit: false,
         }
     }
 

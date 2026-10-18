@@ -103,6 +103,9 @@ struct UpArgs {
     /// reboot (for CI). Saved to config.yaml as `autostart: false`
     #[arg(long)]
     no_autostart: bool,
+    /// Edit config.yaml in $VISUAL/$EDITOR before starting (like `colima start --edit`)
+    #[arg(long)]
+    edit: bool,
 }
 
 #[derive(Parser)]
