@@ -53,6 +53,7 @@ spk config      # validate config.yaml and show effective settings and their sou
 spk prune       # delete cached downloads Speck no longer uses
 spk delete      # remove the VM with all containers, images and volumes
 spk recreate    # delete the VM and start a fresh one (keeps downloads and config)
+spk profile ls  # profiles: independent instances (see below)
 ```
 
 On first start Speck downloads the guest assets (~200 MB: Linux kernel,
@@ -96,7 +97,7 @@ docker run --rm alpine echo "hello from Speck"
 
 ## Configuration
 
-`~/.speck/config.yaml` (override the directory with `SPECK_HOME`):
+`~/.speck/config.yaml` (`~/.speck/profiles/<name>/config.yaml` for a profile):
 
 ```yaml
 vm:
@@ -130,11 +131,47 @@ Containers get the VM memory minus a reserve (1/8, 512 MiB to 1 GiB) kept for
 dockerd and containerd, so a full container memory never makes `docker`
 hang: the kernel stops processes inside the containers instead.
 
+## Profiles
+
+A profile is an independent Speck instance with its own VM, disks, config,
+socket and docker context, like `colima -p`. Every command takes
+`-p <name>` (or `SPECK_PROFILE=<name>`):
+
+```bash
+spk start -p work --cpus 4 --memory 8g   # second VM next to the default one
+docker --context speck-work ps           # its docker context
+spk list                                 # one row per profile
+spk stop -p work
+spk delete -p work                       # removes the profile completely
+```
+
+`spk profile use work` makes `work` the profile bare `spk` commands act on
+(`spk profile use default` switches back). Order of precedence: `-p`,
+`SPECK_PROFILE`, `spk profile use`, `default`. Other `spk profile` commands:
+`ls`, `current`, `create <name> [--cpus/--memory/--disk]` and `rm <name>`.
+
+The default profile stays in `~/.speck`; others live in
+`~/.speck/profiles/<name>`. Downloads (kernel, initrd, rootfs) are shared, so
+a new profile starts without downloading them again. Two running profiles
+cannot publish the same host port.
+
+For CI, start a throwaway profile without a launchd agent. It runs in the
+background, does not come back after a reboot, and does not switch your
+docker context, so parallel jobs on one Mac stay separate:
+
+```bash
+export SPECK_PROFILE=ci-$JOB_ID
+spk start --no-autostart --cpus 2 --memory 2g --wait
+DOCKER_HOST=unix://$HOME/.speck/profiles/$SPECK_PROFILE/speck.sock ./run-tests.sh
+spk delete --force
+```
+
 ## Environment variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `SPECK_HOME` | `~/.speck` | Directory for VM assets, config, socket, and logs. Override to run multiple isolated instances. |
+| `SPECK_PROFILE` | `default` | Profile to act on (see [Profiles](#profiles)). `-p` takes precedence. |
+| `SPECK_HOME` | `~/.speck` | Raw instance directory, for tests. Such an instance runs only with `spk up --foreground`, gets no docker context and cannot be combined with a profile. |
 | `DOCKER_HOST` | *(not set)* | Set by `spk init --set-docker-host` or `eval $(spk env)` to `unix://$SPECK_HOME/speck.sock`. Directs Docker-compatible clients to Speck. |
 | `SPECK_VM_CPUS` | config / 2 | vCPU count for the VM. Takes precedence over `config.yaml` and `--cpus`. |
 | `SPECK_VM_MEMORY_MB` | config / 2048 | VM memory: MiB or a size such as `6g`. Takes precedence over `config.yaml` and `--memory`. |

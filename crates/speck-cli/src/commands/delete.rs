@@ -19,15 +19,21 @@ const INSTANCE_PATHS: &[&str] = &[
 ];
 
 /// `spk delete`: stop Speck and remove the VM, including all containers,
-/// images and volumes (colima delete). Returns `false` when the user aborted.
-pub async fn run_delete(force: bool, speck_home: &Path) -> anyhow::Result<bool> {
+/// images and volumes (colima delete). With `whole_profile`, a named profile
+/// is removed with its config and logs. Returns `false` when the user aborted.
+pub async fn run_delete(
+    force: bool,
+    speck_home: &Path,
+    whole_profile: bool,
+) -> anyhow::Result<bool> {
     if !force {
         anyhow::ensure!(
             std::io::stdin().is_terminal(),
             "spk delete removes all containers, images and volumes; re-run with --force to confirm"
         );
         print!(
-            "This deletes the Speck VM with all containers, images and volumes. Continue? [y/N] "
+            "This deletes the Speck VM{} with all containers, images and volumes. Continue? [y/N] ",
+            crate::profile::current().display_suffix()
         );
         std::io::stdout().flush()?;
         let mut answer = String::new();
@@ -46,6 +52,25 @@ pub async fn run_delete(force: bool, speck_home: &Path) -> anyhow::Result<bool> 
         return Err(e);
     }
     crate::docker_context::remove();
+
+    // A named profile is removed completely, like `colima delete -p <name>`;
+    // its config and logs go with it. Shared downloads stay in ~/.speck.
+    let profile = crate::profile::current();
+    if whole_profile && profile.managed() && !profile.is_default() {
+        if let Ok(plist) = profile.plist_path() {
+            let _ = std::fs::remove_file(plist);
+        }
+        if let Err(e) = std::fs::remove_dir_all(speck_home)
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            anyhow::bail!("failed to remove {}: {e}", speck_home.display());
+        }
+        println!(
+            "{NEON_CYAN}Speck profile \"{}\" deleted.\x1b[0m",
+            profile.name
+        );
+        return Ok(true);
+    }
 
     for name in INSTANCE_PATHS {
         let path = speck_home.join(name);

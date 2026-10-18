@@ -115,6 +115,11 @@ fn rows(effective: &EffectiveConfig, raw: Option<&serde_yaml::Value>) -> Vec<Row
             source: source("vm.disk_gb", Some("SPECK_VM_DISK_GB")),
         },
         Row {
+            key: "autostart",
+            value: effective.autostart.to_string(),
+            source: source("autostart", None),
+        },
+        Row {
             key: "log_level",
             value: effective.log_level.clone(),
             source: source("log_level", Some("SPECK_LOG_LEVEL")),

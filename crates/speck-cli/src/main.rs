@@ -9,6 +9,7 @@ mod config;
 mod docker_client;
 mod docker_context;
 mod keychain;
+mod profile;
 mod shell;
 mod size;
 mod theme;
@@ -20,6 +21,9 @@ mod theme;
     about = "Ultra-fast container runtime for Apple Silicon"
 )]
 struct Cli {
+    /// Profile to act on [default: $SPECK_PROFILE, then `spk profile use`, then `default`]
+    #[arg(short = 'p', long, global = true, value_name = "NAME")]
+    profile: Option<String>,
     #[command(subcommand)]
     command: Commands,
 }
@@ -71,6 +75,48 @@ enum Commands {
     Delete(DeleteArgs),
     /// Delete the Speck VM and start a fresh one (keeps downloads and config)
     Recreate(DeleteArgs),
+    /// Manage profiles: independent Speck instances (like `colima -p`)
+    Profile(ProfileArgs),
+}
+
+#[derive(Parser)]
+struct ProfileArgs {
+    #[command(subcommand)]
+    command: ProfileCommand,
+}
+
+#[derive(Subcommand)]
+enum ProfileCommand {
+    /// List profiles; `*` marks the current one
+    #[command(visible_alias = "list")]
+    Ls(ListArgs),
+    /// Make a profile the one bare `spk` commands act on
+    Use { name: String },
+    /// Print the current profile name
+    Current,
+    /// Create a profile without starting it
+    Create {
+        name: String,
+        #[arg(long)]
+        cpus: Option<u64>,
+        /// VM memory: 6g, 6144m, 1.5g (a plain number is MiB)
+        #[arg(long, value_name = "SIZE", value_parser = crate::size::parse_mib)]
+        memory: Option<u64>,
+        /// VM data disk: 100g, 1t (a plain number is GiB)
+        #[arg(long, value_name = "SIZE", value_parser = crate::size::parse_gib)]
+        disk: Option<u64>,
+        /// Run without a launchd agent; the profile does not come back after a reboot
+        #[arg(long)]
+        no_autostart: bool,
+    },
+    /// Delete a profile with its VM, config and logs
+    #[command(visible_alias = "delete")]
+    Rm {
+        name: String,
+        /// Skip the confirmation prompt
+        #[arg(long, short)]
+        force: bool,
+    },
 }
 
 #[derive(Parser)]
@@ -133,6 +179,10 @@ struct UpArgs {
     /// Timeout in seconds for --wait (default: 300)
     #[arg(long, default_value = "300")]
     timeout: u64,
+    /// Run without a launchd agent: the instance does not come back after a
+    /// reboot (for CI). Saved to config.yaml as `autostart: false`
+    #[arg(long)]
+    no_autostart: bool,
 }
 
 #[derive(Parser)]
@@ -140,7 +190,8 @@ struct RunArgs {
     image: String,
     #[arg(trailing_var_arg = true)]
     cmd: Vec<String>,
-    #[arg(short = 'p')]
+    /// Publish a container port (`8080:80`)
+    #[arg(long = "publish")]
     port: Vec<String>,
     #[arg(short = 'v')]
     volume: Vec<String>,
@@ -229,14 +280,6 @@ pub struct InitArgs {
     /// Override shell detection (bash, zsh, fish)
     #[arg(long, value_parser = ["bash", "zsh", "fish"])]
     pub shell: Option<String>,
-}
-
-fn resolve_speck_home() -> PathBuf {
-    if let Ok(home) = std::env::var("SPECK_HOME") {
-        return PathBuf::from(home);
-    }
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-    PathBuf::from(home).join(".speck")
 }
 
 fn init_tracing(log_level: &str) -> anyhow::Result<()> {
@@ -528,7 +571,12 @@ mod tests {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
-    let speck_home = resolve_speck_home();
+    let profile = profile::select(cli.profile.as_deref())?;
+    if profile.managed() {
+        // Child `spk` processes (restart, recreate) act on the same profile.
+        unsafe { std::env::set_var("SPECK_PROFILE", &profile.name) };
+    }
+    let speck_home = profile.home.clone();
     let _ = std::fs::create_dir_all(&speck_home);
 
     match cli.command {
@@ -539,13 +587,20 @@ async fn main() -> anyhow::Result<()> {
                 // The launchd agent belongs to the default SPECK_HOME; starting
                 // another instance through it would replace the default one.
                 anyhow::ensure!(
-                    docker_context::manages_context(),
+                    profile.managed(),
                     "a custom SPECK_HOME runs in the foreground only: use `spk up --foreground`"
                 );
+                profile::check_socket_path(&sock_path)?;
                 if let Some(warning) = docker_context::docker_host_override_warning(&speck_home) {
                     eprintln!("warning: {warning}");
                 }
-                let saved = config::persist_vm_overrides(&speck_home, &args)?;
+                let mut saved = config::persist_vm_overrides(&speck_home, &args)?;
+                let (file_config, _) = config::load_config_file(&speck_home)?;
+                if args.no_autostart && file_config.autostart != Some(false) {
+                    config::persist_autostart(&speck_home, false)?;
+                    saved.push("autostart=false".into());
+                }
+                let autostart = file_config.autostart.unwrap_or(true) && !args.no_autostart;
                 for saved in &saved {
                     eprintln!(
                         "saved {saved} to {}",
@@ -554,18 +609,31 @@ async fn main() -> anyhow::Result<()> {
                 }
                 // Like `colima start`: starting a running instance does
                 // nothing. Re-registering the agent would stop the daemon.
-                if commands::up::launchd_job_loaded() {
-                    println!("Speck is already running.");
+                let mut detached = None;
+                if commands::up::launchd_job_loaded()
+                    || commands::up::detached_daemon_running(&speck_home)
+                {
+                    println!("Speck{} is already running.", profile.display_suffix());
                     if !saved.is_empty() {
                         println!("Run `spk restart` to apply the new settings.");
                     }
                 } else {
                     let binary = std::env::current_exe().context("cannot find own binary")?;
-                    commands::up::daemonize(&speck_home, &binary)?;
+                    if autostart {
+                        commands::up::daemonize(&speck_home, &binary)?;
+                    } else {
+                        detached = Some(commands::up::start_detached(&speck_home, &binary)?);
+                    }
                 }
                 if args.wait {
                     let sock = speck_home.join("speck.sock");
-                    if let Err(e) = commands::up::wait_for_socket(&sock, args.timeout).await {
+                    let ready = match detached {
+                        Some(child) => {
+                            commands::up::wait_until_ready(&sock, args.timeout, Some(child)).await
+                        }
+                        None => commands::up::wait_for_socket(&sock, args.timeout).await,
+                    };
+                    if let Err(e) = ready {
                         eprintln!("error: {e}");
                         std::process::exit(1);
                     }
@@ -625,7 +693,9 @@ async fn main() -> anyhow::Result<()> {
         }
         Commands::Delete(args) => {
             init_tracing(&default_tracing_filter())?;
-            if commands::delete::run_delete(args.force, &speck_home).await? {
+            if commands::delete::run_delete(args.force, &speck_home, true).await?
+                && profile.is_default()
+            {
                 println!("Run `spk start` to create a fresh one.");
             }
         }
@@ -672,23 +742,41 @@ async fn main() -> anyhow::Result<()> {
         }
         Commands::Status(args) => {
             init_tracing(&default_tracing_filter())?;
-            let code = commands::status::run_status(&speck_home, args.extended, args.json).await?;
+            let code = commands::status::run_status(args.extended, args.json).await?;
             if code != 0 {
                 std::process::exit(code);
             }
         }
         Commands::List(args) => {
             init_tracing(&default_tracing_filter())?;
-            commands::status::run_list(&speck_home, args.json).await?
+            commands::status::run_list(args.json).await?
         }
         Commands::Version => {
             init_tracing(&default_tracing_filter())?;
-            commands::status::run_version(&speck_home).await?
+            commands::status::run_version().await?
         }
         Commands::Prune(args) => {
             init_tracing(&default_tracing_filter())?;
             commands::prune::run_prune(args.force, &speck_home)?
         }
+        Commands::Profile(args) => match args.command {
+            ProfileCommand::Ls(list) => commands::status::run_list(list.json).await?,
+            ProfileCommand::Use { name } => commands::profile_cmd::run_use(&name)?,
+            ProfileCommand::Current => commands::profile_cmd::run_current(),
+            ProfileCommand::Create {
+                name,
+                cpus,
+                memory,
+                disk,
+                no_autostart,
+            } => commands::profile_cmd::run_create(&name, cpus, memory, disk, no_autostart)?,
+            ProfileCommand::Rm { name, force } => {
+                let code = commands::profile_cmd::run_rm(&name, force).await?;
+                if code != 0 {
+                    std::process::exit(code);
+                }
+            }
+        },
         Commands::Logs(args) => {
             init_tracing(&default_tracing_filter())?;
             commands::logs::run_logs(

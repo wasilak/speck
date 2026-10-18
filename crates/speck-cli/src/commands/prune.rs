@@ -34,6 +34,8 @@ pub fn prune_candidates(speck_home: &Path) -> Vec<PathBuf> {
     scan("kernel", &|n| {
         n == "vmlinux" || kernel_target.as_deref().is_some_and(|t| t == n)
     });
+    let keep_rootfs = crate::commands::up::rootfs_cache_name();
+    scan("cache", &|n| n == keep_rootfs);
     scan("tmp", &|_| false);
     scan(".", &|n| !n.ends_with(".tmp"));
     out.sort();
@@ -59,7 +61,11 @@ fn size_of(path: &Path) -> u64 {
 /// `spk prune [--force]`: delete cached downloads Speck no longer uses
 /// (colima prune).
 pub fn run_prune(force: bool, speck_home: &Path) -> anyhow::Result<()> {
-    let candidates = prune_candidates(speck_home);
+    let mut candidates = prune_candidates(speck_home);
+    let assets = crate::profile::current().assets;
+    if assets != speck_home {
+        candidates.extend(prune_candidates(&assets));
+    }
     if candidates.is_empty() {
         println!("Nothing to prune.");
         return Ok(());
@@ -108,7 +114,7 @@ mod tests {
     fn only_unused_cache_files_are_pruned() {
         let home = std::env::temp_dir().join(format!("speck-prune-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&home);
-        for d in ["initrd", "kernel", "tmp/x"] {
+        for d in ["initrd", "kernel", "tmp/x", "cache"] {
             std::fs::create_dir_all(home.join(d)).unwrap();
         }
         for f in [
@@ -121,6 +127,8 @@ mod tests {
             "kernel/vmlinux-6.1.0-old",
             "tmp/x/partial",
             "rootfs.img.gz.tmp",
+            "cache/rootfs-0.0.1.img",
+            &format!("cache/{}", crate::commands::up::rootfs_cache_name()),
             "data.img",
             "rootfs.img",
             "config.yaml",
@@ -136,6 +144,7 @@ mod tests {
         assert_eq!(
             names,
             [
+                "cache/rootfs-0.0.1.img",
                 "initrd/initrd.cpio.gz.bak",
                 "initrd/initrd.cpio.gz.original",
                 "kernel/vmlinux-6.1.0-old",

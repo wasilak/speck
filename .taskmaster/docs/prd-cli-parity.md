@@ -63,11 +63,38 @@ foreground only, without auto-start or a docker context. Colima users expect `co
   stay per profile.
 - Two running profiles that publish the same host port conflict. This is reported as a normal
   "port already in use" error and documented. It is not prevented.
+- Current profile (decided 2026-10-18), like `kubectl config use-context`:
+  - `spk profile use <name>` stores the name in `~/.speck/current-profile`.
+  - Precedence: `-p` > `SPECK_PROFILE` > current-profile file > `default`.
+  - `spk profile current` prints the resolved name (for scripts and shell prompts).
+  - Every lifecycle command names the profile it acts on (`Stopping profile "work"…`), because the
+    stored current profile makes it easy to forget which VM a bare `spk stop` hits.
+  - The command is `spk profile`, not `spk context`: Speck already creates docker contexts
+    (`speck`, `speck-<name>`), and two kinds of "context" would confuse users and docs.
+- `spk profile` subcommands:
+  - `ls`: same as `spk list`, with a `*` marking the current profile.
+  - `use <name>`, `current`.
+  - `create <name> [--cpus N] [--memory SIZE] [--disk SIZE] [--no-autostart]`: creates the directory
+    and its `config.yaml` without starting the VM.
+  - `rm <name>`: same as `spk delete -p <name>`.
+- CI / ephemeral profiles:
+  - `--no-autostart` (on `profile create` and `start`, stored in the profile's config as
+    `autostart: false`): the daemon runs detached in the background without a launchd plist, so the
+    profile does not come back after a reboot. `spk stop`/`delete` work the same way for it.
+  - `spk start --wait` works for every profile: it returns once the Docker API answers, or exits
+    non-zero after a timeout.
+  - Typical job: `SPECK_PROFILE=ci-$JOB spk start --no-autostart --wait`, run tests, `spk delete --force`.
+- The Unix socket path (`<home>/speck.sock`) must fit macOS's 104-byte `sun_path` limit; a too long
+  path fails early with a clear error.
 
 ### Acceptance Criteria
 - `spk start -p work` boots a second VM next to the default one. `docker --context speck-work ps` and
   `docker --context speck ps` both work at the same time.
 - `spk list` shows both profiles with their state, CPUs, memory and disk.
+- `spk profile use work`, then a bare `spk status` reports `work`; `SPECK_PROFILE=default spk status`
+  and `-p default` override it.
+- A `--no-autostart` profile starts, answers `docker ps`, has no plist in `~/Library/LaunchAgents`, and
+  `spk delete --force -p <name>` removes it completely.
 - After a reboot (or `launchctl kickstart`), both running profiles come back.
 - `spk delete -p work` leaves the default profile untouched, and `spk list` no longer shows `work`.
 - Unit tests cover name validation, home/label/context mapping and the `SPECK_HOME` + profile conflict.
@@ -175,6 +202,29 @@ There is no way to get a shell inside the VM to debug dockerd, containerd, the n
 
 ---
 
+## 5a. Machine-readable output (`-o`)
+
+### Problem
+Only `spk status --json` and `spk list --json` print JSON, each with its own flag. Scripts and CI need
+one consistent way to read Speck's state.
+
+### Requirements
+- Global flag `-o, --output <plain|json|yaml>`, default `plain`.
+- Supported by the reporting commands: `status`, `list`/`profile ls`, `profile current`, `config`,
+  `version`, `doctor`. Other commands reject `-o json|yaml` with a clear error.
+- The existing `--json`/`-j` flags stay as aliases for `-o json`.
+- In json/yaml mode stdout holds only the document; warnings and progress go to stderr.
+- Exit codes do not depend on the format (`config` exits 1 on an invalid config, `doctor` non-zero on
+  a failed check).
+- The document shape is the same in json and yaml (one serde struct per command).
+
+### Acceptance Criteria
+- `spk status -o json | jq .` and `spk config -o yaml | yq .` parse.
+- `spk config -o json` on an invalid config prints a document with the error and exits 1.
+- Unit tests cover the serialized shape of each command's document.
+
+---
+
 ## 6. Gates, docs and release
 
 ### Requirements
@@ -198,7 +248,7 @@ There is no way to get a shell inside the VM to debug dockerd, containerd, the n
 ## Implementation order
 
 Profiles (1) come first, because ssh, ssh-config and template all depend on per-profile paths and names.
-After that: 2 → 3 → 4, with 5 independent. Section 6 comes last.
+After that: 2 → 3 → 4, with 5 and 5a independent. Section 6 comes last.
 
 ## Open questions (defaults chosen; change before implementation if needed)
 - SSH user: `root` (simple, matches the guest). Colima uses the Mac user name with sudo.

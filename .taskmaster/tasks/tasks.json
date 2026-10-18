@@ -1000,18 +1000,19 @@
   "v1_5-cli-parity": {
     "tasks": [
       {
-        "id": 1,
+        "id": "1",
         "title": "Implement Profile Management System",
         "description": "Add support for named profiles with separate home directories, launchd labels, and docker contexts",
         "details": "Create a Profile struct in speck-cli that handles profile name validation (regex [a-z0-9][a-z0-9-]{0,31}), mapping of profile names to home directories (~/.speck/profiles/<name> for non-default), launchd labels (io.speck.vm.<name>), and docker contexts (speck-<name>). Implement command-line flag -p/--profile with env var SPECK_PROFILE support where flag takes precedence. Add validation to prevent SPECK_HOME + profile conflicts. Modify resolve_speck_home() to respect profile selection. Update commands to use the selected profile.",
         "testStrategy": "Unit tests for name validation, home directory mapping, label/context generation, and conflict detection. Integration test with spk start -p work and docker --context speck-work ps",
         "priority": "high",
         "dependencies": [],
-        "status": "pending",
-        "subtasks": []
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2026-10-18T18:27:12.428Z"
       },
       {
-        "id": 2,
+        "id": "2",
         "title": "Add SSH Server to Guest Rootfs",
         "description": "Integrate dropbear SSH server into the guest rootfs and configure it to start on boot",
         "details": "Modify .github/workflows/build-rootfs.yml to include dropbear package in the rootfs build. Configure vminitd to start dropbear after switch_root with restart-with-backoff pattern. Set dropbear to listen only on 127.0.0.1:22, accept public-key auth only, log in as root, generate host key on first boot and store it on data disk. Mount Speck home via VirtioFS at /var/run and read authorized_keys from /var/run/ssh/authorized_keys. Implement fallback behavior if dropbear is missing.",
@@ -1022,109 +1023,157 @@
         "subtasks": []
       },
       {
-        "id": 3,
+        "id": "3",
         "title": "Implement SSH Key Generation and Socket Proxy",
         "description": "Generate SSH keys on start and implement Unix socket proxy for SSH connections",
         "details": "Add logic to generate ed25519 key pair at <home>/ssh/id_ed25519 if it doesn't exist, write public key to authorized_keys. Create Unix socket at <home>/ssh.sock that bridges to vsock 9006 with target line '127.0.0.1:22'. Implement eager-drain and 4MB buffer rules. Add hidden command spk ssh-proxy that connects to the socket and copies stdin/stdout both ways.",
         "testStrategy": "Test that key generation works on first start, verify ssh.sock exists and is functional, test connection through proxy with proper authentication",
         "priority": "medium",
         "dependencies": [
-          2,
+          "2",
           "1"
         ],
         "status": "pending",
         "subtasks": []
       },
       {
-        "id": 4,
+        "id": "4",
         "title": "Implement spk ssh Command",
         "description": "Add the spk ssh command that executes system SSH with proper proxy configuration",
         "details": "Create new spk ssh command that execs system ssh with: -i <home>/ssh/id_ed25519, -o IdentitiesOnly=yes, -o ProxyCommand='<spk binary> ssh-proxy --profile <name>', -o UserKnownHostsFile=<home>/ssh/known_hosts, -o StrictHostKeyChecking=accept-new, and connects to root@speck. Add check for running VM state with appropriate error message if not running.",
         "testStrategy": "Test interactive shell access works, test command execution like 'spk ssh -- uname -a', verify cross-profile SSH works, ensure proper error handling when VM is down",
         "priority": "medium",
         "dependencies": [
-          3,
+          "3",
           "1"
         ],
         "status": "pending",
         "subtasks": []
       },
       {
-        "id": 5,
+        "id": "5",
         "title": "Implement spk ssh-config Command",
         "description": "Add command to generate OpenSSH config block for the selected profile",
         "details": "Create spk ssh-config command that prints OpenSSH configuration block with Host speck (or speck-<name>), User root, HostName speck, IdentityFile <home>/ssh/id_ed25519, IdentitiesOnly yes, UserKnownHostsFile <home>/ssh/known_hosts, StrictHostKeyChecking accept-new, and ProxyCommand using the correct spk binary path (brew symlink or current_exe()).",
         "testStrategy": "Test that output matches expected format for default and named profiles, verify SSH with generated config works, check VS Code Remote-SSH connectivity",
         "priority": "medium",
         "dependencies": [
-          4
+          "4"
         ],
         "status": "pending",
         "subtasks": []
       },
       {
-        "id": 6,
+        "id": "6",
         "title": "Implement spk template Command",
         "description": "Add command to edit configuration files with validation",
         "details": "Create spk template command that opens <home>/config.yaml in $VISUAL, then $EDITOR, then vi. If file doesn't exist, create a commented template with all supported keys and defaults. Validate edited file against existing loader, print errors, offer re-edit option or keep file if invalid. Implement spk start --edit that runs same flow then starts the profile.",
         "testStrategy": "Test that template creation works on fresh install, verify validation catches invalid edits, test that --edit flag works with start",
         "priority": "medium",
         "dependencies": [
-          1
+          "1"
         ],
         "status": "pending",
         "subtasks": []
       },
       {
-        "id": 7,
+        "id": "7",
         "title": "Implement Profile Lifecycle Commands",
         "description": "Add support for full profile lifecycle operations including delete and prune",
         "details": "Extend existing commands (start, stop, restart, delete, recreate, status, logs, doctor, env, init --set-docker-host, prune) to work with selected profile. Implement delete command that removes profile directory, plist, and docker context. Ensure list shows all profiles with correct state information.",
         "testStrategy": "Test that spk delete -p work removes all profile artifacts, verify spk list shows both default and named profiles, test restart after deletion works",
         "priority": "high",
         "dependencies": [
-          1
+          "1"
         ],
-        "status": "pending",
-        "subtasks": []
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2026-10-18T18:27:14.439Z"
       },
       {
-        "id": 8,
+        "id": "8",
         "title": "Update Documentation and Smoke Tests",
         "description": "Add documentation for new features and create smoke tests to verify functionality",
         "details": "Create scripts/cli-smoke.sh that runs against live install: start throwaway profile, check list, ssh -- true, ssh-config output, ssh speck-<name> true, run template with EDITOR=true, delete profile. Update README with profiles section, spk ssh, spk ssh-config, and spk template documentation. Add manual testing documentation for VS Code Remote-SSH and two-profile reboot checks.",
         "testStrategy": "Run all smoke scripts (cli-smoke.sh, conformance-smoke.sh, egress-smoke.sh) to ensure they pass, verify documentation is accurate and complete",
         "priority": "low",
         "dependencies": [
-          1,
-          4,
-          5,
-          6,
+          "1",
+          "4",
+          "5",
+          "6",
           "3",
-          "7"
+          "7",
+          "10",
+          "11",
+          "12"
         ],
         "status": "pending",
         "subtasks": []
       },
       {
-        "id": 9,
+        "id": "9",
         "title": "Ensure Release Compatibility and Testing",
         "description": "Prepare for release including rootfs updates, testing, and validation",
         "details": "Bump rootfs version in CLI to include dropbear changes. If vminitd changed, bump initrd tag. Update release process to include new rootfs tag, initrd tag if needed, CLI release, and tap formula update. Ensure cargo test --workspace, cargo clippy, and cargo fmt all pass with new code.",
         "testStrategy": "Verify all tests pass, ensure release artifacts are properly generated, confirm that brew upgrade flow works correctly with new functionality",
         "priority": "low",
         "dependencies": [
-          2,
-          8
+          "2",
+          "8"
         ],
         "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": "10",
+        "title": "spk profile commands and current profile",
+        "description": "spk profile ls/use/current/create/rm; current profile stored in ~/.speck/current-profile; precedence -p > SPECK_PROFILE > file > default; lifecycle commands name the profile they act on",
+        "details": "See PRD section 1 (current profile, spk profile subcommands). Name is spk profile, not spk context, to avoid clashing with docker contexts. Test: unit tests for precedence; profile use work, then bare spk status reports work.",
+        "testStrategy": "",
+        "status": "done",
+        "dependencies": [
+          "1"
+        ],
+        "priority": "high",
+        "subtasks": [],
+        "updatedAt": "2026-10-18T18:27:16.496Z"
+      },
+      {
+        "id": "11",
+        "title": "CI mode: --no-autostart profiles and start --wait",
+        "description": "Profiles with autostart: false run detached without a launchd plist; spk start --wait returns once the Docker API answers for every profile; early error on socket paths over 104 bytes",
+        "details": "See PRD section 1 (CI / ephemeral profiles). Test: start a --no-autostart profile, docker ps works, no plist, delete --force removes everything.",
+        "testStrategy": "",
+        "status": "done",
+        "dependencies": [
+          "1",
+          "7"
+        ],
+        "priority": "high",
+        "subtasks": [],
+        "updatedAt": "2026-10-18T18:27:18.599Z"
+      },
+      {
+        "id": "12",
+        "title": "Global -o plain|json|yaml output",
+        "description": "One global output flag for status, list/profile ls, profile current, config, version, doctor; --json stays as alias; stdout holds only the document in json/yaml mode; exit codes independent of format",
+        "details": "See PRD section 5a. Test: spk status -o json | jq; spk config -o yaml; invalid config in json mode exits 1; unit tests of document shapes.",
+        "testStrategy": "",
+        "status": "pending",
+        "dependencies": [],
+        "priority": "medium",
         "subtasks": []
       }
     ],
     "metadata": {
-      "created": "2026-10-17T13:17:32.786Z",
-      "updated": "2026-10-17T13:18:35.995Z",
-      "description": "Tasks for v1_5-cli-parity context"
+      "version": "1.0.0",
+      "lastModified": "2026-10-18T18:27:18.600Z",
+      "taskCount": 12,
+      "completedCount": 4,
+      "tags": [
+        "v1_5-cli-parity"
+      ]
     }
   }
 }

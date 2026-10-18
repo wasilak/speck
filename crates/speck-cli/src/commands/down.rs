@@ -1,11 +1,9 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use anyhow::Context as _;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
-
-const LAUNCHD_LABEL: &str = "io.speck.vm";
 
 /// Like `colima stop --force`: kill the daemon (and with it the VM) at once,
 /// without stopping the guest gracefully. For a guest that hangs.
@@ -16,25 +14,22 @@ pub async fn run_force_stop(speck_home: &Path) -> anyhow::Result<()> {
 
     // Unregister first so launchd's KeepAlive does not start it again.
     // bootout blocks until the job exits, so it runs while we kill.
+    let profile = crate::profile::current();
+    let label = profile.launchd_label();
     let mut bootout = None;
-    if crate::docker_context::manages_context() {
+    if profile.managed() {
         let uid = std::process::Command::new("id")
             .arg("-u")
             .output()
             .context("failed to run id -u")?;
         let uid = String::from_utf8_lossy(&uid.stdout).trim().to_owned();
         bootout = tokio::process::Command::new("launchctl")
-            .args(["bootout", &format!("gui/{uid}/{LAUNCHD_LABEL}")])
+            .args(["bootout", &format!("gui/{uid}/{label}")])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn()
             .ok();
-        let home = std::env::var("HOME").context("HOME not set")?;
-        let _ = std::fs::remove_file(
-            PathBuf::from(home)
-                .join("Library/LaunchAgents")
-                .join(format!("{LAUNCHD_LABEL}.plist")),
-        );
+        let _ = std::fs::remove_file(profile.plist_path()?);
     }
     if let Some(pid) = pid {
         let _ = std::process::Command::new("kill")
@@ -53,7 +48,7 @@ pub async fn run_force_stop(speck_home: &Path) -> anyhow::Result<()> {
     for stale in ["run/control.sock", "run/speck.pid"] {
         let _ = std::fs::remove_file(speck_home.join(stale));
     }
-    println!("Speck stopped (forced).");
+    println!("Speck{} stopped (forced).", profile.display_suffix());
     Ok(())
 }
 
@@ -78,9 +73,13 @@ pub async fn run_down(speck_home: &Path) -> anyhow::Result<()> {
     if alive {
         tracing::info!("daemon is alive, proceeding with shutdown");
 
-        // The launchd agent runs the default SPECK_HOME only: another
-        // instance (a custom SPECK_HOME) must not boot it out.
-        if !crate::docker_context::manages_context() {
+        // An instance in a raw SPECK_HOME has no launchd agent and must not
+        // boot out a profile's agent.
+        let profile = crate::profile::current();
+        let label = profile.launchd_label();
+        // A profile with `autostart: false` (or a `--foreground` run) has no
+        // loaded agent either: stop it through its PID file.
+        if !profile.managed() || !crate::commands::up::launchd_job_loaded() {
             kill_via_pid_file(speck_home)?;
         } else {
             // Step 2 — Stop the daemon. Try launchctl bootout first (launchd-managed case);
@@ -95,7 +94,7 @@ pub async fn run_down(speck_home: &Path) -> anyhow::Result<()> {
                 .trim()
                 .to_owned();
             let bootout_ok = tokio::process::Command::new("launchctl")
-                .args(["bootout", &format!("gui/{uid_str}/{LAUNCHD_LABEL}")])
+                .args(["bootout", &format!("gui/{uid_str}/{label}")])
                 .status()
                 .await
                 .context("launchctl bootout failed")?
@@ -106,11 +105,8 @@ pub async fn run_down(speck_home: &Path) -> anyhow::Result<()> {
                 kill_via_pid_file(speck_home)?;
             }
 
-            // Step 3 — Remove io.speck.vm.plist to prevent auto-registration on next login
-            let home = std::env::var("HOME").context("HOME not set")?;
-            let plist_path = PathBuf::from(home)
-                .join("Library/LaunchAgents")
-                .join("io.speck.vm.plist");
+            // Step 3 — Remove the plist to prevent auto-registration on next login
+            let plist_path = profile.plist_path()?;
             match std::fs::remove_file(&plist_path) {
                 Ok(()) => tracing::info!("plist removed"),
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -142,7 +138,10 @@ pub async fn run_down(speck_home: &Path) -> anyhow::Result<()> {
     }
 
     // Step 5 — User-facing confirmation
-    println!("Speck stopped.");
+    println!(
+        "Speck{} stopped.",
+        crate::profile::current().display_suffix()
+    );
 
     Ok(())
 }
@@ -217,8 +216,8 @@ mod tests {
             "run_down must invoke launchctl bootout to trigger graceful daemon shutdown"
         );
         assert!(
-            src.contains("io.speck.vm"),
-            "run_down must reference the launchd label io.speck.vm in the bootout invocation"
+            src.contains("gui/{uid_str}/{label}"),
+            "run_down must boot out the profile's launchd label"
         );
     }
 
@@ -243,8 +242,8 @@ mod tests {
     fn down_removes_plist_on_shutdown() {
         let src = production_code();
         assert!(
-            src.contains("io.speck.vm.plist"),
-            "run_down must reference io.speck.vm.plist when removing the LaunchAgent plist"
+            src.contains("profile.plist_path()"),
+            "run_down must remove the profile's LaunchAgent plist"
         );
         assert!(
             src.contains("remove_file"),

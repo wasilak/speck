@@ -9,6 +9,7 @@ mod config;
 pub mod docker_client;
 mod docker_context;
 mod keychain;
+mod profile;
 mod shell;
 mod size;
 mod theme;
@@ -97,6 +98,10 @@ struct UpArgs {
     /// Timeout in seconds for --wait (default: 300)
     #[arg(long, default_value = "300")]
     timeout: u64,
+    /// Run without a launchd agent: the instance does not come back after a
+    /// reboot (for CI). Saved to config.yaml as `autostart: false`
+    #[arg(long)]
+    no_autostart: bool,
 }
 
 #[derive(Parser)]

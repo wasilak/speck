@@ -10,6 +10,7 @@ pub mod exec;
 pub mod init;
 pub mod logging;
 pub mod logs;
+pub mod profile_cmd;
 pub mod prune;
 pub mod ps;
 pub mod recreate;

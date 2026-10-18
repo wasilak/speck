@@ -18,6 +18,10 @@ pub struct AppConfig {
     pub log_level: Option<String>,
     #[serde(default)]
     pub ca: CaConfig,
+    /// `false`: run without a launchd agent, so the instance does not come
+    /// back after a reboot (CI profiles). `None` means the default: on.
+    #[serde(default)]
+    pub autostart: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
@@ -40,6 +44,7 @@ impl Default for AppConfig {
             vm: FileVmConfig::default(),
             log_level: None,
             ca: CaConfig::default(),
+            autostart: None,
         }
     }
 }
@@ -61,6 +66,7 @@ pub struct EffectiveConfig {
     pub extra_certs: Vec<String>,
     pub inject_ca_into_containers: bool,
     pub ca_from_keychain: bool,
+    pub autostart: bool,
 }
 
 impl Default for EffectiveConfig {
@@ -71,6 +77,7 @@ impl Default for EffectiveConfig {
             extra_certs: Vec::new(),
             inject_ca_into_containers: false,
             ca_from_keychain: true,
+            autostart: true,
         }
     }
 }
@@ -117,6 +124,8 @@ struct StrictAppConfig {
     log_level: Option<String>,
     #[serde(default)]
     ca: CaConfig,
+    #[serde(default)]
+    autostart: Option<bool>,
 }
 
 #[allow(dead_code)]
@@ -156,6 +165,27 @@ pub fn load_config_file(speck_home: &Path) -> anyhow::Result<(AppConfig, Vec<Con
     );
 
     Ok((config, warnings))
+}
+
+/// Save `autostart: <value>` into config.yaml, keeping the other keys.
+pub fn persist_autostart(speck_home: &Path, value: bool) -> anyhow::Result<()> {
+    let path = speck_home.join(CONFIG_FILE);
+    let mut root = match std::fs::read_to_string(&path) {
+        Ok(contents) => serde_yaml::from_str(&contents)
+            .with_context(|| format!("failed to parse {}", path.display()))?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => serde_yaml::Value::Null,
+        Err(e) => return Err(e).with_context(|| format!("failed to read {}", path.display())),
+    };
+    if !root.is_mapping() {
+        let mut fresh = serde_yaml::Mapping::new();
+        fresh.insert("version".into(), CONFIG_VERSION.into());
+        root = fresh.into();
+    }
+    root.as_mapping_mut()
+        .expect("mapping")
+        .insert("autostart".into(), value.into());
+    std::fs::write(&path, serde_yaml::to_string(&root)?)
+        .with_context(|| format!("failed to write {}", path.display()))
 }
 
 /// Save `spk up --cpus/--memory/--disk` into config.yaml, like `colima start`
@@ -212,7 +242,7 @@ pub fn collect_unknown_keys(value: &serde_yaml::Value) -> Vec<ConfigWarning> {
     };
 
     for key in top.keys().filter_map(serde_yaml::Value::as_str) {
-        if !matches!(key, "version" | "vm" | "log_level" | "ca") {
+        if !matches!(key, "version" | "vm" | "log_level" | "ca" | "autostart") {
             warnings.push(ConfigWarning {
                 path: key.to_string(),
                 message: format!("unknown config key `{key}` ignored"),
@@ -281,6 +311,7 @@ fn resolve_effective_config_with_physical_cores(
     effective.extra_certs = file.ca.extra_certs;
     effective.inject_ca_into_containers = file.ca.inject_into_containers;
     effective.ca_from_keychain = file.ca.keychain.unwrap_or(true);
+    effective.autostart = file.autostart.unwrap_or(true);
 
     if let Some(cpus) = cli.cpus {
         effective.vm.cpus = cpus;
@@ -587,6 +618,7 @@ mod tests {
                 pull: false,
                 wait: false,
                 timeout: 300,
+                no_autostart: false,
             };
             let file = AppConfig {
                 vm: FileVmConfig {
@@ -626,6 +658,7 @@ mod tests {
                     pull: false,
                     wait: false,
                     timeout: 300,
+                    no_autostart: false,
                 };
                 let file = AppConfig {
                     vm: FileVmConfig {
@@ -812,6 +845,7 @@ mod tests {
             pull: false,
             wait: false,
             timeout: 300,
+            no_autostart: false,
         }
     }
 

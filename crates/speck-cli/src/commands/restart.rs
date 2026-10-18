@@ -58,7 +58,10 @@ pub async fn run_restart(speck_home: &Path) -> anyhow::Result<()> {
     anyhow::ensure!(up_status.success(), "spk up failed");
 
     // Step 6 — Confirmation
-    println!("Speck restarted.");
+    println!(
+        "Speck{} restarted.",
+        crate::profile::current().display_suffix()
+    );
 
     Ok(())
 }

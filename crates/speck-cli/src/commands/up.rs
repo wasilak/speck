@@ -31,7 +31,6 @@ const KATA_VERSION: &str = "3.32.0";
 const KATA_KERNEL_FILE: &str = "vmlinux-6.18.35-197";
 pub(crate) const KATA_INITRD_FILE: &str = "kata-alpine-3.22.initrd";
 const INITRD_VERSION: &str = "1.4.7";
-const LAUNCHD_LABEL: &str = "io.speck.vm";
 
 /// Returns true when running interactively (stderr is a TTY and not launched as
 /// a launchd daemon). Used to decide whether to show curl progress bars.
@@ -43,6 +42,11 @@ fn is_interactive() -> bool {
 /// Whether the Speck launchd agent is loaded, i.e. the daemon is running or
 /// launchd is about to restart it.
 pub fn launchd_job_loaded() -> bool {
+    launchd_label_loaded(&crate::profile::current().launchd_label())
+}
+
+/// Whether the launchd job `label` is loaded in the user's GUI domain.
+pub fn launchd_label_loaded(label: &str) -> bool {
     let Some(uid) = std::process::Command::new("id")
         .arg("-u")
         .output()
@@ -53,7 +57,7 @@ pub fn launchd_job_loaded() -> bool {
     };
     let uid = uid.trim();
     std::process::Command::new("launchctl")
-        .args(["print", &format!("gui/{uid}/{LAUNCHD_LABEL}")])
+        .args(["print", &format!("gui/{uid}/{label}")])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
@@ -62,10 +66,9 @@ pub fn launchd_job_loaded() -> bool {
 
 pub fn daemonize(speck_home: &Path, binary: &Path) -> anyhow::Result<()> {
     let _ = speck_home;
-    let home_dir = std::env::var("HOME").context("HOME not set")?;
-    let plist_path = PathBuf::from(&home_dir)
-        .join("Library/LaunchAgents")
-        .join(format!("{LAUNCHD_LABEL}.plist"));
+    let profile = crate::profile::current();
+    let label = profile.launchd_label();
+    let plist_path = profile.plist_path()?;
     std::fs::create_dir_all(plist_path.parent().context("plist path has no parent")?)?;
 
     let uid_out = std::process::Command::new("id")
@@ -101,7 +104,7 @@ pub fn daemonize(speck_home: &Path, binary: &Path) -> anyhow::Result<()> {
     // A stale launchd job can remain loaded after a previous daemon crash.
     // Boot it out first so repeated `spk up` runs are idempotent.
     let bootout = std::process::Command::new("launchctl")
-        .args(["bootout", &format!("gui/{uid_str}/{LAUNCHD_LABEL}")])
+        .args(["bootout", &format!("gui/{uid_str}/{label}")])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status();
@@ -120,7 +123,7 @@ pub fn daemonize(speck_home: &Path, binary: &Path) -> anyhow::Result<()> {
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>{LAUNCHD_LABEL}</string>
+    <string>{label}</string>
     <key>ProgramArguments</key>
     <array>
         <string>{}</string>
@@ -131,6 +134,8 @@ pub fn daemonize(speck_home: &Path, binary: &Path) -> anyhow::Result<()> {
     <dict>
         <key>SPECK_DAEMONIZED</key>
         <string>1</string>
+        <key>SPECK_PROFILE</key>
+        <string>{profile_name}</string>
         <key>PATH</key>
         <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
     </dict>
@@ -143,7 +148,8 @@ pub fn daemonize(speck_home: &Path, binary: &Path) -> anyhow::Result<()> {
 </dict>
 </plist>
 "#,
-        binary.display()
+        binary.display(),
+        profile_name = profile.name,
     );
 
     std::fs::write(&plist_path, &plist)
@@ -189,49 +195,116 @@ pub fn daemonize(speck_home: &Path, binary: &Path) -> anyhow::Result<()> {
             binary.display()
         );
     }
-    println!("{NEON_CYAN}Speck daemon registered — VM is starting in the background.{RESET}");
-    println!("  Follow boot:  spk logs --follow");
-    println!("  Check status: spk status");
-    println!("  For scripts:  spk start --wait  (blocks until ready)");
-    println!("  To stop:      spk stop");
+    let p = if profile.is_default() {
+        String::new()
+    } else {
+        format!(" -p {}", profile.name)
+    };
+    println!(
+        "{NEON_CYAN}Speck daemon registered{} — VM is starting in the background.{RESET}",
+        profile.display_suffix()
+    );
+    println!("  Follow boot:  spk{p} logs --follow");
+    println!("  Check status: spk{p} status");
+    println!("  For scripts:  spk{p} start --wait  (blocks until ready)");
+    println!("  To stop:      spk{p} stop");
     Ok(())
 }
 
-/// Ensure all VM assets (kernel, initrd, rootfs, data disk) are present in
-/// `speck_home`, downloading them from GitHub Releases if not.
+/// Whether a daemon started without launchd (`autostart: false`) is running:
+/// its PID file names a live process and its control socket exists.
+pub fn detached_daemon_running(speck_home: &Path) -> bool {
+    let Some(pid) = std::fs::read_to_string(speck_home.join("run/speck.pid"))
+        .ok()
+        .and_then(|p| p.trim().parse::<u32>().ok())
+    else {
+        return false;
+    };
+    speck_home.join("run/control.sock").exists()
+        && std::process::Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success())
+}
+
+/// Start the daemon in the background without a launchd agent, for profiles
+/// with `autostart: false`: nothing restarts it after a crash or a reboot.
+/// It runs in its own process group, so a Ctrl-C in the starting shell does
+/// not reach it.
+pub fn start_detached(speck_home: &Path, binary: &Path) -> anyhow::Result<std::process::Child> {
+    use std::os::unix::process::CommandExt as _;
+
+    // Errors from before the daemon's log file is set up land here.
+    let stderr_path = speck_home.join("daemon-stderr.log");
+    let stderr = std::fs::File::create(&stderr_path)
+        .with_context(|| format!("failed to create {}", stderr_path.display()))?;
+    let child = std::process::Command::new(binary)
+        .args(["up", "--foreground"])
+        .env("SPECK_DAEMONIZED", "1")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(stderr)
+        .process_group(0)
+        .spawn()
+        .context("failed to start the Speck daemon")?;
+    let profile = crate::profile::current();
+    let p = if profile.is_default() {
+        String::new()
+    } else {
+        format!(" -p {}", profile.name)
+    };
+    println!(
+        "{NEON_CYAN}Speck{} is starting in the background (autostart off).{RESET}",
+        profile.display_suffix()
+    );
+    println!("  Follow boot:  spk{p} logs --follow");
+    println!("  To stop:      spk{p} stop");
+    Ok(child)
+}
+
+/// Ensure all VM assets are present, downloading them from GitHub Releases
+/// if not: kernel and initrd in `assets` (shared by all profiles), rootfs
+/// and data disk in `speck_home`.
 ///
 /// This makes `spk up` self-bootstrapping: first run works with no separate
 /// init step, exactly like `colima start`.
 async fn ensure_assets(
     speck_home: &Path,
+    assets: &Path,
     requested_disk_gb: u64,
     force_refresh: bool,
 ) -> anyhow::Result<()> {
-    std::fs::create_dir_all(speck_home.join("kernel"))?;
-    std::fs::create_dir_all(speck_home.join("initrd"))?;
+    std::fs::create_dir_all(assets.join("kernel"))?;
+    std::fs::create_dir_all(assets.join("initrd"))?;
 
-    let kernel = speck_home.join("kernel/vmlinux");
-    let initrd = speck_home.join(format!("initrd/{KATA_INITRD_FILE}"));
+    let kernel = assets.join("kernel/vmlinux");
+    let initrd = assets.join(format!("initrd/{KATA_INITRD_FILE}"));
     let rootfs = speck_home.join("rootfs.img");
     let data = speck_home.join("data.img");
 
     if force_refresh || !kernel.exists() || !initrd.exists() {
-        fetch_kata_assets(speck_home)
+        fetch_kata_assets(assets)
             .await
             .context("failed to download kernel + initrd")?;
     }
 
-    let custom_initrd = speck_home.join("initrd/initrd.cpio.gz");
+    let custom_initrd = assets.join("initrd/initrd.cpio.gz");
     if force_refresh || !custom_initrd.exists() {
-        fetch_initrd(speck_home)
+        fetch_initrd(assets)
             .await
             .context("failed to download initrd")?;
     }
 
-    if force_refresh || !rootfs.exists() {
+    // `--pull` downloads again; otherwise a missing rootfs is cloned from the
+    // shared cache when another profile already downloaded it.
+    if force_refresh || (!rootfs.exists() && !clone_cached_rootfs(speck_home, assets)?) {
         fetch_rootfs(speck_home)
             .await
             .context("failed to download rootfs")?;
+        if let Err(e) = cache_rootfs(speck_home, assets) {
+            tracing::warn!(error = %e, "could not cache the rootfs for other profiles");
+        }
     }
 
     reconcile_data_disk(&data, requested_disk_gb).context("failed to reconcile data disk")?;
@@ -239,11 +312,68 @@ async fn ensure_assets(
     Ok(())
 }
 
+/// Pristine copy of this binary's rootfs, shared by all profiles. The rootfs
+/// a VM boots is writable, so each profile clones its own from this one.
+fn rootfs_cache(assets: &Path) -> PathBuf {
+    assets.join("cache").join(rootfs_cache_name())
+}
+
+pub(crate) fn rootfs_cache_name() -> String {
+    format!("rootfs-{ROOTFS_VERSION}.img")
+}
+
+/// Clone the cached rootfs into `speck_home`. On APFS `std::fs::copy` makes
+/// a copy-on-write clone, so this is instant and takes no extra disk space.
+/// Returns false when there is no cached rootfs.
+fn clone_cached_rootfs(speck_home: &Path, assets: &Path) -> anyhow::Result<bool> {
+    let cache = rootfs_cache(assets);
+    if !cache.exists() {
+        return Ok(false);
+    }
+    let dest = speck_home.join("rootfs.img");
+    let tmp = speck_home.join("rootfs.img.tmp");
+    std::fs::copy(&cache, &tmp)
+        .with_context(|| format!("failed to copy {} to {}", cache.display(), tmp.display()))?;
+    std::fs::rename(&tmp, &dest)?;
+    std::fs::write(
+        speck_home.join("rootfs.version"),
+        format!("{ROOTFS_VERSION}\n"),
+    )?;
+    println!("  Rootfs ready: {} (from cache)", dest.display());
+    Ok(true)
+}
+
+/// Keep a pristine clone of a freshly downloaded rootfs for other profiles.
+fn cache_rootfs(speck_home: &Path, assets: &Path) -> anyhow::Result<()> {
+    let cache = rootfs_cache(assets);
+    if cache.exists() {
+        return Ok(());
+    }
+    std::fs::create_dir_all(cache.parent().context("cache path has no parent")?)?;
+    let tmp = cache.with_extension(format!("img.{}.tmp", std::process::id()));
+    std::fs::copy(speck_home.join("rootfs.img"), &tmp)?;
+    std::fs::rename(&tmp, &cache)?;
+    Ok(())
+}
+
+/// Exclusive lock on the shared asset directory, held while assets are
+/// checked and downloaded, so profiles starting at the same time (parallel
+/// CI jobs) do not download into the same files at once.
+fn lock_assets(assets: &Path) -> anyhow::Result<std::fs::File> {
+    std::fs::create_dir_all(assets)?;
+    let path = assets.join(".assets.lock");
+    let file = std::fs::File::create(&path)
+        .with_context(|| format!("failed to open {}", path.display()))?;
+    file.lock()
+        .with_context(|| format!("failed to lock {}", path.display()))?;
+    Ok(file)
+}
+
 /// Remove guest assets whose version file does not match this binary, so
 /// `ensure_assets` downloads the matching ones (UX-02: upgrades need no
 /// `--pull`, like colima). Containers, images and volumes live on data.img
 /// and are kept; the guest trust store is rebuilt at every boot.
-fn refresh_stale_assets(speck_home: &Path) -> anyhow::Result<()> {
+fn refresh_stale_assets(speck_home: &Path, assets: &Path) -> anyhow::Result<()> {
     let assets = [
         (
             "rootfs",
@@ -253,8 +383,8 @@ fn refresh_stale_assets(speck_home: &Path) -> anyhow::Result<()> {
         ),
         (
             "initrd",
-            speck_home.join("initrd/initrd.version"),
-            speck_home.join("initrd/initrd.cpio.gz"),
+            assets.join("initrd/initrd.version"),
+            assets.join("initrd/initrd.cpio.gz"),
             INITRD_VERSION,
         ),
     ];
@@ -361,7 +491,7 @@ async fn fetch_kata_assets(speck_home: &Path) -> anyhow::Result<()> {
 /// place it at `speck_home/initrd/initrd.cpio.gz`.
 async fn fetch_initrd(speck_home: &Path) -> anyhow::Result<()> {
     let dest = speck_home.join("initrd/initrd.cpio.gz");
-    let tmp = speck_home.join("initrd/initrd.cpio.gz.tmp");
+    let tmp = speck_home.join(format!("initrd/initrd.cpio.gz.{}.tmp", std::process::id()));
     let _ = std::fs::remove_file(&tmp);
 
     let base =
@@ -695,26 +825,29 @@ pub async fn run_up(
         && args.initrd.is_some()
         && args.rootfs.is_some()
         && args.data_disk.is_some();
+    let assets = crate::profile::current().assets;
+    let assets = assets.as_path();
     if !has_all_overrides {
+        let _lock = lock_assets(assets)?;
         if !args.pull {
-            refresh_stale_assets(speck_home)?;
+            refresh_stale_assets(speck_home, assets)?;
         }
-        ensure_assets(speck_home, effective.vm.disk_gb, args.pull).await?;
+        ensure_assets(speck_home, assets, effective.vm.disk_gb, args.pull).await?;
     }
 
     let kernel_path = args
         .kernel
         .clone()
-        .unwrap_or_else(|| speck_home.join("kernel/vmlinux"));
+        .unwrap_or_else(|| assets.join("kernel/vmlinux"));
     let initrd_path: std::path::PathBuf = args
         .initrd
         .clone()
         .or_else(|| {
-            let p = speck_home.join("initrd/initrd.cpio.gz");
+            let p = assets.join("initrd/initrd.cpio.gz");
             if p.exists() { Some(p) } else { None }
         })
         .or_else(|| {
-            let p = speck_home.join(format!("initrd/{KATA_INITRD_FILE}"));
+            let p = assets.join(format!("initrd/{KATA_INITRD_FILE}"));
             if p.exists() { Some(p) } else { None }
         })
         .unwrap_or_default();
@@ -871,10 +1004,14 @@ pub async fn run_up(
     // Select the 'speck' docker context like `colima start` does (UX-01).
     tokio::task::spawn_blocking({
         let home = speck_home.to_path_buf();
-        move || crate::docker_context::select(&home)
+        let activate = effective.autostart;
+        move || crate::docker_context::select(&home, activate)
     });
 
-    spinner.finish_with_message(format!("{NEON_CYAN}Speck is running{RESET}"));
+    spinner.finish_with_message(format!(
+        "{NEON_CYAN}Speck{} is running{RESET}",
+        crate::profile::current().display_suffix()
+    ));
 
     println!();
     print!("{}", shell::render_env(speck_home, EnvShell::Posix));
@@ -1247,6 +1384,16 @@ async fn shutdown_gracefully(
 /// or `timeout_secs` elapses. Progress dots are printed to stderr every 500 ms.
 /// Returns an error (non-zero exit) on timeout.
 pub async fn wait_for_socket(sock_path: &std::path::Path, timeout_secs: u64) -> anyhow::Result<()> {
+    wait_until_ready(sock_path, timeout_secs, None).await
+}
+
+/// [`wait_for_socket`] that also fails at once when `daemon` (a detached
+/// daemon started without launchd) exits before it is ready.
+pub async fn wait_until_ready(
+    sock_path: &std::path::Path,
+    timeout_secs: u64,
+    mut daemon: Option<std::process::Child>,
+) -> anyhow::Result<()> {
     use std::time::{Duration, Instant};
 
     let deadline = Instant::now() + Duration::from_secs(timeout_secs);
@@ -1262,8 +1409,17 @@ pub async fn wait_for_socket(sock_path: &std::path::Path, timeout_secs: u64) -> 
             );
         }
 
+        if let Some(Ok(Some(status))) = daemon.as_mut().map(std::process::Child::try_wait) {
+            anyhow::bail!(
+                "the Speck daemon exited ({status}) before it was ready — run `spk logs` for details"
+            );
+        }
+
         if client.ping().await {
-            eprintln!("Speck is ready.");
+            eprintln!(
+                "Speck{} is ready.",
+                crate::profile::current().display_suffix()
+            );
             return Ok(());
         }
 
@@ -1432,7 +1588,7 @@ mod tests {
     #[test]
     fn matching_assets_are_kept() {
         let dir = asset_home("match", ROOTFS_VERSION, INITRD_VERSION);
-        refresh_stale_assets(&dir).unwrap();
+        refresh_stale_assets(&dir, &dir).unwrap();
         assert!(dir.join("rootfs.img").exists());
         assert!(dir.join("initrd/initrd.cpio.gz").exists());
     }
@@ -1440,7 +1596,7 @@ mod tests {
     #[test]
     fn stale_assets_are_removed_for_redownload_and_data_is_kept() {
         let dir = asset_home("stale", "0.0.1", "0.0.1");
-        refresh_stale_assets(&dir).unwrap();
+        refresh_stale_assets(&dir, &dir).unwrap();
         assert!(!dir.join("rootfs.img").exists());
         assert!(!dir.join("rootfs.version").exists());
         assert!(!dir.join("initrd/initrd.cpio.gz").exists());
@@ -1452,8 +1608,34 @@ mod tests {
     fn missing_version_files_leave_assets_alone() {
         let dir = asset_home("unversioned", ROOTFS_VERSION, INITRD_VERSION);
         std::fs::remove_file(dir.join("initrd/initrd.version")).unwrap();
-        refresh_stale_assets(&dir).unwrap();
+        refresh_stale_assets(&dir, &dir).unwrap();
         assert!(dir.join("initrd/initrd.cpio.gz").exists());
+    }
+
+    #[test]
+    fn profiles_share_the_initrd_and_clone_the_cached_rootfs() {
+        let assets = asset_home("shared", ROOTFS_VERSION, "0.0.1");
+        let profile = assets.join("profiles/work");
+        std::fs::create_dir_all(&profile).unwrap();
+        // The initrd lives in the shared directory, the rootfs in the profile.
+        refresh_stale_assets(&profile, &assets).unwrap();
+        assert!(!assets.join("initrd/initrd.cpio.gz").exists());
+
+        assert!(!clone_cached_rootfs(&profile, &assets).unwrap());
+        cache_rootfs(&assets, &assets).unwrap();
+        assert!(clone_cached_rootfs(&profile, &assets).unwrap());
+        assert_eq!(
+            std::fs::read(profile.join("rootfs.img")).unwrap(),
+            b"rootfs"
+        );
+        assert_eq!(
+            std::fs::read_to_string(profile.join("rootfs.version")).unwrap(),
+            format!("{ROOTFS_VERSION}\n")
+        );
+        // A booted (written) rootfs does not change the cache.
+        std::fs::write(profile.join("rootfs.img"), "booted").unwrap();
+        cache_rootfs(&profile, &assets).unwrap();
+        assert_eq!(std::fs::read(rootfs_cache(&assets)).unwrap(), b"rootfs");
     }
 
     #[test]
@@ -1464,7 +1646,7 @@ mod tests {
         let run_up = &source[run_up_start..tests_start];
 
         assert!(
-            run_up.contains("refresh_stale_assets(speck_home)?"),
+            run_up.contains("refresh_stale_assets(speck_home, assets)?"),
             "run_up must refresh stale assets before ensure_assets"
         );
         assert!(
@@ -1476,7 +1658,9 @@ mod tests {
             "full explicit asset overrides must bypass version checks"
         );
         assert!(
-            run_up.contains("ensure_assets(speck_home, effective.vm.disk_gb, args.pull).await"),
+            run_up.contains(
+                "ensure_assets(speck_home, assets, effective.vm.disk_gb, args.pull).await"
+            ),
             "--pull must force asset refresh through ensure_assets"
         );
     }
@@ -1489,7 +1673,9 @@ mod tests {
         let run_up = &source[run_up_start..tests_start];
 
         assert!(
-            run_up.contains("ensure_assets(speck_home, effective.vm.disk_gb, args.pull).await")
+            run_up.contains(
+                "ensure_assets(speck_home, assets, effective.vm.disk_gb, args.pull).await"
+            )
         );
         assert!(!run_up.contains("create_data_disk"));
         assert!(!run_up.contains("count=512"));
@@ -1583,13 +1769,16 @@ mod tests {
         let source = include_str!("up.rs");
 
         assert!(
-            source.contains("const LAUNCHD_LABEL: &str = \"io.speck.vm\";"),
-            "daemonize must define the launchd label constant"
+            source.contains("let label = profile.launchd_label();"),
+            "daemonize must take the launchd label from the profile"
         );
         assert!(
-            source.contains("<key>Label</key>")
-                && source.contains("<string>{LAUNCHD_LABEL}</string>"),
-            "daemonize plist must embed LAUNCHD_LABEL"
+            source.contains("<key>Label</key>") && source.contains("<string>{label}</string>"),
+            "daemonize plist must embed the profile's label"
+        );
+        assert!(
+            source.contains("<key>SPECK_PROFILE</key>"),
+            "the daemon must boot the profile it was registered for"
         );
     }
 
@@ -1629,7 +1818,7 @@ mod tests {
         assert!(
             source.contains("launchctl")
                 && source.contains("\"bootout\"")
-                && source.contains("gui/{uid_str}/{LAUNCHD_LABEL}"),
+                && source.contains("gui/{uid_str}/{label}"),
             "daemonize must boot out a stale io.speck.vm job before bootstrap so repeated spk up runs recover cleanly"
         );
     }

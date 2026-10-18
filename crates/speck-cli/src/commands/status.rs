@@ -9,11 +9,13 @@ use tokio::time::timeout;
 use anstream::{print, println};
 
 use crate::docker_client::DockerClient;
+use crate::profile::{self, Profile};
 use crate::theme;
 
 /// What `spk status`, `spk list` and `spk version` report (colima parity, UX-04).
 #[derive(Debug, Default, Serialize)]
 pub struct Info {
+    pub profile: String,
     pub running: bool,
     pub pid: Option<u32>,
     pub uptime_secs: Option<u64>,
@@ -58,9 +60,12 @@ async fn daemon_running(speck_home: &Path) -> bool {
     }
 }
 
-pub async fn gather(speck_home: &Path) -> Info {
+pub async fn gather(profile: &Profile) -> Info {
+    let speck_home = profile.home.as_path();
+    let assets = profile.assets.as_path();
     let sock = speck_home.join("speck.sock");
     let mut info = Info {
+        profile: profile.name.clone(),
         running: daemon_running(speck_home).await,
         arch: "aarch64",
         runtime: "docker",
@@ -69,14 +74,14 @@ pub async fn gather(speck_home: &Path) -> Info {
         versions: Versions {
             spk: env!("CARGO_PKG_VERSION"),
             initrd: asset_version(
-                &speck_home.join("initrd/initrd.version"),
-                &speck_home.join("initrd/initrd.cpio.gz"),
+                &assets.join("initrd/initrd.version"),
+                &assets.join("initrd/initrd.cpio.gz"),
             ),
             rootfs: asset_version(
                 &speck_home.join("rootfs.version"),
                 &speck_home.join("rootfs.img"),
             ),
-            kernel: std::fs::read_link(speck_home.join("kernel/vmlinux"))
+            kernel: std::fs::read_link(assets.join("kernel/vmlinux"))
                 .ok()
                 .and_then(|t| t.file_name().map(|n| n.to_string_lossy().into_owned()))
                 .map(|n| n.trim_start_matches("vmlinux-").to_owned()),
@@ -137,8 +142,8 @@ fn read_trimmed(path: &Path) -> Option<String> {
 
 /// `spk status [-e] [-j]`. Returns the exit code: 1 when Speck is not
 /// running, like `colima status`.
-pub async fn run_status(speck_home: &Path, extended: bool, json: bool) -> anyhow::Result<i32> {
-    let info = gather(speck_home).await;
+pub async fn run_status(extended: bool, json: bool) -> anyhow::Result<i32> {
+    let info = gather(&profile::current()).await;
     if json {
         println!("{}", serde_json::to_string_pretty(&info)?);
     } else {
@@ -149,11 +154,16 @@ pub async fn run_status(speck_home: &Path, extended: bool, json: bool) -> anyhow
 
 pub fn render_status(info: &Info, extended: bool) -> String {
     let mut out = String::new();
+    let name = if info.profile.is_empty() || info.profile == profile::DEFAULT {
+        "Speck".to_owned()
+    } else {
+        format!("Speck profile \"{}\"", info.profile)
+    };
     if !info.running {
-        out.push_str(&format!("Speck is {}\n", theme::format_status("stopped")));
+        out.push_str(&format!("{name} is {}\n", theme::format_status("stopped")));
         return out;
     }
-    let mut head = format!("Speck is {}", theme::format_status("running"));
+    let mut head = format!("{name} is {}", theme::format_status("running"));
     match (info.pid, info.uptime_secs) {
         (Some(pid), Some(up)) => {
             head.push_str(&format!(" (PID {pid}, up {})", format_duration(up)))
@@ -220,35 +230,71 @@ fn render_versions(v: &Versions) -> String {
     )
 }
 
-/// `spk list [-j]`: one row per instance, colima list columns.
-pub async fn run_list(speck_home: &Path, json: bool) -> anyhow::Result<()> {
-    let info = gather(speck_home).await;
+/// Profiles `spk list` shows: every profile, or only the raw `SPECK_HOME`
+/// instance.
+pub fn listed_profiles() -> Vec<Profile> {
+    let current = profile::current();
+    if current.raw_home {
+        return vec![current];
+    }
+    let user_home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+    profile::all(Path::new(&user_home))
+}
+
+/// `spk list [-j]`: one row per profile, colima list columns.
+pub async fn run_list(json: bool) -> anyhow::Result<()> {
+    let mut infos = Vec::new();
+    for profile in listed_profiles() {
+        infos.push(gather(&profile).await);
+    }
+    let current = profile::current().name;
     if json {
-        println!("{}", serde_json::to_string_pretty(&[&info])?);
+        println!("{}", serde_json::to_string_pretty(&infos)?);
     } else {
-        print!("{}", render_list(&info));
+        print!("{}", render_list(&infos, &current));
     }
     Ok(())
 }
 
-pub fn render_list(info: &Info) -> String {
+/// With more than one profile, `current` is marked with `*`.
+pub fn render_list(infos: &[Info], current: &str) -> String {
     let gib = |mb: u64| format!("{}GiB", mb / 1024);
-    let row = [
-        "default".to_owned(),
-        if info.running { "Running" } else { "Stopped" }.to_owned(),
-        info.arch.to_owned(),
-        info.cpus.map_or("-".into(), |c| c.to_string()),
-        info.memory_mb.map_or("-".into(), gib),
-        info.disk_gb.map_or("-".into(), |d| format!("{d}GiB")),
-        info.runtime.to_owned(),
-    ];
     let header = [
         "PROFILE", "STATUS", "ARCH", "CPUS", "MEMORY", "DISK", "RUNTIME",
     ];
-    let widths: Vec<usize> = header
+    let rows: Vec<[String; 7]> = infos
         .iter()
-        .zip(row.iter())
-        .map(|(h, r)| h.len().max(r.len()))
+        .map(|info| {
+            [
+                {
+                    let name = if info.profile.is_empty() {
+                        profile::DEFAULT
+                    } else {
+                        info.profile.as_str()
+                    };
+                    if infos.len() > 1 && name == current {
+                        format!("{name} *")
+                    } else {
+                        name.to_owned()
+                    }
+                },
+                if info.running { "Running" } else { "Stopped" }.to_owned(),
+                info.arch.to_owned(),
+                info.cpus.map_or("-".into(), |c| c.to_string()),
+                info.memory_mb.map_or("-".into(), gib),
+                info.disk_gb.map_or("-".into(), |d| format!("{d}GiB")),
+                info.runtime.to_owned(),
+            ]
+        })
+        .collect();
+    let widths: Vec<usize> = (0..header.len())
+        .map(|i| {
+            rows.iter()
+                .map(|r| r[i].len())
+                .chain([header[i].len()])
+                .max()
+                .unwrap_or(0)
+        })
         .collect();
     let fmt = |cells: Vec<&str>| {
         let mut l = cells
@@ -260,12 +306,16 @@ pub fn render_list(info: &Info) -> String {
         l.truncate(l.trim_end().len());
         l + "\n"
     };
-    fmt(header.to_vec()) + &fmt(row.iter().map(String::as_str).collect())
+    let mut out = fmt(header.to_vec());
+    for row in &rows {
+        out += &fmt(row.iter().map(String::as_str).collect());
+    }
+    out
 }
 
 /// `spk version`: Speck, runtime and guest versions.
-pub async fn run_version(speck_home: &Path) -> anyhow::Result<()> {
-    let info = gather(speck_home).await;
+pub async fn run_version() -> anyhow::Result<()> {
+    let info = gather(&profile::current()).await;
     println!("spk version {}", info.versions.spk);
     match &info.docker_version {
         Some(v) => println!("runtime: docker {v}"),
@@ -302,6 +352,7 @@ mod tests {
 
     fn running_info() -> Info {
         Info {
+            profile: "default".into(),
             running: true,
             pid: Some(42),
             uptime_secs: Some(3 * 3600 + 7 * 60),
@@ -355,13 +406,42 @@ mod tests {
 
     #[test]
     fn list_has_colima_columns() {
-        let out = render_list(&running_info());
+        let out = render_list(&[running_info()], "default");
         let lines: Vec<&str> = out.lines().collect();
         assert!(lines[0].starts_with("PROFILE"));
         assert!(lines[0].contains("RUNTIME"));
         assert!(lines[1].contains("Running"));
         assert!(lines[1].contains("4GiB"));
         assert!(lines[1].contains("20GiB"));
+    }
+
+    #[test]
+    fn list_has_one_row_per_profile() {
+        let work = Info {
+            profile: "work-long-name".into(),
+            arch: "aarch64",
+            runtime: "docker",
+            ..Info::default()
+        };
+        let out = render_list(&[running_info(), work], "work-long-name");
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines.len(), 3);
+        let words = |l: &str| l.split_whitespace().take(2).collect::<Vec<_>>().join(" ");
+        assert_eq!(words(lines[1]), "default Running");
+        assert_eq!(words(lines[2]), "work-long-name *");
+        // Columns line up across rows.
+        assert_eq!(lines[1].find("Running"), lines[2].find("Stopped"));
+        assert!(!render_list(&[running_info()], "default").contains('*'));
+    }
+
+    #[test]
+    fn named_profiles_are_named_in_status() {
+        let mut info = running_info();
+        info.profile = "work".into();
+        assert!(render_status(&info, false).starts_with("Speck profile \"work\" is"));
+        info.running = false;
+        assert!(render_status(&info, false).contains("Speck profile \"work\" is"));
+        assert!(render_status(&running_info(), false).starts_with("Speck is"));
     }
 
     #[test]

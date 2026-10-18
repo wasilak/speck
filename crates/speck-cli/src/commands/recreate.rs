@@ -5,7 +5,7 @@ use anyhow::Context as _;
 /// `spk recreate`: delete the VM and start a fresh one (colima delete +
 /// colima start). Downloaded guest assets and `config.yaml` are kept.
 pub async fn run_recreate(force: bool, speck_home: &Path) -> anyhow::Result<()> {
-    if !crate::commands::delete::run_delete(force, speck_home).await? {
+    if !crate::commands::delete::run_delete(force, speck_home, false).await? {
         return Ok(());
     }
     let binary = std::env::current_exe().context("cannot find own binary")?;
