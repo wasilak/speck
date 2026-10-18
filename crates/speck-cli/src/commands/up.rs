@@ -407,6 +407,31 @@ fn refresh_stale_assets(speck_home: &Path, assets: &Path) -> anyhow::Result<()> 
 }
 
 /// On-disk version from `path` when it differs from `required`.
+/// Guest assets on disk whose version differs from this binary, as
+/// `(name, on_disk, required)`. `refresh_stale_assets` replaces them at the
+/// next start.
+pub(crate) fn asset_drift(
+    speck_home: &Path,
+    assets: &Path,
+) -> Vec<(&'static str, String, &'static str)> {
+    [
+        ("rootfs", speck_home.join("rootfs.version"), ROOTFS_VERSION),
+        (
+            "initrd",
+            assets.join("initrd/initrd.version"),
+            INITRD_VERSION,
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(name, file, required)| {
+        stale_version(&file, required)
+            .ok()
+            .flatten()
+            .map(|found| (name, found, required))
+    })
+    .collect()
+}
+
 fn stale_version(path: &Path, required: &str) -> anyhow::Result<Option<String>> {
     if !path.exists() {
         return Ok(None);
@@ -1068,6 +1093,12 @@ pub async fn run_up(
                                         );
                                     }
                                 });
+                            }
+                            // `spk doctor` compares this with its own version
+                            // to catch a daemon left running after an upgrade.
+                            "VERSION" => {
+                                let reply = format!("{}\n", env!("CARGO_PKG_VERSION"));
+                                let _ = stream.write_all(reply.as_bytes()).await;
                             }
                             _ => {
                                 let _ = stream.write_all(b"PONG\n").await;

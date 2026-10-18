@@ -222,12 +222,15 @@ spk completion fish | source
 ## Diagnostics
 
 ```bash
-spk doctor                              # full health check (codesign, VM state, DNS, certs, Docker socket)
+spk doctor                              # full health check (codesign, VM state, DNS, certs, Docker socket, versions, guest clock)
 spk doctor dns                          # trace DNS through the guest resolver
 spk doctor dns internal.corp.example   # verify VPN split-DNS reaches a scoped nameserver
 ```
 
 `spk doctor` exits 0 when everything is healthy, 1 on any failure, with an actionable hint per failing check.
+It warns when the running daemon or the downloaded guest assets do not match
+the installed `spk` (for example after `brew upgrade` without `spk restart`),
+and when the guest clock is more than 2 seconds off the host clock.
 
 ## Other commands
 

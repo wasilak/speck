@@ -269,6 +269,151 @@ async fn check_docker_socket(speck_home: &Path) -> CheckResult {
     }
 }
 
+/// Version reported by the running daemon over the control socket, or
+/// `None` when it is not running. Daemons older than 1.4.8 answer `PONG`.
+async fn daemon_version(speck_home: &Path) -> Option<String> {
+    let sock_path = speck_home.join("run/control.sock");
+    let mut stream = tokio::time::timeout(
+        Duration::from_secs(2),
+        tokio::net::UnixStream::connect(&sock_path),
+    )
+    .await
+    .ok()?
+    .ok()?;
+    stream.write_all(b"VERSION\n").await.ok()?;
+    let mut buf = [0u8; 64];
+    let n = tokio::time::timeout(Duration::from_secs(2), stream.read(&mut buf))
+        .await
+        .ok()?
+        .ok()?;
+    Some(String::from_utf8_lossy(&buf[..n]).trim().to_owned())
+}
+
+/// The running daemon must be this binary's version (OPS-03): after
+/// `brew upgrade` the old daemon keeps running until `spk restart`.
+fn daemon_version_result(reply: Option<&str>, current: &str) -> CheckResult {
+    match reply {
+        None => CheckResult::Skip {
+            reason: "VM not running".into(),
+        },
+        Some(v) if v == current => CheckResult::PassWithDetail {
+            detail: format!("spk {v}"),
+        },
+        Some(v) => {
+            let running = if v == "PONG" {
+                "an older spk that does not report its version".to_owned()
+            } else {
+                format!("spk {v}")
+            };
+            CheckResult::Warn {
+                detail: format!(
+                    "the daemon runs {running}, this is spk {current}: run `spk restart`"
+                ),
+            }
+        }
+    }
+}
+
+async fn check_daemon_version(speck_home: &Path) -> CheckResult {
+    let reply = daemon_version(speck_home).await;
+    daemon_version_result(reply.as_deref(), env!("CARGO_PKG_VERSION"))
+}
+
+/// Guest assets on disk must match this binary; a mismatch means the VM
+/// still boots the old ones until the next start.
+pub fn check_guest_assets(speck_home: &Path, assets: &Path) -> CheckResult {
+    let drift = crate::commands::up::asset_drift(speck_home, assets);
+    if drift.is_empty() {
+        return CheckResult::Pass;
+    }
+    let list = drift
+        .iter()
+        .map(|(name, found, required)| format!("{name} {found} (needs {required})"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    CheckResult::Warn {
+        detail: format!("{list}: run `spk restart` to update"),
+    }
+}
+
+/// Seconds since the Unix epoch for an RFC 3339 time as dockerd prints it
+/// (`2026-10-18T12:34:56.123456789Z` or with a `+02:00` offset).
+fn parse_rfc3339(s: &str) -> Option<f64> {
+    let s = s.trim();
+    let num = |range: std::ops::Range<usize>| s.get(range)?.parse::<i64>().ok();
+    let (year, month, day) = (num(0..4)?, num(5..7)?, num(8..10)?);
+    let (hour, min, sec) = (num(11..13)?, num(14..16)?, num(17..19)?);
+    let rest = s.get(19..)?;
+    let tz_at = rest.find(['Z', '+', '-']).unwrap_or(rest.len());
+    let frac: f64 = rest[..tz_at]
+        .strip_prefix('.')
+        .map(|digits| format!("0.{digits}").parse().unwrap_or(0.0))
+        .unwrap_or(0.0);
+    let offset = match rest.get(tz_at..tz_at + 1) {
+        Some(sign @ ("+" | "-")) => {
+            let tz = rest.get(tz_at + 1..)?;
+            let h: i64 = tz.get(0..2)?.parse().ok()?;
+            let m: i64 = tz.get(3..5)?.parse().ok()?;
+            let secs = h * 3600 + m * 60;
+            if sign == "+" { secs } else { -secs }
+        }
+        _ => 0,
+    };
+    // Days from civil (Howard Hinnant's algorithm).
+    let y = if month <= 2 { year - 1 } else { year };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let mp = (month + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    Some((days * 86_400 + hour * 3600 + min * 60 + sec - offset) as f64 + frac)
+}
+
+/// Guest clock skew above this breaks TLS and AWS SigV4 sooner or later.
+const MAX_CLOCK_SKEW_SECS: f64 = 2.0;
+
+fn clock_result(guest: Option<f64>, host: f64) -> CheckResult {
+    let Some(guest) = guest else {
+        return CheckResult::Warn {
+            detail: "dockerd did not report its system time".into(),
+        };
+    };
+    let skew = guest - host;
+    if skew.abs() <= MAX_CLOCK_SKEW_SECS {
+        CheckResult::PassWithDetail {
+            detail: format!("guest clock within {:.1}s of the host", skew.abs()),
+        }
+    } else {
+        CheckResult::Warn {
+            detail: format!(
+                "guest clock is {:.0}s {} the host; TLS and AWS signatures may fail: run `spk restart`",
+                skew.abs(),
+                if skew > 0.0 { "ahead of" } else { "behind" }
+            ),
+        }
+    }
+}
+
+/// Compare the guest clock (dockerd `/info` SystemTime) with the host.
+async fn check_guest_clock(speck_home: &Path) -> CheckResult {
+    let client = DockerClient::new(speck_home.join("speck.sock"));
+    let info = match tokio::time::timeout(Duration::from_secs(3), client.get("/info")).await {
+        Ok(Ok(info)) => info,
+        _ => {
+            return CheckResult::Skip {
+                reason: "Docker socket unreachable".into(),
+            };
+        }
+    };
+    let host = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or_default();
+    let guest = info["SystemTime"].as_str().and_then(parse_rfc3339);
+    clock_result(guest, host)
+}
+
 // ──────────────────────────────────────────────────────────────
 // DNS full-path trace (DOCTOR-03)
 // ──────────────────────────────────────────────────────────────
@@ -384,11 +529,12 @@ pub async fn run_doctor_dns(_speck_home: &Path, hostname: &str) -> anyhow::Resul
 
 /// Entry point for `spk doctor`.
 ///
-/// Runs eight health checks (six synchronous + two async) and prints PASS/FAIL/WARN/SKIP
+/// Runs the health checks in `run_checks` and prints PASS/FAIL/WARN/SKIP
 /// for each. Returns exit code 0 when all checks are Pass/Warn/Skip, 1 when any is Fail.
 ///
 /// Check order: codesign entitlement, DOCKER_HOST, cert injection, VM resources,
-/// public DNS, VPN DNS, VM running, Docker socket.
+/// public DNS, VPN DNS, VM running, Docker socket, daemon version, guest
+/// assets, guest clock.
 pub async fn run_doctor(
     speck_home: &Path,
     args: DoctorArgs,
@@ -445,11 +591,84 @@ async fn run_checks(speck_home: &Path) -> Vec<(&'static str, CheckResult)> {
         ("VPN DNS", check_vpn_dns()),
         ("VM running", check_vm_running(speck_home).await),
         ("Docker socket", check_docker_socket(speck_home).await),
+        ("daemon version", check_daemon_version(speck_home).await),
+        (
+            "guest assets",
+            check_guest_assets(speck_home, &crate::profile::current().assets),
+        ),
+        ("guest clock", check_guest_clock(speck_home).await),
     ]
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn rfc3339_parses_dockerd_system_time() {
+        assert_eq!(parse_rfc3339("1970-01-01T00:00:00Z"), Some(0.0));
+        assert_eq!(parse_rfc3339("2026-10-18T12:00:00Z"), Some(1_792_324_800.0));
+        assert_eq!(
+            parse_rfc3339("2026-10-18T14:00:00.5+02:00"),
+            Some(1_792_324_800.5)
+        );
+        assert_eq!(
+            parse_rfc3339("2026-10-18T12:00:00.250000000Z"),
+            Some(1_792_324_800.25)
+        );
+        assert_eq!(parse_rfc3339("garbage"), None);
+    }
+
+    #[test]
+    fn clock_skew_over_two_seconds_warns() {
+        assert!(matches!(
+            clock_result(Some(101.5), 100.0),
+            CheckResult::PassWithDetail { .. }
+        ));
+        let CheckResult::Warn { detail } = clock_result(Some(40.0), 100.0) else {
+            panic!("expected a warning");
+        };
+        assert!(detail.contains("60s behind"), "{detail}");
+        assert!(matches!(
+            clock_result(None, 100.0),
+            CheckResult::Warn { .. }
+        ));
+    }
+
+    #[test]
+    fn daemon_version_mismatch_warns() {
+        assert!(matches!(
+            daemon_version_result(None, "1.4.8"),
+            CheckResult::Skip { .. }
+        ));
+        assert!(matches!(
+            daemon_version_result(Some("1.4.8"), "1.4.8"),
+            CheckResult::PassWithDetail { .. }
+        ));
+        let CheckResult::Warn { detail } = daemon_version_result(Some("PONG"), "1.4.8") else {
+            panic!("expected a warning");
+        };
+        assert!(detail.contains("older spk"), "{detail}");
+        let CheckResult::Warn { detail } = daemon_version_result(Some("1.4.6"), "1.4.8") else {
+            panic!("expected a warning");
+        };
+        assert!(detail.contains("spk 1.4.6"), "{detail}");
+    }
+
+    #[test]
+    fn guest_assets_report_drift() {
+        let dir = std::env::temp_dir().join(format!("speck-doctor-assets-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("initrd")).unwrap();
+        assert_eq!(check_guest_assets(&dir, &dir), CheckResult::Pass);
+        std::fs::write(dir.join("initrd/initrd.version"), "0.0.1\n").unwrap();
+        let CheckResult::Warn { detail } = check_guest_assets(&dir, &dir) else {
+            panic!("expected a warning");
+        };
+        assert!(detail.starts_with("initrd 0.0.1 (needs "), "{detail}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn dns_trace_accepts_hostnames_with_n_and_rejects_metacharacters() {
         for bad in ["a b", "a;b", "a\nb", "a\\b", "a$b", "a`b"] {
@@ -598,8 +817,11 @@ mod tests {
     }
 
     #[test]
-    fn run_doctor_has_eight_checks() {
+    fn run_doctor_has_the_daemon_and_guest_checks() {
         let src = production_code();
+        for label in ["\"daemon version\"", "\"guest assets\"", "\"guest clock\""] {
+            assert!(src.contains(label), "run_checks must include {label}");
+        }
         assert!(
             src.contains("\"VM running\""),
             "run_doctor must include a 'VM running' check label"
