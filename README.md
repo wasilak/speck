@@ -48,6 +48,8 @@ spk list        # colima-style instance table (-j: JSON)
 spk version     # spk, docker and guest versions
 spk restart
 spk stop        # stop the VM; switches docker back to the 'default' context
+spk stop -f     # kill a hung VM at once, without a graceful shutdown
+spk config      # validate config.yaml and show effective settings and their sources
 spk prune       # delete cached downloads Speck no longer uses
 spk delete      # remove the VM with all containers, images and volumes
 spk recreate    # delete the VM and start a fresh one (keeps downloads and config)
@@ -99,8 +101,8 @@ docker run --rm alpine echo "hello from Speck"
 ```yaml
 vm:
   cpus: 4
-  memory_mb: 4096
-  disk_gb: 60
+  memory_mb: 6g     # or 6144 (MiB), 6G, 1.5g
+  disk_gb: 100      # or 100g, 1t
 
 ca:
   extra_certs:
@@ -115,11 +117,18 @@ the same bundle (with `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE` and
 Desktop and Colima; copy the CA into the image in the Dockerfile when a build
 step needs it.
 
-Per-invocation flags override the config file:
+`spk start --cpus/--memory/--disk` saves the values to the config file, like
+`colima start`. Sizes take k/m/g/t units in any case (`--memory 8g`); a plain
+number is MiB for memory and GiB for disk. A running VM keeps its settings
+until `spk restart`.
 
 ```bash
-spk start --cpus 8 --memory 8192
+spk start --cpus 8 --memory 8g
 ```
+
+Containers get the VM memory minus a reserve (1/8, 512 MiB to 1 GiB) kept for
+dockerd and containerd, so a full container memory never makes `docker`
+hang: the kernel stops processes inside the containers instead.
 
 ## Environment variables
 
@@ -128,8 +137,8 @@ spk start --cpus 8 --memory 8192
 | `SPECK_HOME` | `~/.speck` | Directory for VM assets, config, socket, and logs. Override to run multiple isolated instances. |
 | `DOCKER_HOST` | *(not set)* | Set by `spk init --set-docker-host` or `eval $(spk env)` to `unix://$SPECK_HOME/speck.sock`. Directs Docker-compatible clients to Speck. |
 | `SPECK_VM_CPUS` | config / 2 | vCPU count for the VM. Takes precedence over `config.yaml` and `--cpus`. |
-| `SPECK_VM_MEMORY_MB` | config / 2048 | VM memory in MiB. Takes precedence over `config.yaml` and `--memory`. |
-| `SPECK_VM_DISK_GB` | config / 100 | VM data disk size in GiB. Takes precedence over `config.yaml` and `--disk`. |
+| `SPECK_VM_MEMORY_MB` | config / 2048 | VM memory: MiB or a size such as `6g`. Takes precedence over `config.yaml` and `--memory`. |
+| `SPECK_VM_DISK_GB` | config / 100 | VM data disk: GiB or a size such as `1t`. Takes precedence over `config.yaml` and `--disk`. |
 | `SPECK_LOG_LEVEL` | config / `info` | [tracing `EnvFilter`](https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html) directive. Takes precedence over `config.yaml` `log_level`. |
 | `SPECK_DAEMONIZED` | *(not set)* | Set to `1` internally by the launchd LaunchAgent. Switches the process to file-appender logging and suppresses progress output. Do not set manually. |
 

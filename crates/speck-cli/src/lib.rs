@@ -10,6 +10,7 @@ pub mod docker_client;
 mod docker_context;
 mod keychain;
 mod shell;
+mod size;
 mod theme;
 
 #[derive(Parser)]
@@ -79,9 +80,11 @@ struct UpArgs {
     data_disk: Option<PathBuf>,
     #[arg(long)]
     cpus: Option<u64>,
-    #[arg(long)]
+    /// VM memory: 6g, 6144m, 1.5g (a plain number is MiB)
+    #[arg(long, value_name = "SIZE", value_parser = crate::size::parse_mib)]
     memory: Option<u64>,
-    #[arg(long)]
+    /// VM data disk: 100g, 1t (a plain number is GiB)
+    #[arg(long, value_name = "SIZE", value_parser = crate::size::parse_gib)]
     disk: Option<u64>,
     #[arg(long)]
     foreground: bool,

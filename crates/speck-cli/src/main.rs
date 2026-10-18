@@ -10,6 +10,7 @@ mod docker_client;
 mod docker_context;
 mod keychain;
 mod shell;
+mod size;
 mod theme;
 
 #[derive(Parser)]
@@ -54,6 +55,8 @@ enum Commands {
     Init(InitArgs),
     /// Run health checks and diagnose Speck configuration
     Doctor(DoctorArgs),
+    /// Validate config.yaml and show the effective settings and their sources
+    Config,
     /// Show Speck status (like `colima status`)
     Status(StatusArgs),
     /// List Speck instances (like `colima list`)
@@ -113,9 +116,11 @@ struct UpArgs {
     data_disk: Option<PathBuf>,
     #[arg(long)]
     cpus: Option<u64>,
-    #[arg(long)]
+    /// VM memory: 6g, 6144m, 1.5g (a plain number is MiB)
+    #[arg(long, value_name = "SIZE", value_parser = crate::size::parse_mib)]
     memory: Option<u64>,
-    #[arg(long)]
+    /// VM data disk: 100g, 1t (a plain number is GiB)
+    #[arg(long, value_name = "SIZE", value_parser = crate::size::parse_gib)]
     disk: Option<u64>,
     #[arg(long)]
     foreground: bool,
@@ -655,6 +660,12 @@ async fn main() -> anyhow::Result<()> {
         Commands::Doctor(args) => {
             init_tracing(&default_tracing_filter())?;
             let code = commands::doctor::run_doctor(&speck_home, args).await?;
+            if code != 0 {
+                std::process::exit(code);
+            }
+        }
+        Commands::Config => {
+            let code = commands::config_cmd::run_config(&speck_home)?;
             if code != 0 {
                 std::process::exit(code);
             }

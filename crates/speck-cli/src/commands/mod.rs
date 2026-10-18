@@ -1,5 +1,6 @@
 pub mod build;
 pub mod completion;
+pub mod config_cmd;
 pub mod dashboard;
 pub mod delete;
 pub mod doctor;

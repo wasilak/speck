@@ -48,9 +48,9 @@ impl Default for AppConfig {
 pub struct FileVmConfig {
     #[serde(default)]
     pub cpus: Option<u64>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::size::serde_size::mib")]
     pub memory_mb: Option<u64>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::size::serde_size::gib")]
     pub disk_gb: Option<u64>,
 }
 
@@ -125,9 +125,9 @@ struct StrictAppConfig {
 struct StrictVmConfig {
     #[serde(default)]
     cpus: Option<u64>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::size::serde_size::mib")]
     memory_mb: Option<u64>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::size::serde_size::gib")]
     disk_gb: Option<u64>,
 }
 
@@ -295,10 +295,10 @@ fn resolve_effective_config_with_physical_cores(
     if let Some(cpus) = parse_env_u64("SPECK_VM_CPUS", "vCPU count")? {
         effective.vm.cpus = cpus;
     }
-    if let Some(memory_mb) = parse_env_u64("SPECK_VM_MEMORY_MB", "MiB")? {
+    if let Some(memory_mb) = parse_env_size("SPECK_VM_MEMORY_MB", crate::size::parse_mib)? {
         effective.vm.memory_mb = memory_mb;
     }
-    if let Some(disk_gb) = parse_env_u64("SPECK_VM_DISK_GB", "GiB")? {
+    if let Some(disk_gb) = parse_env_size("SPECK_VM_DISK_GB", crate::size::parse_gib)? {
         effective.vm.disk_gb = disk_gb;
     }
     if let Ok(log_level) = std::env::var("SPECK_LOG_LEVEL") {
@@ -310,6 +310,20 @@ fn resolve_effective_config_with_physical_cores(
 
     validate_effective_vm_config_with_physical_cores(&effective.vm, physical_cores)?;
     Ok(effective)
+}
+
+/// A size env var (`6g`, `6144`); see `crate::size`.
+fn parse_env_size(
+    var_name: &str,
+    parse: fn(&str) -> Result<u64, String>,
+) -> anyhow::Result<Option<u64>> {
+    match std::env::var(var_name) {
+        Ok(value) => parse(&value)
+            .map(Some)
+            .map_err(|e| anyhow::anyhow!("{var_name}: {e}")),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(err) => anyhow::bail!("{var_name} must be valid UTF-8: {err}"),
+    }
 }
 
 pub fn parse_env_u64(var_name: &str, unit: &str) -> anyhow::Result<Option<u64>> {
@@ -644,8 +658,47 @@ mod tests {
                 .to_string();
 
             assert!(err.contains("SPECK_VM_MEMORY_MB"));
-            assert!(err.contains("MiB"));
+            assert!(
+                err.contains("6144m"),
+                "error must show a valid example: {err}"
+            );
         });
+    }
+
+    #[test]
+    fn sizes_work_in_env_and_config_file() {
+        temp_env::with_vars(
+            [
+                ("SPECK_VM_MEMORY_MB", Some("6G")),
+                ("SPECK_VM_DISK_GB", Some("1t")),
+            ],
+            || {
+                let effective = resolve_effective_config_with_physical_cores(
+                    AppConfig::default(),
+                    &empty_cli_args(),
+                    16,
+                )
+                .unwrap();
+                assert_eq!(effective.vm.memory_mb, 6144);
+                assert_eq!(effective.vm.disk_gb, 1024);
+            },
+        );
+        let home = temp_speck_home("sizes");
+        std::fs::write(
+            home.join(CONFIG_FILE),
+            "version: 1\nvm:\n  memory_mb: 6g\n  disk_gb: 120\n",
+        )
+        .unwrap();
+        let (config, warnings) = load_config_file(&home).unwrap();
+        assert!(warnings.is_empty());
+        assert_eq!(config.vm.memory_mb, Some(6144));
+        assert_eq!(config.vm.disk_gb, Some(120));
+        std::fs::write(
+            home.join(CONFIG_FILE),
+            "version: 1\nvm:\n  memory_mb: lots\n",
+        )
+        .unwrap();
+        assert!(load_config_file(&home).is_err());
     }
 
     #[test]
