@@ -8,6 +8,7 @@ use anstream::println;
 
 use crate::config;
 use crate::docker_client::DockerClient;
+use crate::output::{self, Output};
 use crate::theme::{GREEN, RED, RESET, YELLOW};
 use crate::{DoctorArgs, DoctorSubcommand};
 
@@ -19,6 +20,40 @@ pub enum CheckResult {
     Fail { hint: String },
     Warn { detail: String },
     Skip { reason: String },
+}
+
+/// One check in the `spk doctor -o json|yaml` document.
+#[derive(Debug, serde::Serialize)]
+pub struct CheckDoc {
+    pub name: String,
+    /// `pass`, `fail`, `warn` or `info`.
+    pub status: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+impl CheckDoc {
+    pub fn new(name: &str, result: &CheckResult) -> Self {
+        let (status, detail) = match result {
+            CheckResult::Pass => ("pass", None),
+            CheckResult::PassWithDetail { detail } => ("pass", Some(detail)),
+            CheckResult::Fail { hint } => ("fail", Some(hint)),
+            CheckResult::Warn { detail } => ("warn", Some(detail)),
+            CheckResult::Skip { reason } => ("info", Some(reason)),
+        };
+        Self {
+            name: name.to_owned(),
+            status,
+            detail: detail.cloned(),
+        }
+    }
+}
+
+#[derive(serde::Serialize)]
+struct DoctorDoc {
+    speck_home: String,
+    ok: bool,
+    checks: Vec<CheckDoc>,
 }
 
 /// Print one check result line to stdout using the Speck colour scheme.
@@ -354,9 +389,33 @@ pub async fn run_doctor_dns(_speck_home: &Path, hostname: &str) -> anyhow::Resul
 ///
 /// Check order: codesign entitlement, DOCKER_HOST, cert injection, VM resources,
 /// public DNS, VPN DNS, VM running, Docker socket.
-pub async fn run_doctor(speck_home: &Path, args: DoctorArgs) -> anyhow::Result<i32> {
+pub async fn run_doctor(
+    speck_home: &Path,
+    args: DoctorArgs,
+    format: Output,
+) -> anyhow::Result<i32> {
     if let Some(DoctorSubcommand::Dns { hostname }) = args.command {
+        anyhow::ensure!(
+            format.is_plain(),
+            "`spk doctor dns` supports only plain output"
+        );
         return run_doctor_dns(speck_home, &hostname).await;
+    }
+
+    let checks = run_checks(speck_home).await;
+    let any_fail = checks
+        .iter()
+        .any(|(_, r)| matches!(r, CheckResult::Fail { .. }));
+    if !format.is_plain() {
+        output::emit(
+            format,
+            &DoctorDoc {
+                speck_home: speck_home.display().to_string(),
+                ok: !any_fail,
+                checks: checks.iter().map(|(l, r)| CheckDoc::new(l, r)).collect(),
+            },
+        )?;
+        return Ok(if any_fail { 1 } else { 0 });
     }
 
     println!("Speck Doctor\n");
@@ -369,7 +428,15 @@ pub async fn run_doctor(speck_home: &Path, args: DoctorArgs) -> anyhow::Result<i
     println!("  SPECK_HOME: {}{speck_home_note}", speck_home.display());
     println!();
 
-    let checks: Vec<(&str, CheckResult)> = vec![
+    for (label, result) in &checks {
+        print_check(label, result);
+    }
+
+    if any_fail { Ok(1) } else { Ok(0) }
+}
+
+async fn run_checks(speck_home: &Path) -> Vec<(&'static str, CheckResult)> {
+    vec![
         ("codesign entitlement", check_codesign()),
         ("DOCKER_HOST", check_docker_host(speck_home)),
         ("cert injection", check_cert_injection(speck_home)),
@@ -378,17 +445,7 @@ pub async fn run_doctor(speck_home: &Path, args: DoctorArgs) -> anyhow::Result<i
         ("VPN DNS", check_vpn_dns()),
         ("VM running", check_vm_running(speck_home).await),
         ("Docker socket", check_docker_socket(speck_home).await),
-    ];
-
-    let mut any_fail = false;
-    for (label, result) in &checks {
-        if matches!(result, CheckResult::Fail { .. }) {
-            any_fail = true;
-        }
-        print_check(label, result);
-    }
-
-    if any_fail { Ok(1) } else { Ok(0) }
+    ]
 }
 
 #[cfg(test)]

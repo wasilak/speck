@@ -9,6 +9,7 @@ use tokio::time::timeout;
 use anstream::{print, println};
 
 use crate::docker_client::DockerClient;
+use crate::output::{self, Output};
 use crate::profile::{self, Profile};
 use crate::theme;
 
@@ -142,12 +143,12 @@ fn read_trimmed(path: &Path) -> Option<String> {
 
 /// `spk status [-e] [-j]`. Returns the exit code: 1 when Speck is not
 /// running, like `colima status`.
-pub async fn run_status(extended: bool, json: bool) -> anyhow::Result<i32> {
+pub async fn run_status(extended: bool, format: Output) -> anyhow::Result<i32> {
     let info = gather(&profile::current()).await;
-    if json {
-        println!("{}", serde_json::to_string_pretty(&info)?);
-    } else {
+    if format.is_plain() {
         print!("{}", render_status(&info, extended));
+    } else {
+        output::emit(format, &info)?;
     }
     Ok(if info.running { 0 } else { 1 })
 }
@@ -242,16 +243,32 @@ pub fn listed_profiles() -> Vec<Profile> {
 }
 
 /// `spk list [-j]`: one row per profile, colima list columns.
-pub async fn run_list(json: bool) -> anyhow::Result<()> {
+/// One `spk list -o json|yaml` entry: the status of a profile and whether it
+/// is the current one.
+#[derive(Serialize)]
+struct ListEntry<'a> {
+    #[serde(flatten)]
+    info: &'a Info,
+    current: bool,
+}
+
+pub async fn run_list(format: Output) -> anyhow::Result<()> {
     let mut infos = Vec::new();
     for profile in listed_profiles() {
         infos.push(gather(&profile).await);
     }
     let current = profile::current().name;
-    if json {
-        println!("{}", serde_json::to_string_pretty(&infos)?);
-    } else {
+    if format.is_plain() {
         print!("{}", render_list(&infos, &current));
+    } else {
+        let entries: Vec<ListEntry> = infos
+            .iter()
+            .map(|info| ListEntry {
+                info,
+                current: info.profile == current,
+            })
+            .collect();
+        output::emit(format, &entries)?;
     }
     Ok(())
 }
@@ -314,8 +331,30 @@ pub fn render_list(infos: &[Info], current: &str) -> String {
 }
 
 /// `spk version`: Speck, runtime and guest versions.
-pub async fn run_version() -> anyhow::Result<()> {
+/// `spk version -o json|yaml` document.
+#[derive(Serialize)]
+struct VersionDoc<'a> {
+    spk: &'a str,
+    docker: Option<&'a str>,
+    initrd: Option<&'a str>,
+    rootfs: Option<&'a str>,
+    kernel: Option<&'a str>,
+}
+
+pub async fn run_version(format: Output) -> anyhow::Result<()> {
     let info = gather(&profile::current()).await;
+    if !format.is_plain() {
+        return output::emit(
+            format,
+            &VersionDoc {
+                spk: info.versions.spk,
+                docker: info.docker_version.as_deref(),
+                initrd: info.versions.initrd.as_deref(),
+                rootfs: info.versions.rootfs.as_deref(),
+                kernel: info.versions.kernel.as_deref(),
+            },
+        );
+    }
     println!("spk version {}", info.versions.spk);
     match &info.docker_version {
         Some(v) => println!("runtime: docker {v}"),
@@ -442,6 +481,25 @@ mod tests {
         info.running = false;
         assert!(render_status(&info, false).contains("Speck profile \"work\" is"));
         assert!(render_status(&running_info(), false).starts_with("Speck is"));
+    }
+
+    #[test]
+    fn list_entries_mark_the_current_profile() {
+        let info = running_info();
+        let v: serde_json::Value = serde_json::from_str(
+            &output::render(
+                Output::Json,
+                &[ListEntry {
+                    info: &info,
+                    current: true,
+                }],
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(v[0]["profile"], "default");
+        assert_eq!(v[0]["current"], true);
+        assert_eq!(v[0]["running"], true);
     }
 
     #[test]

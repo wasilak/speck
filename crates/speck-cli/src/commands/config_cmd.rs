@@ -4,77 +4,118 @@
 use std::path::Path;
 
 use clap::Parser as _;
+use serde::Serialize;
 
 use crate::config::{self, EffectiveConfig, EffectiveVmConfig};
 
+use crate::output::{self, Output};
+
+#[derive(Serialize)]
 struct Row {
     key: &'static str,
-    value: String,
+    /// Typed value for `-o json|yaml`.
+    value: serde_json::Value,
+    /// Text for the plain table, e.g. "6144 (6 GiB)".
+    #[serde(skip)]
+    text: String,
     source: String,
 }
 
-/// Exit code 0 when the configuration is valid, 1 otherwise.
-pub fn run_config(speck_home: &Path) -> anyhow::Result<i32> {
-    let path = speck_home.join("config.yaml");
-    println!("Config: {}", path.display());
+/// `spk config -o json|yaml` document.
+#[derive(Serialize, Default)]
+struct ConfigDoc {
+    path: String,
+    exists: bool,
+    valid: bool,
+    errors: Vec<String>,
+    warnings: Vec<String>,
+    settings: Vec<Row>,
+    /// Resources of the running VM when they differ from the settings.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    running_vm: Option<EffectiveVmConfig>,
+}
 
+fn build(speck_home: &Path) -> ConfigDoc {
+    let path = speck_home.join("config.yaml");
+    let mut doc = ConfigDoc {
+        path: path.display().to_string(),
+        exists: path.exists(),
+        ..ConfigDoc::default()
+    };
     let raw: Option<serde_yaml::Value> = std::fs::read_to_string(&path)
         .ok()
         .and_then(|text| serde_yaml::from_str(&text).ok());
     let effective = config::load_config_file(speck_home).and_then(|(file, warnings)| {
-        for warning in &warnings {
-            println!("  warning: {}", warning.message);
-        }
+        doc.warnings = warnings.into_iter().map(|w| w.message).collect();
         let no_flags = crate::UpArgs::try_parse_from(["up"])?;
         config::resolve_effective_config(file, &no_flags)
     });
     let effective = match effective {
         Ok(effective) => effective,
         Err(e) => {
-            println!("  invalid: {e:#}");
-            return Ok(1);
+            doc.errors.push(format!("{e:#}"));
+            return doc;
         }
     };
-    let missing: Vec<&String> = effective
+    doc.errors = effective
         .extra_certs
         .iter()
         .filter(|cert| !Path::new(cert).is_file())
+        .map(|cert| format!("ca.extra_certs: {cert} does not exist"))
         .collect();
-    for cert in &missing {
-        println!("  invalid: ca.extra_certs: {cert} does not exist");
+    if !doc.errors.is_empty() {
+        return doc;
     }
-    if !missing.is_empty() {
-        return Ok(1);
+    doc.valid = true;
+    doc.settings = rows(&effective, raw.as_ref());
+    doc.running_vm = running_vm(speck_home).filter(|running| *running != effective.vm);
+    doc
+}
+
+/// Exit code 0 when the configuration is valid, 1 otherwise.
+pub fn run_config(speck_home: &Path, format: Output) -> anyhow::Result<i32> {
+    let doc = build(speck_home);
+    let code = if doc.valid { 0 } else { 1 };
+    if !format.is_plain() {
+        output::emit(format, &doc)?;
+        return Ok(code);
+    }
+    println!("Config: {}", doc.path);
+    for warning in &doc.warnings {
+        println!("  warning: {warning}");
+    }
+    for error in &doc.errors {
+        println!("  invalid: {error}");
+    }
+    if !doc.valid {
+        return Ok(code);
     }
     println!(
         "  {}\n",
-        if path.exists() {
+        if doc.exists {
             "valid"
         } else {
             "not found; using defaults"
         }
     );
 
-    let rows = rows(&effective, raw.as_ref());
-    let width = rows.iter().map(|r| r.key.len()).max().unwrap_or(0);
-    let value_width = rows.iter().map(|r| r.value.len()).max().unwrap_or(0);
-    for row in &rows {
+    let width = doc.settings.iter().map(|r| r.key.len()).max().unwrap_or(0);
+    let value_width = doc.settings.iter().map(|r| r.text.len()).max().unwrap_or(0);
+    for row in &doc.settings {
         println!(
             "{:width$}  {:value_width$}  {}",
-            row.key, row.value, row.source
+            row.key, row.text, row.source
         );
     }
 
-    if let Some(running) = running_vm(speck_home)
-        && running != effective.vm
-    {
+    if let Some(running) = &doc.running_vm {
         println!(
             "\nThe running VM uses {} CPUs, {} MiB memory, {} GiB disk; \
              run `spk restart` to apply the settings above.",
             running.cpus, running.memory_mb, running.disk_gb
         );
     }
-    Ok(0)
+    Ok(code)
 }
 
 fn rows(effective: &EffectiveConfig, raw: Option<&serde_yaml::Value>) -> Vec<Row> {
@@ -101,42 +142,50 @@ fn rows(effective: &EffectiveConfig, raw: Option<&serde_yaml::Value>) -> Vec<Row
     vec![
         Row {
             key: "vm.cpus",
-            value: vm.cpus.to_string(),
+            value: vm.cpus.into(),
+            text: vm.cpus.to_string(),
             source: source("vm.cpus", Some("SPECK_VM_CPUS")),
         },
         Row {
             key: "vm.memory_mb",
-            value: format!("{} ({})", vm.memory_mb, human_mib(vm.memory_mb)),
+            value: vm.memory_mb.into(),
+            text: format!("{} ({})", vm.memory_mb, human_mib(vm.memory_mb)),
             source: source("vm.memory_mb", Some("SPECK_VM_MEMORY_MB")),
         },
         Row {
             key: "vm.disk_gb",
-            value: vm.disk_gb.to_string(),
+            value: vm.disk_gb.into(),
+            text: vm.disk_gb.to_string(),
             source: source("vm.disk_gb", Some("SPECK_VM_DISK_GB")),
         },
         Row {
             key: "autostart",
-            value: effective.autostart.to_string(),
+            value: effective.autostart.into(),
+            text: effective.autostart.to_string(),
             source: source("autostart", None),
         },
         Row {
             key: "log_level",
-            value: effective.log_level.clone(),
+            value: effective.log_level.clone().into(),
+            text: effective.log_level.clone(),
             source: source("log_level", Some("SPECK_LOG_LEVEL")),
         },
         Row {
             key: "ca.keychain",
-            value: effective.ca_from_keychain.to_string(),
+            value: effective.ca_from_keychain.into(),
+            text: effective.ca_from_keychain.to_string(),
             source: source("ca.keychain", None),
         },
         Row {
             key: "ca.inject_into_containers",
-            value: effective.inject_ca_into_containers.to_string(),
+            value: effective.inject_ca_into_containers.into(),
+            text: effective.inject_ca_into_containers.to_string(),
             source: source("ca.inject_into_containers", None),
         },
         Row {
             key: "ca.extra_certs",
-            value: certs,
+            value: effective.extra_certs.clone().into(),
+            text: certs,
             source: source("ca.extra_certs", None),
         },
     ]
@@ -174,6 +223,51 @@ mod tests {
         assert_eq!(human_mib(6144), "6 GiB");
         assert_eq!(human_mib(1536), "1.5 GiB");
         assert_eq!(human_mib(512), "512 MiB");
+    }
+
+    #[test]
+    fn invalid_config_is_a_document_with_the_error() {
+        let dir = std::env::temp_dir().join(format!("speck-config-doc-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("config.yaml"),
+            "version: 1\nvm:\n  memory_mb: 6x\n",
+        )
+        .unwrap();
+        let doc = build(&dir);
+        assert!(!doc.valid && doc.settings.is_empty());
+        let v: serde_json::Value =
+            serde_json::from_str(&output::render(Output::Json, &doc).unwrap()).unwrap();
+        assert_eq!(v["valid"], false);
+        assert!(v["errors"][0].as_str().unwrap().contains("vm.memory_mb"));
+    }
+
+    #[test]
+    fn settings_are_typed_in_the_document() {
+        let rows = temp_env::with_vars(
+            [
+                ("SPECK_VM_CPUS", None::<&str>),
+                ("SPECK_VM_MEMORY_MB", None),
+                ("SPECK_LOG_LEVEL", None),
+            ],
+            || rows(&EffectiveConfig::default(), None),
+        );
+        let v: serde_json::Value =
+            serde_json::from_str(&output::render(Output::Json, &rows).unwrap()).unwrap();
+        let get = |key: &str| {
+            v.as_array()
+                .unwrap()
+                .iter()
+                .find(|r| r["key"] == key)
+                .unwrap()
+                .clone()
+        };
+        assert_eq!(get("vm.memory_mb")["value"], 2048);
+        assert_eq!(get("autostart")["value"], true);
+        assert_eq!(get("ca.extra_certs")["value"], serde_json::json!([]));
+        assert_eq!(get("vm.cpus")["source"], "default");
+        assert!(get("vm.memory_mb").get("text").is_none());
     }
 
     #[test]

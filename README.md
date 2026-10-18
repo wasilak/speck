@@ -43,8 +43,8 @@ cp target/aarch64-apple-darwin/release/spk /usr/local/bin/spk
 
 ```bash
 spk start       # start the VM; selects the 'speck' docker context
-spk status      # -e: resources, container counts, versions; -j: JSON
-spk list        # colima-style instance table (-j: JSON)
+spk status      # -e: resources, container counts, versions
+spk list        # colima-style instance table
 spk version     # spk, docker and guest versions
 spk restart
 spk stop        # stop the VM; switches docker back to the 'default' context
@@ -54,6 +54,16 @@ spk prune       # delete cached downloads Speck no longer uses
 spk delete      # remove the VM with all containers, images and volumes
 spk recreate    # delete the VM and start a fresh one (keeps downloads and config)
 spk profile ls  # profiles: independent instances (see below)
+```
+
+`status`, `list`, `profile ls`, `profile current`, `config`, `version` and
+`doctor` print JSON or YAML with `-o json` or `-o yaml` (`-j` is short for
+`-o json`). Only the document goes to stdout, and the exit code does not
+depend on the format, so scripts can rely on both:
+
+```bash
+spk status -o json | jq .running
+spk config -o yaml
 ```
 
 On first start Speck downloads the guest assets (~200 MB: Linux kernel,

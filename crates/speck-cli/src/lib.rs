@@ -9,6 +9,7 @@ mod config;
 pub mod docker_client;
 mod docker_context;
 mod keychain;
+mod output;
 mod profile;
 mod shell;
 mod size;

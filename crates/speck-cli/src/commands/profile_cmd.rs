@@ -66,8 +66,26 @@ pub fn run_use(name: &str) -> anyhow::Result<()> {
 }
 
 /// `spk profile current`: the profile this invocation resolves to.
-pub fn run_current() {
-    println!("{}", profile::current().name);
+pub fn run_current(format: crate::output::Output) -> anyhow::Result<()> {
+    let current = profile::current();
+    if format.is_plain() {
+        println!("{}", current.name);
+        return Ok(());
+    }
+    #[derive(serde::Serialize)]
+    struct Doc {
+        profile: String,
+        home: String,
+        docker_context: Option<String>,
+    }
+    crate::output::emit(
+        format,
+        &Doc {
+            docker_context: current.managed().then(|| current.docker_context()),
+            home: current.home.display().to_string(),
+            profile: current.name,
+        },
+    )
 }
 
 /// `spk profile create <name>`: create the profile and its config.yaml

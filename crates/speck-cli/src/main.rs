@@ -9,6 +9,7 @@ mod config;
 mod docker_client;
 mod docker_context;
 mod keychain;
+mod output;
 mod profile;
 mod shell;
 mod size;
@@ -24,6 +25,9 @@ struct Cli {
     /// Profile to act on [default: $SPECK_PROFILE, then `spk profile use`, then `default`]
     #[arg(short = 'p', long, global = true, value_name = "NAME")]
     profile: Option<String>,
+    /// Output format of status, list, profile ls/current, config, version and doctor
+    #[arg(short = 'o', long, global = true, value_enum, default_value_t = output::Output::Plain)]
+    output: output::Output,
     #[command(subcommand)]
     command: Commands,
 }
@@ -77,6 +81,26 @@ enum Commands {
     Recreate(DeleteArgs),
     /// Manage profiles: independent Speck instances (like `colima -p`)
     Profile(ProfileArgs),
+}
+
+impl Commands {
+    /// Whether the command prints a document for `-o json|yaml`.
+    fn supports_output(&self) -> bool {
+        match self {
+            Commands::Status(_)
+            | Commands::List(_)
+            | Commands::Config
+            | Commands::Version
+            | Commands::Doctor(_) => true,
+            Commands::Profile(args) => {
+                matches!(
+                    args.command,
+                    ProfileCommand::Ls(_) | ProfileCommand::Current
+                )
+            }
+            _ => false,
+        }
+    }
 }
 
 #[derive(Parser)]
@@ -304,6 +328,14 @@ mod tests {
             .find("#[cfg(test)]")
             .unwrap_or(MAIN_SOURCE.len());
         &MAIN_SOURCE[..end]
+    }
+
+    #[test]
+    fn cli_definition_is_consistent() {
+        // Catches clashing flags, e.g. a subcommand short option that
+        // collides with the global -p/-o.
+        use clap::CommandFactory as _;
+        super::Cli::command().debug_assert();
     }
 
     #[test]
@@ -571,6 +603,12 @@ mod tests {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    anyhow::ensure!(
+        cli.output.is_plain() || cli.command.supports_output(),
+        "-o json|yaml is supported only by status, list, profile ls, profile current, \
+         config, version and doctor"
+    );
+    let format = cli.output;
     let profile = profile::select(cli.profile.as_deref())?;
     if profile.managed() {
         // Child `spk` processes (restart, recreate) act on the same profile.
@@ -729,40 +767,43 @@ async fn main() -> anyhow::Result<()> {
         }
         Commands::Doctor(args) => {
             init_tracing(&default_tracing_filter())?;
-            let code = commands::doctor::run_doctor(&speck_home, args).await?;
+            let code = commands::doctor::run_doctor(&speck_home, args, format).await?;
             if code != 0 {
                 std::process::exit(code);
             }
         }
         Commands::Config => {
-            let code = commands::config_cmd::run_config(&speck_home)?;
+            let code = commands::config_cmd::run_config(&speck_home, format)?;
             if code != 0 {
                 std::process::exit(code);
             }
         }
         Commands::Status(args) => {
             init_tracing(&default_tracing_filter())?;
-            let code = commands::status::run_status(args.extended, args.json).await?;
+            let code =
+                commands::status::run_status(args.extended, format.or_json(args.json)).await?;
             if code != 0 {
                 std::process::exit(code);
             }
         }
         Commands::List(args) => {
             init_tracing(&default_tracing_filter())?;
-            commands::status::run_list(args.json).await?
+            commands::status::run_list(format.or_json(args.json)).await?
         }
         Commands::Version => {
             init_tracing(&default_tracing_filter())?;
-            commands::status::run_version().await?
+            commands::status::run_version(format).await?
         }
         Commands::Prune(args) => {
             init_tracing(&default_tracing_filter())?;
             commands::prune::run_prune(args.force, &speck_home)?
         }
         Commands::Profile(args) => match args.command {
-            ProfileCommand::Ls(list) => commands::status::run_list(list.json).await?,
+            ProfileCommand::Ls(list) => {
+                commands::status::run_list(format.or_json(list.json)).await?
+            }
             ProfileCommand::Use { name } => commands::profile_cmd::run_use(&name)?,
-            ProfileCommand::Current => commands::profile_cmd::run_current(),
+            ProfileCommand::Current => commands::profile_cmd::run_current(format)?,
             ProfileCommand::Create {
                 name,
                 cpus,
