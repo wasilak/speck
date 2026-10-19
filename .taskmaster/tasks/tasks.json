@@ -1139,8 +1139,9 @@
           "2",
           "8"
         ],
-        "status": "pending",
-        "subtasks": []
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2026-10-19T13:20:53.993Z"
       },
       {
         "id": "10",
@@ -1186,9 +1187,9 @@
     ],
     "metadata": {
       "version": "1.0.0",
-      "lastModified": "2026-10-19T06:36:23.602Z",
+      "lastModified": "2026-10-19T13:20:53.993Z",
       "taskCount": 12,
-      "completedCount": 11,
+      "completedCount": 12,
       "tags": [
         "v1_5-cli-parity"
       ]
