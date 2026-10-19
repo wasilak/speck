@@ -374,22 +374,8 @@ fn lock_assets(assets: &Path) -> anyhow::Result<std::fs::File> {
 /// `--pull`, like colima). Containers, images and volumes live on data.img
 /// and are kept; the guest trust store is rebuilt at every boot.
 fn refresh_stale_assets(speck_home: &Path, assets: &Path) -> anyhow::Result<()> {
-    let assets = [
-        (
-            "rootfs",
-            speck_home.join("rootfs.version"),
-            speck_home.join("rootfs.img"),
-            ROOTFS_VERSION,
-        ),
-        (
-            "initrd",
-            assets.join("initrd/initrd.version"),
-            assets.join("initrd/initrd.cpio.gz"),
-            INITRD_VERSION,
-        ),
-    ];
-    for (name, version_file, asset, required) in assets {
-        if let Some(found) = stale_version(&version_file, required)? {
+    for (name, version_file, asset, required) in versioned_assets(speck_home, assets) {
+        if let Some(found) = stale_asset(name, &version_file, &asset, required)? {
             println!("  Updating {name} {found} -> {required}...");
             tracing::info!(asset = name, from = %found, to = required, "refreshing stale guest asset");
             for path in [&asset, &version_file] {
@@ -406,6 +392,42 @@ fn refresh_stale_assets(speck_home: &Path, assets: &Path) -> anyhow::Result<()> 
     Ok(())
 }
 
+/// `(name, version file, asset, version this binary needs)`.
+fn versioned_assets(
+    speck_home: &Path,
+    assets: &Path,
+) -> [(&'static str, PathBuf, PathBuf, &'static str); 2] {
+    [
+        (
+            "rootfs",
+            speck_home.join("rootfs.version"),
+            speck_home.join("rootfs.img"),
+            ROOTFS_VERSION,
+        ),
+        (
+            "initrd",
+            assets.join("initrd/initrd.version"),
+            assets.join("initrd/initrd.cpio.gz"),
+            INITRD_VERSION,
+        ),
+    ]
+}
+
+/// The on-disk version of a stale asset. A rootfs without a version file
+/// predates versioning (installs older than 1.4) and is stale too; an
+/// initrd without one is a local dev build and is kept.
+fn stale_asset(
+    name: &str,
+    version_file: &Path,
+    asset: &Path,
+    required: &str,
+) -> anyhow::Result<Option<String>> {
+    if name == "rootfs" && asset.exists() && !version_file.exists() {
+        return Ok(Some("unversioned".to_owned()));
+    }
+    stale_version(version_file, required)
+}
+
 /// On-disk version from `path` when it differs from `required`.
 /// Guest assets on disk whose version differs from this binary, as
 /// `(name, on_disk, required)`. `refresh_stale_assets` replaces them at the
@@ -414,22 +436,15 @@ pub(crate) fn asset_drift(
     speck_home: &Path,
     assets: &Path,
 ) -> Vec<(&'static str, String, &'static str)> {
-    [
-        ("rootfs", speck_home.join("rootfs.version"), ROOTFS_VERSION),
-        (
-            "initrd",
-            assets.join("initrd/initrd.version"),
-            INITRD_VERSION,
-        ),
-    ]
-    .into_iter()
-    .filter_map(|(name, file, required)| {
-        stale_version(&file, required)
-            .ok()
-            .flatten()
-            .map(|found| (name, found, required))
-    })
-    .collect()
+    versioned_assets(speck_home, assets)
+        .into_iter()
+        .filter_map(|(name, file, asset, required)| {
+            stale_asset(name, &file, &asset, required)
+                .ok()
+                .flatten()
+                .map(|found| (name, found, required))
+        })
+        .collect()
 }
 
 fn stale_version(path: &Path, required: &str) -> anyhow::Result<Option<String>> {
@@ -1635,6 +1650,21 @@ mod tests {
         refresh_stale_assets(&dir, &dir).unwrap();
         assert!(dir.join("rootfs.img").exists());
         assert!(dir.join("initrd/initrd.cpio.gz").exists());
+    }
+
+    #[test]
+    fn unversioned_rootfs_is_replaced_and_unversioned_initrd_kept() {
+        let dir = asset_home("unversioned", ROOTFS_VERSION, INITRD_VERSION);
+        std::fs::remove_file(dir.join("rootfs.version")).unwrap();
+        std::fs::remove_file(dir.join("initrd/initrd.version")).unwrap();
+        assert_eq!(
+            asset_drift(&dir, &dir),
+            [("rootfs", "unversioned".to_owned(), ROOTFS_VERSION)]
+        );
+        refresh_stale_assets(&dir, &dir).unwrap();
+        assert!(!dir.join("rootfs.img").exists());
+        assert!(dir.join("initrd/initrd.cpio.gz").exists());
+        assert!(dir.join("data.img").exists());
     }
 
     #[test]
