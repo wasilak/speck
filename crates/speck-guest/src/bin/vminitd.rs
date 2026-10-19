@@ -173,6 +173,8 @@ mod linux {
             std::process::exit(1);
         }
         eprintln!("vminitd: switched root to /rootfs");
+        // PTYs for interactive `spk ssh` sessions.
+        mount_devpts();
 
         // Install CA certificates and configure containerd before starting
         // the container runtime (CERT-02, CERT-03).
@@ -235,6 +237,9 @@ mod linux {
         });
 
         send_ready_signal(ready_port);
+
+        // `spk ssh`: dropbear on 127.0.0.1:22, reached over the tcp forwarder.
+        speck_guest::ssh::spawn_supervised(parse_cmdline_speck_home("/proc/cmdline"));
 
         // Forward dockerd's Unix socket over vsock port 9003.
         std::thread::spawn(move || {
@@ -687,6 +692,27 @@ mod linux {
     /// can use it.
     ///
     /// Non-fatal on error — Ryuk will simply not have Docker socket access.
+    /// Mount devpts at /dev/pts (after switch_root) so dropbear can allocate
+    /// PTYs. Containers get their own devpts from runc.
+    fn mount_devpts() {
+        let _ = std::fs::create_dir_all("/dev/pts");
+        let ret = unsafe {
+            libc::mount(
+                c"devpts".as_ptr(),
+                c"/dev/pts".as_ptr(),
+                c"devpts".as_ptr(),
+                libc::MS_NOSUID | libc::MS_NOEXEC,
+                c"gid=5,mode=620,ptmxmode=666".as_ptr().cast(),
+            )
+        };
+        if ret < 0 {
+            eprintln!(
+                "vminitd: failed to mount devpts at /dev/pts: {:?}",
+                io::Error::last_os_error()
+            );
+        }
+    }
+
     fn mount_speck_home(cmdline_path: &str) {
         let tag = match parse_cmdline_speck_home_tag(cmdline_path) {
             Some(t) => t,

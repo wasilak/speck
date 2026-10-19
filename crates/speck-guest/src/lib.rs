@@ -11,6 +11,7 @@ pub mod reaper;
 pub mod shutdown;
 #[cfg(target_os = "linux")]
 pub mod sock_forwarder;
+pub mod ssh;
 #[cfg(target_os = "linux")]
 pub mod tcp_forwarder;
 pub mod time_sync;
