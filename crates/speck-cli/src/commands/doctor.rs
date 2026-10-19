@@ -414,6 +414,114 @@ async fn check_guest_clock(speck_home: &Path) -> CheckResult {
     clock_result(guest, host)
 }
 
+/// Run `command` in the guest over `spk ssh`, with a timeout. `None` when
+/// ssh is not available (VM stopped, old rootfs, no key).
+async fn guest_exec(command: &str) -> Option<(i32, String)> {
+    let profile = crate::profile::current();
+    let home = &profile.home;
+    std::os::unix::net::UnixStream::connect(crate::commands::ssh::ssh_socket(home)).ok()?;
+    if !crate::commands::ssh::identity_file(home).exists() {
+        return None;
+    }
+    let spk = crate::commands::ssh::spk_path().ok()?;
+    let mut argv = vec!["-o".to_owned(), "BatchMode=yes".to_owned()];
+    argv.extend(crate::commands::ssh::ssh_argv(
+        &profile,
+        &spk,
+        &[command.to_owned()],
+    ));
+    let output = tokio::time::timeout(
+        Duration::from_secs(15),
+        tokio::process::Command::new("ssh")
+            .args(&argv)
+            .stdin(std::process::Stdio::null())
+            .output(),
+    )
+    .await
+    .ok()?
+    .ok()?;
+    let code = output.status.code()?;
+    // 255: ssh itself failed (auth, connection), not the command.
+    (code != 255).then(|| (code, String::from_utf8_lossy(&output.stdout).into_owned()))
+}
+
+/// Base64 bodies of the PEM certificates in `pem`, whitespace removed.
+fn pem_bodies(pem: &str) -> Vec<String> {
+    pem.split("-----BEGIN CERTIFICATE-----")
+        .skip(1)
+        .filter_map(|rest| rest.split("-----END CERTIFICATE-----").next())
+        .map(|body| body.split_whitespace().collect())
+        .collect()
+}
+
+/// Staged certificates missing from the guest bundle, by file name.
+fn missing_certs(staged: &[(String, String)], guest_bundle: &str) -> Vec<String> {
+    let guest: std::collections::HashSet<String> = pem_bodies(guest_bundle).into_iter().collect();
+    staged
+        .iter()
+        .filter(|(_, pem)| pem_bodies(pem).iter().any(|body| !guest.contains(body)))
+        .map(|(name, _)| name.clone())
+        .collect()
+}
+
+/// The staged corporate CAs (config + Keychain) must be in the guest trust
+/// store, or `docker pull` fails behind TLS inspection (OPS-03b).
+async fn check_guest_ca(speck_home: &Path) -> CheckResult {
+    let staged: Vec<(String, String)> = std::fs::read_dir(speck_home.join("ca-certs"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|x| x == "pem"))
+        .filter_map(|e| {
+            let pem = std::fs::read_to_string(e.path()).ok()?;
+            Some((e.file_name().to_string_lossy().into_owned(), pem))
+        })
+        .collect();
+    if staged.is_empty() {
+        return CheckResult::Skip {
+            reason: "no corporate CA certificates staged".into(),
+        };
+    }
+    let Some((0, bundle)) = guest_exec("cat /etc/ssl/certs/ca-certificates.crt").await else {
+        return CheckResult::Skip {
+            reason: "guest not reachable over `spk ssh`".into(),
+        };
+    };
+    let missing = missing_certs(&staged, &bundle);
+    if missing.is_empty() {
+        CheckResult::PassWithDetail {
+            detail: format!(
+                "{} staged certificate file(s) trusted in the guest",
+                staged.len()
+            ),
+        }
+    } else {
+        CheckResult::Fail {
+            hint: format!(
+                "not in the guest trust store: {}; run `spk restart`",
+                missing.join(", ")
+            ),
+        }
+    }
+}
+
+/// TCP egress from the guest itself (the path `docker pull` takes).
+async fn check_guest_egress() -> CheckResult {
+    match guest_exec("nc -z -w5 registry-1.docker.io 443").await {
+        None => CheckResult::Skip {
+            reason: "guest not reachable over `spk ssh`".into(),
+        },
+        Some((0, _)) => CheckResult::PassWithDetail {
+            detail: "guest reaches registry-1.docker.io:443".into(),
+        },
+        Some(_) => CheckResult::Fail {
+            hint: "the guest cannot reach registry-1.docker.io:443; check the network or VPN, \
+                   then `spk logs`"
+                .into(),
+        },
+    }
+}
+
 // ──────────────────────────────────────────────────────────────
 // DNS full-path trace (DOCTOR-03)
 // ──────────────────────────────────────────────────────────────
@@ -534,7 +642,7 @@ pub async fn run_doctor_dns(_speck_home: &Path, hostname: &str) -> anyhow::Resul
 ///
 /// Check order: codesign entitlement, DOCKER_HOST, cert injection, VM resources,
 /// public DNS, VPN DNS, VM running, Docker socket, daemon version, guest
-/// assets, guest clock.
+/// assets, guest clock, guest CA, guest egress.
 pub async fn run_doctor(
     speck_home: &Path,
     args: DoctorArgs,
@@ -597,12 +705,28 @@ async fn run_checks(speck_home: &Path) -> Vec<(&'static str, CheckResult)> {
             check_guest_assets(speck_home, &crate::profile::current().assets),
         ),
         ("guest clock", check_guest_clock(speck_home).await),
+        ("guest CA", check_guest_ca(speck_home).await),
+        ("guest egress", check_guest_egress().await),
     ]
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn staged_certs_missing_from_the_guest_bundle_are_listed() {
+        let a = "-----BEGIN CERTIFICATE-----\nAAAA\nBBBB\n-----END CERTIFICATE-----\n";
+        let b = "-----BEGIN CERTIFICATE-----\nCCCC\n-----END CERTIFICATE-----\n";
+        let staged = vec![
+            ("a.pem".to_owned(), a.to_owned()),
+            ("b.pem".to_owned(), b.to_owned()),
+        ];
+        // Line wrapping differs between the staged file and the bundle.
+        let bundle = "# roots\n-----BEGIN CERTIFICATE-----\nAAAABBBB\n-----END CERTIFICATE-----\n";
+        assert_eq!(missing_certs(&staged, bundle), ["b.pem"]);
+        assert!(missing_certs(&staged[..1], bundle).is_empty());
+    }
 
     #[test]
     fn rfc3339_parses_dockerd_system_time() {
@@ -819,7 +943,13 @@ mod tests {
     #[test]
     fn run_doctor_has_the_daemon_and_guest_checks() {
         let src = production_code();
-        for label in ["\"daemon version\"", "\"guest assets\"", "\"guest clock\""] {
+        for label in [
+            "\"daemon version\"",
+            "\"guest assets\"",
+            "\"guest clock\"",
+            "\"guest CA\"",
+            "\"guest egress\"",
+        ] {
             assert!(src.contains(label), "run_checks must include {label}");
         }
         assert!(
