@@ -25,12 +25,12 @@ use crate::docker_client::DockerClient;
 use crate::shell::{self, EnvShell};
 use crate::theme::{NEON_CYAN, RESET};
 
-const ROOTFS_VERSION: &str = "1.3.0";
+const ROOTFS_VERSION: &str = "1.4.0";
 const ROOTFS_BACKEND: &str = "moby";
 const KATA_VERSION: &str = "3.32.0";
 const KATA_KERNEL_FILE: &str = "vmlinux-6.18.35-197";
 pub(crate) const KATA_INITRD_FILE: &str = "kata-alpine-3.22.initrd";
-const INITRD_VERSION: &str = "1.4.7";
+const INITRD_VERSION: &str = "1.5.0";
 
 /// Returns true when running interactively (stderr is a TTY and not launched as
 /// a launchd daemon). Used to decide whether to show curl progress bars.
