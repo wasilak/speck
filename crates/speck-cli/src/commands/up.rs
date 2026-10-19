@@ -859,6 +859,10 @@ pub async fn run_up(
         }
         ensure_assets(speck_home, assets, effective.vm.disk_gb, args.pull).await?;
     }
+    // `spk ssh`: the guest reads authorized_keys from the Speck home.
+    if let Err(e) = super::ssh::ensure_keys(speck_home, &crate::profile::current().name) {
+        tracing::warn!(error = %e, "cannot create the ssh key; `spk ssh` will not work");
+    }
 
     let kernel_path = args
         .kernel
@@ -1025,6 +1029,15 @@ pub async fn run_up(
     tracing::info!("Docker API server started at {}", sock_path.display());
 
     spawn_guest_clock_sync(guest.clone());
+
+    let ssh_sock = super::ssh::ssh_socket(speck_home);
+    if let Err(e) = speck_dockerd::proxy::spawn_guest_loopback_socket(
+        guest.clone(),
+        &ssh_sock,
+        super::ssh::GUEST_SSH_PORT,
+    ) {
+        tracing::warn!(error = %e, path = %ssh_sock.display(), "cannot serve the ssh socket");
+    }
 
     // Select the 'speck' docker context like `colima start` does (UX-01).
     tokio::task::spawn_blocking({

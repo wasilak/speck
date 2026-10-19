@@ -1506,6 +1506,97 @@ fn bridge_host_to_guest_tcp(
     Ok(())
 }
 
+/// Serve `socket_path` (0600): each connection is bridged to `target_port`
+/// on the guest's own loopback through the vsock TCP forwarder. Used for
+/// `<home>/ssh.sock` (`spk ssh`), so the guest port is never published on
+/// the Mac's network.
+pub fn spawn_guest_loopback_socket(
+    guest: Arc<speck_vz::Guest>,
+    socket_path: &std::path::Path,
+    target_port: u16,
+) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+    let _ = std::fs::remove_file(socket_path);
+    let listener = std::os::unix::net::UnixListener::bind(socket_path)?;
+    std::fs::set_permissions(socket_path, std::fs::Permissions::from_mode(0o600))?;
+    std::thread::spawn(move || {
+        for client in listener.incoming() {
+            let client = match client {
+                Ok(client) => client,
+                Err(err) => {
+                    tracing::warn!(error = %err, "guest loopback socket accept failed");
+                    continue;
+                }
+            };
+            let guest = guest.clone();
+            std::thread::spawn(move || {
+                if let Err(err) = bridge_unix_to_guest_loopback(guest, target_port, client) {
+                    tracing::warn!(error = %err, target_port, "guest loopback bridge failed");
+                }
+            });
+        }
+    });
+    Ok(())
+}
+
+fn bridge_unix_to_guest_loopback(
+    guest: Arc<speck_vz::Guest>,
+    target_port: u16,
+    client: std::os::unix::net::UnixStream,
+) -> std::io::Result<()> {
+    let mut guest_stream = guest
+        .vsock_connect(TCP_FORWARDER_VSOCK_PORT)
+        .map_err(|err| std::io::Error::other(err.to_string()))?
+        .into_unix_stream();
+    write_all_retrying_wouldblock(
+        &mut guest_stream,
+        format!("{}:{target_port}\n", Ipv4Addr::LOCALHOST).as_bytes(),
+    )?;
+
+    let mut client_reader = client.try_clone()?;
+    let mut client_writer = client;
+    let mut guest_writer = guest_stream.try_clone()?;
+    let h2g = std::thread::spawn(move || {
+        let _ = copy_retrying_wouldblock(&mut client_reader, &mut guest_writer);
+        let _ = guest_writer.shutdown(Shutdown::Write);
+    });
+
+    // Invariant #4: drain the vsock fd eagerly into memory so a slow client
+    // never stalls reads from it.
+    use std::io::Read as _;
+    use std::os::unix::io::AsRawFd as _;
+    let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
+    let drain = std::thread::spawn(move || {
+        let mut buf = vec![0u8; 65536];
+        loop {
+            match guest_stream.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    if tx.send(buf[..n].to_vec()).is_err() {
+                        break;
+                    }
+                }
+                Err(e) if e.kind() == ErrorKind::WouldBlock => {
+                    if wait_for_fd(guest_stream.as_raw_fd(), libc::POLLIN).is_err() {
+                        break;
+                    }
+                }
+                Err(e) if e.kind() == ErrorKind::Interrupted => {}
+                Err(_) => break,
+            }
+        }
+    });
+    for chunk in rx {
+        if write_all_retrying_wouldblock(&mut client_writer, &chunk).is_err() {
+            break;
+        }
+    }
+    let _ = client_writer.shutdown(Shutdown::Write);
+    let _ = drain.join();
+    let _ = h2g.join();
+    Ok(())
+}
+
 /// Copy bytes from `src` to `dst` until EOF, retrying `WouldBlock` on both
 /// reads and writes by waiting for fd readiness via `poll()` instead of
 /// treating it as fatal.

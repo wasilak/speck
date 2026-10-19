@@ -67,6 +67,13 @@ enum Commands {
     Config,
     /// Edit config.yaml in $VISUAL/$EDITOR; creates a commented template first
     Template,
+    /// Open a shell in the VM, or run `spk ssh -- <command>` (like `colima ssh`)
+    Ssh(SshArgs),
+    /// Print an OpenSSH config block: `spk ssh-config >> ~/.ssh/config`
+    SshConfig,
+    /// OpenSSH ProxyCommand used by `spk ssh` and `spk ssh-config`
+    #[command(hide = true)]
+    SshProxy,
     /// Show Speck status (like `colima status`)
     Status(StatusArgs),
     /// List Speck instances (like `colima list`)
@@ -103,6 +110,13 @@ impl Commands {
             _ => false,
         }
     }
+}
+
+#[derive(Parser)]
+struct SshArgs {
+    /// Command to run in the VM instead of an interactive shell
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    command: Vec<String>,
 }
 
 #[derive(Parser)]
@@ -801,6 +815,12 @@ async fn main() -> anyhow::Result<()> {
                 std::process::exit(code);
             }
         }
+        Commands::Ssh(args) => {
+            let code = commands::ssh::run_ssh(profile, &args.command)?;
+            std::process::exit(code);
+        }
+        Commands::SshConfig => commands::ssh::run_ssh_config(profile)?,
+        Commands::SshProxy => commands::ssh::run_ssh_proxy(profile).await?,
         Commands::Template => {
             let code = commands::template::run_template(&speck_home, profile)?;
             if code != 0 {
