@@ -119,10 +119,22 @@ docker run --rm alpine wget -qO- https://<internal host> >/dev/null && echo OK
 | WARP off → on | | |
 | WARP on → off | | |
 | Wi-Fi network switch | | |
-| Sleep 10 min → wake | | also `docker run --rm alpine date` vs host `date` |
+| Sleep 10 min → wake | | also `spk doctor` → `guest clock` within 2 s |
 | Sleep overnight → wake | | |
 | macOS reboot (Speck auto-starts?) | | |
 | `spk restart` | | |
+
+## M4 — SSH and profiles (v1.5)
+
+| Check | Command | Result |
+|---|---|---|
+| Shell in the VM | `spk ssh`, then `ps` shows dockerd and containerd | |
+| Command and exit code | `spk ssh -- uname -a; echo $?` → 0, `spk ssh -- false; echo $?` → 1 | |
+| ssh-config | `spk ssh-config >> ~/.ssh/config`, then `ssh speck uname -a` | |
+| VS Code Remote-SSH | Remote-SSH: Connect to Host → `speck`; a terminal opens in the VM | |
+| Second profile over ssh | `spk start -p work`, `spk ssh -p work -- hostname` | |
+| Two profiles after reboot | `spk start -p work`, reboot the Mac; `spk list` shows both running, `docker context show` is `speck` | |
+| Guest checks | `spk doctor`: `guest CA` and `guest egress` pass (with WARP on) | |
 
 ## M3 — Dogfood week (Phase 30)
 

@@ -55,6 +55,7 @@ spk prune       # delete cached downloads Speck no longer uses
 spk delete      # remove the VM with all containers, images and volumes
 spk recreate    # delete the VM and start a fresh one (keeps downloads and config)
 spk profile ls  # profiles: independent instances (see below)
+spk ssh         # shell in the VM; spk ssh -- <command> runs one command
 ```
 
 `status`, `list`, `profile ls`, `profile current`, `config`, `version` and
@@ -182,6 +183,28 @@ spk start --no-autostart --cpus 2 --memory 2g --wait
 DOCKER_HOST=unix://$HOME/.speck/profiles/$SPECK_PROFILE/speck.sock ./run-tests.sh
 spk delete --force
 ```
+
+## SSH into the VM
+
+`spk ssh` opens a root shell in the VM, like `colima ssh`. `spk ssh -- <command>`
+runs one command and returns its exit code:
+
+```bash
+spk ssh -- uname -a
+spk ssh -p work -- df -h    # another profile
+```
+
+For `ssh`, `scp` and VS Code Remote-SSH, add the host to your SSH config:
+
+```bash
+spk ssh-config >> ~/.ssh/config   # host "speck", or "speck-<name>" with -p
+ssh speck
+```
+
+Speck creates a key pair in `~/.speck/ssh/` on first start. The SSH server
+in the VM listens only on the VM's own loopback interface: containers and
+other machines cannot reach it. Connections go through the Speck socket, so
+no port is opened on the Mac.
 
 ## Environment variables
 

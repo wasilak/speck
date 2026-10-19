@@ -4,7 +4,7 @@
 # Runs the colima-style CLI end to end on a throwaway CI profile: profile
 # create/ls/rm, template, config, start --no-autostart --wait, status,
 # version, -o json/yaml, a container through the profile's docker context,
-# and delete. The default profile, the current profile and the active docker
+# ssh and ssh-config, and delete. The default profile, the current profile and the active docker
 # context must stay untouched.
 #
 # Usage: ./scripts/cli-smoke.sh
@@ -57,6 +57,15 @@ check "container via $CTX"        docker --context "$CTX" run --rm alpine:latest
 check "DOCKER_HOST to the socket" env DOCKER_HOST="unix://$home/speck.sock" docker ps
 check "docker context unchanged"  test "$(docker context show 2>/dev/null)" = "$context_before"
 check "start again is a no-op"    sh -c "'$SPK' -p '$P' start | grep -q 'already running'"
+
+# SSH (rootfs 1.4.0+)
+check "ssh -- true"               "$SPK" -p "$P" ssh -- true
+check "ssh passes the exit code"  sh -c "'$SPK' -p '$P' ssh -- 'exit 3'; test \$? -eq 3"
+check "ssh sees dockerd"          sh -c "'$SPK' -p '$P' ssh -- ps | grep -q dockerd"
+"$SPK" -p "$P" ssh-config > "$home/ssh-config.test" 2>/dev/null
+check "ssh-config host"           grep -q "^Host speck-$P\$" "$home/ssh-config.test"
+check "ssh via ssh-config"        ssh -F "$home/ssh-config.test" "speck-$P" true
+check "port 22 closed to containers" fails docker --context "$CTX" run --rm alpine:latest nc -z -w2 172.17.0.1 22
 
 # Removal
 check "profile rm"                env -u SPECK_PROFILE "$SPK" profile rm "$P" --force
