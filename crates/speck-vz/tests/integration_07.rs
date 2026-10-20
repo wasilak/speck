@@ -10,8 +10,7 @@
 //!   - An active `spk up` session (some tests start the VM internally; see per-test docs)
 //!
 //! All tests in this file are `#[ignore]`'d and serve as machine-checkable documentation
-//! of Phase 07 success criteria (D-03/D-04). They are NOT folded into `integration_06.rs`
-//! because they target a different milestone (v1.1 gap closure vs. v1.0 Docker API).
+//! of Phase 07 success criteria (D-03/D-04).
 //!
 //! Phase sign-off command (manual, codesigned host):
 //!   `cargo test -p speck-vz --test integration_07 -- --ignored --nocapture`
