@@ -1,8 +1,8 @@
 class Speck < Formula
   desc "Container runtime for Apple Silicon with VPN-proof networking"
   homepage "https://github.com/wasilak/speck"
-  url "https://github.com/wasilak/speck/releases/download/v1.5.1/spk-v1.5.1-aarch64-apple-darwin.tar.gz"
-  sha256 "d23e9d74a073be4022bb1ebd1a45f1c723fd146eceac1fa1956bcd83ca5d6e5b"
+  url "https://github.com/wasilak/speck/releases/download/v1.5.2/spk-v1.5.2-aarch64-apple-darwin.tar.gz"
+  sha256 "4eed40fcf67623e87230e30ef86dfd73e8d51483440f93fa6661c55a5bb38c88"
   license "AGPL-3.0-only"
 
   depends_on arch: :arm64
