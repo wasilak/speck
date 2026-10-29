@@ -189,6 +189,7 @@ mod linux {
             eprintln!("vminitd: sysctl configuration failed: {e}");
         }
         setup_amd64_emulation();
+        spawn_binfmt_guard();
         prevent_memory_thrashing();
         match speck_guest::memory::reserve_for_runtime() {
             Ok(max) => eprintln!(
@@ -1042,6 +1043,25 @@ mod linux {
             Ok(()) => eprintln!("vminitd: Rosetta registered for linux/amd64 binaries"),
             Err(e) => eprintln!("vminitd: Rosetta binfmt registration failed: {e}"),
         }
+    }
+
+    /// Undo binfmt registrations that send native arm64 binaries to an
+    /// emulator (`multiarch/qemu-user-static` does that under Rosetta).
+    /// Until removed, no new process in the guest or its containers starts.
+    fn spawn_binfmt_guard() {
+        use speck_guest::binfmt::{BINFMT_DIR, remove_native_hijacks};
+        std::thread::spawn(|| {
+            loop {
+                for (name, interpreter) in remove_native_hijacks(std::path::Path::new(BINFMT_DIR)) {
+                    eprintln!(
+                        "vminitd: removed binfmt entry {name} ({interpreter}): it ran native \
+                         arm64 binaries through an emulator; use `tonistiigi/binfmt --install \
+                         <arch>` instead of multiarch/qemu-user-static"
+                    );
+                }
+                std::thread::sleep(std::time::Duration::from_secs(1));
+            }
+        });
     }
 
     /// PID of the running dockerd, 0 when none.
