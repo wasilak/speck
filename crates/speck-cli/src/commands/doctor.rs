@@ -522,6 +522,40 @@ async fn check_guest_egress() -> CheckResult {
     }
 }
 
+/// Emulators registered in the guest binfmt_misc, from `ls` output.
+fn binfmt_result(listing: Option<(i32, String)>) -> CheckResult {
+    let Some((code, listing)) = listing else {
+        return CheckResult::Skip {
+            reason: "guest not reachable over `spk ssh`".into(),
+        };
+    };
+    if code != 0 {
+        return CheckResult::Fail {
+            hint: "cannot read /proc/sys/fs/binfmt_misc in the guest; run `spk restart`".into(),
+        };
+    }
+    let emulators: Vec<&str> = listing
+        .split_whitespace()
+        .filter(|name| !matches!(*name, "register" | "status"))
+        .collect();
+    if !emulators.contains(&"rosetta") {
+        return CheckResult::Warn {
+            detail: "Rosetta is not registered, so linux/amd64 images will not run; \
+                     run `softwareupdate --install-rosetta`, then `spk restart`"
+                .into(),
+        };
+    }
+    CheckResult::PassWithDetail {
+        detail: format!("emulators: {}", emulators.join(", ")),
+    }
+}
+
+/// Which foreign architectures containers can run (Rosetta for amd64,
+/// `tonistiigi/binfmt` for the rest).
+async fn check_guest_binfmt() -> CheckResult {
+    binfmt_result(guest_exec("ls /proc/sys/fs/binfmt_misc").await)
+}
+
 // ──────────────────────────────────────────────────────────────
 // DNS full-path trace (DOCTOR-03)
 // ──────────────────────────────────────────────────────────────
@@ -642,7 +676,7 @@ pub async fn run_doctor_dns(_speck_home: &Path, hostname: &str) -> anyhow::Resul
 ///
 /// Check order: codesign entitlement, DOCKER_HOST, cert injection, VM resources,
 /// public DNS, VPN DNS, VM running, Docker socket, daemon version, guest
-/// assets, guest clock, guest CA, guest egress.
+/// assets, guest clock, guest CA, guest egress, guest binfmt.
 pub async fn run_doctor(
     speck_home: &Path,
     args: DoctorArgs,
@@ -707,6 +741,7 @@ async fn run_checks(speck_home: &Path) -> Vec<(&'static str, CheckResult)> {
         ("guest clock", check_guest_clock(speck_home).await),
         ("guest CA", check_guest_ca(speck_home).await),
         ("guest egress", check_guest_egress().await),
+        ("guest binfmt", check_guest_binfmt().await),
     ]
 }
 
@@ -941,6 +976,25 @@ mod tests {
     }
 
     #[test]
+    fn binfmt_lists_emulators_and_warns_without_rosetta() {
+        assert_eq!(
+            binfmt_result(Some((0, "qemu-arm\nregister\nrosetta\nstatus\n".into()))),
+            CheckResult::PassWithDetail {
+                detail: "emulators: qemu-arm, rosetta".into()
+            }
+        );
+        assert!(matches!(
+            binfmt_result(Some((0, "register\nstatus\n".into()))),
+            CheckResult::Warn { .. }
+        ));
+        assert!(matches!(
+            binfmt_result(Some((2, String::new()))),
+            CheckResult::Fail { .. }
+        ));
+        assert!(matches!(binfmt_result(None), CheckResult::Skip { .. }));
+    }
+
+    #[test]
     fn run_doctor_has_the_daemon_and_guest_checks() {
         let src = production_code();
         for label in [
@@ -949,6 +1003,7 @@ mod tests {
             "\"guest clock\"",
             "\"guest CA\"",
             "\"guest egress\"",
+            "\"guest binfmt\"",
         ] {
             assert!(src.contains(label), "run_checks must include {label}");
         }

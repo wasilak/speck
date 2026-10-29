@@ -80,6 +80,23 @@ the `speck` docker context. Speck starts again automatically at login.
 Rosetta. If Rosetta is not installed, install it once with
 `softwareupdate --install-rosetta --agree-to-license` and run `spk restart`.
 
+Other architectures (`linux/arm/v7`, `riscv64`, `s390x` and so on) need QEMU.
+Apple Silicon cannot run 32-bit ARM code, so `linux/arm/v7` needs it too.
+Register the emulators you need with `tonistiigi/binfmt`:
+
+```bash
+docker run --rm --privileged tonistiigi/binfmt --install arm
+docker run --rm --platform linux/arm/v7 alpine uname -m   # armv7l
+```
+
+The registration lasts until the VM restarts, so run it again after
+`spk restart`. `spk doctor` lists the registered emulators.
+
+Do not use `multiarch/qemu-user-static`. That image exists only for amd64, so
+under Rosetta it registers QEMU for the VM's own arm64 programs, and then no
+container can start (`exec format error`). Speck removes such a registration
+within a second and logs it in `~/.speck/console.log`.
+
 dockerd uses the containerd image store, like Colima, so multi-platform
 builds (`docker buildx build --platform linux/amd64,linux/arm64 --push`) work
 with the default builder.
@@ -245,7 +262,7 @@ spk completion fish | source
 ## Diagnostics
 
 ```bash
-spk doctor                              # full health check (codesign, VM state, DNS, certs, Docker socket, versions, guest clock)
+spk doctor                              # full health check (codesign, VM state, DNS, certs, Docker socket, versions, guest clock, emulators)
 spk doctor dns                          # trace DNS through the guest resolver
 spk doctor dns internal.corp.example   # verify VPN split-DNS reaches a scoped nameserver
 ```
