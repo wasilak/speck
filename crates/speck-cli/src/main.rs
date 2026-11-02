@@ -655,7 +655,31 @@ async fn main() -> anyhow::Result<()> {
         unsafe { std::env::set_var("SPECK_PROFILE", &profile.name) };
     }
     let speck_home = profile.home.clone();
-    let _ = std::fs::create_dir_all(&speck_home);
+    // Only commands that create an instance may create a named profile;
+    // `spk -p typo stop` must not leave an empty profile behind.
+    let creates_instance = matches!(
+        cli.command,
+        Commands::Up(_) | Commands::Template | Commands::Init(_) | Commands::Recreate(_)
+    );
+    let global = matches!(
+        cli.command,
+        Commands::Profile(_) | Commands::Completion(_) | Commands::Version | Commands::List(_)
+    );
+    if profile.managed()
+        && profile.name != profile::DEFAULT
+        && !speck_home.exists()
+        && !creates_instance
+    {
+        anyhow::ensure!(
+            global,
+            "profile \"{}\" does not exist; create it with `spk profile create {}` or `spk -p {} start`",
+            profile.name,
+            profile.name,
+            profile.name
+        );
+    } else {
+        let _ = std::fs::create_dir_all(&speck_home);
+    }
 
     match cli.command {
         Commands::Up(args) => {

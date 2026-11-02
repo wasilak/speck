@@ -46,6 +46,7 @@ check "config keeps autostart"    grep -q 'autostart: false' "$home/config.yaml"
 check "profile current -o yaml"   sh -c "SPECK_PROFILE='$P' '$SPK' profile current -o yaml | grep -q 'profile: $P'"
 check "-o json rejected for ps"   fails "$SPK" -p "$P" ps -o json
 check "invalid profile name"      fails "$SPK" -p "Bad_Name" status
+check "unknown profile not created" sh -c "! '$SPK' -p 'nope-$$' stop && test ! -e '$HOME/.speck/profiles/nope-$$'"
 
 # CI start: background daemon, no launchd agent, no context switch
 check "start --edit --wait"       env EDITOR=true VISUAL= "$SPK" -p "$P" start --edit --wait --timeout 180
