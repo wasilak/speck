@@ -7,9 +7,10 @@
 # not done while any step fails.
 #
 # Usage: ./scripts/conformance-smoke.sh   (daemon must be running: spk up)
+#   CONFORMANCE_DOCKER_HOST   compare another runtime, e.g. unix://$HOME/.colima/default/docker.sock
 set -u
 
-export DOCKER_HOST="unix://${SPECK_HOME:-$HOME/.speck}/speck.sock"
+export DOCKER_HOST="${CONFORMANCE_DOCKER_HOST:-unix://${SPECK_HOME:-$HOME/.speck}/speck.sock}"
 PASS=0; FAIL=0; FAILED=()
 
 check() {
