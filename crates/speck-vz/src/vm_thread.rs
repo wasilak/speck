@@ -14,7 +14,8 @@ use objc2::rc::{Retained, autoreleasepool};
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::{NSArray, NSError, NSFileHandle, NSString, NSURL};
 use objc2_virtualization::{
-    VZConsoleDeviceConfiguration, VZDiskImageStorageDeviceAttachment, VZEntropyDeviceConfiguration,
+    VZConsoleDeviceConfiguration, VZDiskImageCachingMode, VZDiskImageStorageDeviceAttachment,
+    VZDiskImageSynchronizationMode, VZEntropyDeviceConfiguration,
     VZFileHandleNetworkDeviceAttachment, VZFileSerialPortAttachment,
     VZGenericPlatformConfiguration, VZLinuxBootLoader, VZMACAddress, VZNetworkDeviceAttachment,
     VZNetworkDeviceConfiguration, VZSerialPortAttachment, VZSocketDevice,
@@ -886,11 +887,17 @@ impl VmThread {
                 .ok_or_else(|| Error::DiskAttachment("non-UTF-8 disk path".into()))?,
         );
         let url = NSURL::fileURLWithPath(&path_str);
+        // Guest flushes map to fsync() on the Mac, not the default F_FULLFSYNC:
+        // that one costs ~6 ms per flush, and dockerd and containerd flush on
+        // every container start. Data reaches the drive either way; only the
+        // drive's own cache is not forced on power loss.
         let attachment = unsafe {
-            VZDiskImageStorageDeviceAttachment::initWithURL_readOnly_error(
+            VZDiskImageStorageDeviceAttachment::initWithURL_readOnly_cachingMode_synchronizationMode_error(
                 VZDiskImageStorageDeviceAttachment::alloc(),
                 &url,
                 read_only,
+                VZDiskImageCachingMode::Automatic,
+                VZDiskImageSynchronizationMode::Fsync,
             )
             .map_err(|_| Error::DiskAttachment("failed to create disk attachment".into()))?
         };
