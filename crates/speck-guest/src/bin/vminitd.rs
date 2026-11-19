@@ -742,20 +742,17 @@ mod linux {
             return;
         }
 
-        // Create symlink docker.sock → speck.sock for Ryuk
-        let ret = unsafe {
-            libc::symlink(
-                c"/var/run/speck.sock".as_ptr(),
-                c"/rootfs/var/run/docker.sock".as_ptr(),
-            )
-        };
-        if ret < 0 {
-            eprintln!(
-                "vminitd: failed to create docker.sock symlink: {:?}",
-                io::Error::last_os_error()
-            );
-        } else {
-            eprintln!("vminitd: created /var/run/docker.sock → /var/run/speck.sock");
+        // Symlink docker.sock → speck.sock for Ryuk. /rootfs/var/run is the
+        // Speck home on the Mac, so the link stays from the previous boot.
+        let link = std::path::Path::new("/rootfs/var/run/docker.sock");
+        let target = std::path::Path::new("/var/run/speck.sock");
+        if std::fs::read_link(link).is_ok_and(|t| t == target) {
+            return;
+        }
+        let _ = std::fs::remove_file(link);
+        match std::os::unix::fs::symlink(target, link) {
+            Ok(()) => eprintln!("vminitd: created /var/run/docker.sock → /var/run/speck.sock"),
+            Err(e) => eprintln!("vminitd: failed to create docker.sock symlink: {e}"),
         }
     }
 
