@@ -190,6 +190,7 @@ mod linux {
         }
         setup_amd64_emulation();
         spawn_binfmt_guard();
+        spawn_data_disk_trim();
         prevent_memory_thrashing();
         match speck_guest::memory::reserve_for_runtime() {
             Ok(max) => eprintln!(
@@ -1060,6 +1061,53 @@ mod linux {
                     );
                 }
                 std::thread::sleep(std::time::Duration::from_secs(1));
+            }
+        });
+    }
+
+    /// Return blocks freed on the data disk (deleted images, containers,
+    /// build cache) to the Mac. Without TRIM, data.img on the host never
+    /// shrinks. ext4 skips groups it already trimmed, so a run with nothing
+    /// freed is cheap.
+    fn spawn_data_disk_trim() {
+        const FITRIM: libc::c_ulong = 0xC018_5879; // _IOWR('X', 121, struct fstrim_range)
+        #[repr(C)]
+        struct FstrimRange {
+            start: u64,
+            len: u64,
+            minlen: u64,
+        }
+        std::thread::spawn(|| {
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(600));
+                let Ok(dir) = std::fs::File::open("/var/lib/containerd") else {
+                    continue;
+                };
+                let mut range = FstrimRange {
+                    start: 0,
+                    len: u64::MAX,
+                    minlen: 0,
+                };
+                // SAFETY: FITRIM reads and writes one fstrim_range through a
+                // valid pointer on an open directory fd.
+                let rc = unsafe {
+                    libc::ioctl(
+                        std::os::fd::AsRawFd::as_raw_fd(&dir),
+                        FITRIM as _,
+                        &mut range,
+                    )
+                };
+                if rc != 0 {
+                    eprintln!(
+                        "vminitd: data disk trim failed: {}",
+                        std::io::Error::last_os_error()
+                    );
+                } else if range.len >= 64 * 1024 * 1024 {
+                    eprintln!(
+                        "vminitd: data disk trim discarded {} MiB of free space",
+                        range.len >> 20
+                    );
+                }
             }
         });
     }
