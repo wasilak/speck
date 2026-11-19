@@ -63,6 +63,7 @@ jobs:
           # No iptables needed — speck-net re-originates all TCP from the host.
           # dropbear + sftp-server: `spk ssh` and VS Code Remote-SSH (vminitd
           # runs dropbear on 127.0.0.1:22 only).
+          # git: BuildKit needs it for `docker build <git URL>`.
           sudo chroot /tmp/rootfs /bin/sh -c "
             echo 'https://dl-cdn.alpinelinux.org/alpine/v3.20/community' >> /etc/apk/repositories
             apk update
@@ -71,7 +72,8 @@ jobs:
               ca-certificates \
               iproute2 \
               dropbear \
-              openssh-sftp-server
+              openssh-sftp-server \
+              git
           "
 
           sudo mkdir -p /tmp/rootfs/run/speck
@@ -89,7 +91,8 @@ jobs:
             usr/bin/runc \
             usr/sbin/dropbear \
             usr/bin/dropbearkey \
-            usr/lib/ssh/sftp-server; do
+            usr/lib/ssh/sftp-server \
+            usr/bin/git; do
             f="/tmp/rootfs/${p}"
             [ -e "$f" ] && echo "FOUND: /${p}" || echo "MISSING: /${p}"
           done
