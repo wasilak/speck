@@ -98,7 +98,7 @@ pub async fn gather(profile: &Profile) -> Info {
         info.memory_mb = Some(vm.memory_mb);
         info.disk_gb = Some(vm.disk_gb);
     }
-    if let Ok(meta) = std::fs::metadata(speck_home.join("data.img")) {
+    if let Ok(meta) = std::fs::metadata(crate::config::data_disk_path(speck_home)) {
         use std::os::unix::fs::MetadataExt as _;
         info.disk_used_bytes = Some(meta.blocks() * 512);
     }

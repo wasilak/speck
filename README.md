@@ -163,6 +163,13 @@ takes only the space in use. The disk can grow, but not shrink. Speck returns
 the space of deleted images and containers to the Mac within about 10 minutes
 (from initrd 1.5.2).
 
+`vm.data_disk` moves the data disk to another place, for example an external
+volume: `data_disk: /Volumes/External/speck/data.img`. A relative path is
+relative to the profile directory, and `~/` means your home directory. Stop
+Speck and move `data.img` there first, or the next start creates a new, empty
+disk. If the volume is not mounted, `spk start` fails and does not create
+anything. `spk delete` also removes the disk at this path.
+
 `spk start --cpus/--memory/--disk` saves the values to the config file, like
 `colima start`. Sizes take k/m/g/t units in any case (`--memory 8g`); a plain
 number is MiB for memory and GiB for disk. A running VM keeps its settings

@@ -53,6 +53,14 @@ pub async fn run_delete(
     }
     crate::docker_context::remove();
 
+    // `vm.data_disk` can put the disk outside the profile directory.
+    let data_disk = crate::config::data_disk_path(speck_home);
+    if let Err(e) = std::fs::remove_file(&data_disk)
+        && e.kind() != std::io::ErrorKind::NotFound
+    {
+        anyhow::bail!("failed to remove {}: {e}", data_disk.display());
+    }
+
     // A named profile is removed completely, like `colima delete -p <name>`;
     // its config and logs go with it. Shared downloads stay in ~/.speck.
     let profile = crate::profile::current();

@@ -28,6 +28,7 @@ version: 1
 #   cpus: {cpus}
 #   memory_mb: {memory}      # a plain number is MiB
 #   disk_gb: {disk}         # a plain number is GiB; the disk only grows
+#   data_disk: data.img     # e.g. /Volumes/External/speck/data.img
 
 # log_level: {log_level}       # tracing filter, e.g. debug or speck_net=trace
 

@@ -165,6 +165,15 @@ fn rows(effective: &EffectiveConfig, raw: Option<&serde_yaml::Value>) -> Vec<Row
             source: source("vm.disk_gb", Some("SPECK_VM_DISK_GB")),
         },
         Row {
+            key: "vm.data_disk",
+            value: effective.data_disk.clone().into(),
+            text: effective
+                .data_disk
+                .clone()
+                .unwrap_or_else(|| "data.img".into()),
+            source: source("vm.data_disk", None),
+        },
+        Row {
             key: "autostart",
             value: effective.autostart.into(),
             text: effective.autostart.to_string(),

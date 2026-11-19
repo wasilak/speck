@@ -57,6 +57,9 @@ pub struct FileVmConfig {
     pub memory_mb: Option<u64>,
     #[serde(default, deserialize_with = "crate::size::serde_size::gib")]
     pub disk_gb: Option<u64>,
+    /// Where the data disk lives, e.g. on an external volume.
+    #[serde(default)]
+    pub data_disk: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,6 +70,8 @@ pub struct EffectiveConfig {
     pub inject_ca_into_containers: bool,
     pub ca_from_keychain: bool,
     pub autostart: bool,
+    /// `vm.data_disk` as written in config.yaml; see [`data_disk_path`].
+    pub data_disk: Option<String>,
 }
 
 impl Default for EffectiveConfig {
@@ -78,6 +83,7 @@ impl Default for EffectiveConfig {
             inject_ca_into_containers: false,
             ca_from_keychain: true,
             autostart: true,
+            data_disk: None,
         }
     }
 }
@@ -138,6 +144,8 @@ struct StrictVmConfig {
     memory_mb: Option<u64>,
     #[serde(default, deserialize_with = "crate::size::serde_size::gib")]
     disk_gb: Option<u64>,
+    #[serde(default)]
+    data_disk: Option<String>,
 }
 
 fn default_config_version() -> Option<u64> {
@@ -235,6 +243,26 @@ pub fn persist_vm_overrides(speck_home: &Path, cli: &crate::UpArgs) -> anyhow::R
     Ok(written)
 }
 
+/// The data disk: `vm.data_disk` from config.yaml, else `<home>/data.img`.
+/// `~/` means the user's home; a relative path is relative to `speck_home`.
+pub fn data_disk_path(speck_home: &Path) -> PathBuf {
+    let configured = load_config_file(speck_home)
+        .ok()
+        .and_then(|(config, _)| config.vm.data_disk);
+    resolve_data_disk(speck_home, configured.as_deref())
+}
+
+fn resolve_data_disk(speck_home: &Path, configured: Option<&str>) -> PathBuf {
+    match configured.map(str::trim).filter(|p| !p.is_empty()) {
+        None => speck_home.join("data.img"),
+        Some(path) => match (path.strip_prefix("~/"), std::env::var_os("HOME")) {
+            (Some(rest), Some(home)) => PathBuf::from(home).join(rest),
+            // Joining an absolute path replaces speck_home.
+            _ => speck_home.join(path),
+        },
+    }
+}
+
 pub fn collect_unknown_keys(value: &serde_yaml::Value) -> Vec<ConfigWarning> {
     let mut warnings = Vec::new();
     let Some(top) = value.as_mapping() else {
@@ -255,7 +283,7 @@ pub fn collect_unknown_keys(value: &serde_yaml::Value) -> Vec<ConfigWarning> {
         .and_then(serde_yaml::Value::as_mapping)
     {
         for key in vm.keys().filter_map(serde_yaml::Value::as_str) {
-            if !matches!(key, "cpus" | "memory_mb" | "disk_gb") {
+            if !matches!(key, "cpus" | "memory_mb" | "disk_gb" | "data_disk") {
                 warnings.push(ConfigWarning {
                     path: format!("vm.{key}"),
                     message: format!("unknown config key `vm.{key}` ignored"),
@@ -312,6 +340,7 @@ fn resolve_effective_config_with_physical_cores(
     effective.inject_ca_into_containers = file.ca.inject_into_containers;
     effective.ca_from_keychain = file.ca.keychain.unwrap_or(true);
     effective.autostart = file.autostart.unwrap_or(true);
+    effective.data_disk = file.vm.data_disk;
 
     if let Some(cpus) = cli.cpus {
         effective.vm.cpus = cpus;
@@ -667,6 +696,7 @@ mod tests {
                         cpus: Some(4),
                         memory_mb: Some(3072),
                         disk_gb: Some(30),
+                        data_disk: None,
                     },
                     log_level: Some("info".into()),
                     ..Default::default()
@@ -979,5 +1009,26 @@ mod tests {
             );
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn data_disk_defaults_to_the_speck_home_and_expands_tilde() {
+        let home = Path::new("/h/.speck");
+        assert_eq!(resolve_data_disk(home, None), home.join("data.img"));
+        assert_eq!(resolve_data_disk(home, Some(" ")), home.join("data.img"));
+        assert_eq!(
+            resolve_data_disk(home, Some("/Volumes/Ext/speck.img")),
+            PathBuf::from("/Volumes/Ext/speck.img")
+        );
+        assert_eq!(
+            resolve_data_disk(home, Some("disk.img")),
+            home.join("disk.img")
+        );
+        temp_env::with_var("HOME", Some("/Users/me"), || {
+            assert_eq!(
+                resolve_data_disk(home, Some("~/vm/data.img")),
+                PathBuf::from("/Users/me/vm/data.img")
+            );
+        });
     }
 }

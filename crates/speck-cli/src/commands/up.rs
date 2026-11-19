@@ -264,13 +264,14 @@ pub fn start_detached(speck_home: &Path, binary: &Path) -> anyhow::Result<std::p
 
 /// Ensure all VM assets are present, downloading them from GitHub Releases
 /// if not: kernel and initrd in `assets` (shared by all profiles), rootfs
-/// and data disk in `speck_home`.
+/// in `speck_home`, and the data disk at `data`.
 ///
 /// This makes `spk up` self-bootstrapping: first run works with no separate
 /// init step, exactly like `colima start`.
 async fn ensure_assets(
     speck_home: &Path,
     assets: &Path,
+    data: &Path,
     requested_disk_gb: u64,
     force_refresh: bool,
 ) -> anyhow::Result<()> {
@@ -280,7 +281,6 @@ async fn ensure_assets(
     let kernel = assets.join("kernel/vmlinux");
     let initrd = assets.join(format!("initrd/{KATA_INITRD_FILE}"));
     let rootfs = speck_home.join("rootfs.img");
-    let data = speck_home.join("data.img");
 
     if force_refresh || !kernel.exists() || !initrd.exists() {
         fetch_kata_assets(assets)
@@ -306,7 +306,7 @@ async fn ensure_assets(
         }
     }
 
-    reconcile_data_disk(&data, requested_disk_gb).context("failed to reconcile data disk")?;
+    reconcile_data_disk(data, requested_disk_gb).context("failed to reconcile data disk")?;
 
     Ok(())
 }
@@ -877,12 +877,23 @@ pub async fn run_up(
         && args.data_disk.is_some();
     let assets = crate::profile::current().assets;
     let assets = assets.as_path();
+    let data_disk_path = args
+        .data_disk
+        .clone()
+        .unwrap_or_else(|| crate::config::data_disk_path(speck_home));
     if !has_all_overrides {
         let _lock = lock_assets(assets)?;
         if !args.pull {
             refresh_stale_assets(speck_home, assets)?;
         }
-        ensure_assets(speck_home, assets, effective.vm.disk_gb, args.pull).await?;
+        ensure_assets(
+            speck_home,
+            assets,
+            &data_disk_path,
+            effective.vm.disk_gb,
+            args.pull,
+        )
+        .await?;
     }
     mark("assets");
     // `spk ssh`: the guest reads authorized_keys from the Speck home.
@@ -910,10 +921,6 @@ pub async fn run_up(
         .rootfs
         .clone()
         .unwrap_or_else(|| speck_home.join("rootfs.img"));
-    let data_disk_path = args
-        .data_disk
-        .clone()
-        .unwrap_or_else(|| speck_home.join("data.img"));
 
     ensure_no_active_vm_resource_mismatch(
         speck_home,
@@ -1755,7 +1762,7 @@ mod tests {
         );
         assert!(
             run_up.contains(
-                "ensure_assets(speck_home, assets, effective.vm.disk_gb, args.pull).await"
+                "&data_disk_path,\n            effective.vm.disk_gb,\n            args.pull,"
             ),
             "--pull must force asset refresh through ensure_assets"
         );
@@ -1768,11 +1775,9 @@ mod tests {
         let tests_start = source.find("#[cfg(test)]").unwrap();
         let run_up = &source[run_up_start..tests_start];
 
-        assert!(
-            run_up.contains(
-                "ensure_assets(speck_home, assets, effective.vm.disk_gb, args.pull).await"
-            )
-        );
+        assert!(run_up.contains(
+            "&data_disk_path,\n            effective.vm.disk_gb,\n            args.pull,"
+        ));
         assert!(!run_up.contains("create_data_disk"));
         assert!(!run_up.contains("count=512"));
     }
