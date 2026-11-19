@@ -1104,12 +1104,13 @@ impl VmThread {
                     }
                 }
                 Err(Error::VsockConnect(msg)) => {
-                    tracing::warn!(attempt = i + 1, port = ready_vsock_port, error = %msg, "vsock connect rejected by guest");
+                    // Expected while the guest boots; the caller reports a final failure.
+                    tracing::debug!(attempt = i + 1, port = ready_vsock_port, error = %msg, "vsock connect rejected by guest");
                     last_connect_err = Some(msg);
                     std::thread::sleep(Duration::from_millis(200));
                 }
                 Err(Error::VsockTimeout) => {
-                    tracing::warn!(
+                    tracing::debug!(
                         attempt = i + 1,
                         port = ready_vsock_port,
                         "vsock connect timed out"
@@ -1305,7 +1306,10 @@ impl Drop for VmThread {
 ///
 /// A dup'd fd shares the underlying socket, so setting buffers on the dup is
 /// equivalent to setting them on the original. Best-effort: a setsockopt
-/// failure logs a warning but never fails the connection. Raw `libc` is used
+/// failure logs a warning but never fails the connection. EINVAL means the
+/// guest already closed the connection (e.g. after writing READY): macOS
+/// refuses socket options on a disconnected socket, the data already sent
+/// stays readable, and no buffer is needed. Raw `libc` is used
 /// deliberately — wrapping the fd in `socket2::Socket` would take ownership
 /// and close the live connection on drop.
 fn raise_socket_buffers(fd: RawFd) {
@@ -1324,10 +1328,15 @@ fn raise_socket_buffers(fd: RawFd) {
             )
         };
         if ret != 0 {
+            let err = std::io::Error::last_os_error();
+            if err.raw_os_error() == Some(libc::EINVAL) {
+                tracing::debug!(fd, "vsock connection already closed by the guest");
+                return;
+            }
             tracing::warn!(
                 fd,
                 option = name,
-                error = %std::io::Error::last_os_error(),
+                error = %err,
                 "failed to raise vsock socket buffer; continuing with default"
             );
         }
@@ -1407,6 +1416,21 @@ mod tests {
             body.contains("setIsConsole(true)"),
             "the console port must be flagged as the primary console (setIsConsole(true))"
         );
+    }
+
+    #[test]
+    fn closed_peer_makes_setsockopt_fail_with_einval_but_keeps_data() {
+        // The assumption behind the EINVAL case in raise_socket_buffers.
+        let (sock, peer) =
+            Socket::pair(Domain::UNIX, Type::STREAM, None).expect("socketpair must succeed");
+        std::io::Write::write_all(&mut &peer, b"READY\n").unwrap();
+        drop(peer);
+        let err = sock.set_recv_buffer_size(4 * 1024 * 1024).unwrap_err();
+        assert_eq!(err.raw_os_error(), Some(libc::EINVAL));
+        raise_socket_buffers(sock.as_raw_fd());
+        let mut buf = [0u8; 6];
+        std::io::Read::read_exact(&mut &sock, &mut buf).unwrap();
+        assert_eq!(&buf, b"READY\n");
     }
 
     #[test]
