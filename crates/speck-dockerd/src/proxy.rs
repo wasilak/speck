@@ -158,7 +158,12 @@ pub fn build_proxy_router_with_options(
 async fn passthrough(State(state): State<ProxyState>, mut req: Request) -> crate::Result<Response> {
     let request_path = req.uri().path().to_owned();
     let stripped_path = strip_version_prefix(&request_path).unwrap_or(&request_path);
-    tracing::info!(method = %req.method(), path = stripped_path, "proxy request");
+    // The daemon's own liveness probe pings every 10 s; keep it out of INFO.
+    if stripped_path == "/_ping" {
+        tracing::debug!(method = %req.method(), path = stripped_path, "proxy request");
+    } else {
+        tracing::info!(method = %req.method(), path = stripped_path, "proxy request");
+    }
 
     if req.method() == hyper::Method::POST && stripped_path == "/containers/create" {
         return intercept_container_create(state, req).await;
