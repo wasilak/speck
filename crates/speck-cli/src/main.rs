@@ -718,7 +718,12 @@ async fn main() -> anyhow::Result<()> {
                 if commands::up::launchd_job_loaded()
                     || commands::up::detached_daemon_running(&speck_home)
                 {
-                    println!("Speck{} is already running.", profile.display_suffix());
+                    let state = if commands::startup::read(&speck_home).is_some() {
+                        "starting"
+                    } else {
+                        "running"
+                    };
+                    println!("Speck{} is already {state}.", profile.display_suffix());
                     if !saved.is_empty() {
                         println!("Run `spk restart` to apply the new settings.");
                     }
@@ -728,6 +733,9 @@ async fn main() -> anyhow::Result<()> {
                         commands::up::daemonize(&speck_home, &binary)?;
                     } else {
                         detached = Some(commands::up::start_detached(&speck_home, &binary)?);
+                    }
+                    if !args.wait {
+                        commands::startup::wait_until_recorded(&speck_home);
                     }
                 }
                 if args.wait {

@@ -18,6 +18,7 @@ pub mod restart;
 pub mod rm;
 pub mod run;
 pub mod ssh;
+pub mod startup;
 pub mod status;
 pub mod stop;
 pub mod template;

@@ -211,21 +211,20 @@ pub fn daemonize(speck_home: &Path, binary: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Whether a daemon started without launchd (`autostart: false`) is running:
-/// its PID file names a live process and its control socket exists.
+/// Whether a daemon started without launchd (`autostart: false`) is running
+/// or still starting: its PID file names a live process and its control
+/// socket exists, or its startup progress names a live process.
 pub fn detached_daemon_running(speck_home: &Path) -> bool {
+    if super::startup::read(speck_home).is_some() {
+        return true;
+    }
     let Some(pid) = std::fs::read_to_string(speck_home.join("run/speck.pid"))
         .ok()
         .and_then(|p| p.trim().parse::<u32>().ok())
     else {
         return false;
     };
-    speck_home.join("run/control.sock").exists()
-        && std::process::Command::new("kill")
-            .args(["-0", &pid.to_string()])
-            .stderr(Stdio::null())
-            .status()
-            .is_ok_and(|s| s.success())
+    speck_home.join("run/control.sock").exists() && super::startup::pid_alive(pid)
 }
 
 /// Start the daemon in the background without a launchd agent, for profiles
@@ -840,6 +839,17 @@ pub async fn run_up(
         )
     })?;
 
+    // `spk status` shows these stages until the daemon runs; dropping
+    // `progress` (on success or on any error below) removes the file.
+    let progress = super::startup::Progress::begin(speck_home)
+        .inspect_err(|e| tracing::warn!(error = %e, "cannot record startup progress"))
+        .ok();
+    let mark = |stage: &str| {
+        if let Some(p) = &progress {
+            p.done(stage);
+        }
+    };
+
     // Entitlement preflight (warn-and-continue): a binary missing the
     // com.apple.security.virtualization entitlement fails opaquely at VM start,
     // so warn loudly up front. Never hard-fail here — a hard failure would loop
@@ -874,6 +884,7 @@ pub async fn run_up(
         }
         ensure_assets(speck_home, assets, effective.vm.disk_gb, args.pull).await?;
     }
+    mark("assets");
     // `spk ssh`: the guest reads authorized_keys from the Speck home.
     if let Err(e) = super::ssh::ensure_keys(speck_home, &crate::profile::current().name) {
         tracing::warn!(error = %e, "cannot create the ssh key; `spk ssh` will not work");
@@ -969,12 +980,20 @@ pub async fn run_up(
 
     let console_log_hint = console_log_hint(speck_home);
     let spinner_for_start = spinner.clone();
+    let progress_path = progress.as_ref().map(|p| p.path().to_path_buf());
     let guest = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+        let mark = |stage| {
+            if let Some(path) = &progress_path {
+                super::startup::mark_done(path, stage);
+            }
+        };
         guest.start().context("failed to start VM")?;
+        mark("vm");
         spinner_for_start.set_message("Waiting for guest...");
         guest
             .wait_for_ready()
             .map_err(|e| anyhow::anyhow!("{} — {}", e, console_log_hint))?;
+        mark("guest");
         Ok(guest)
     })
     .await
@@ -1005,6 +1024,7 @@ pub async fn run_up(
         Some(port_map_rx),
         resolver_rx,
     );
+    mark("network");
     // Supervise netstack tasks (WR-05). Any exit is fatal for the daemon: the
     // poll loop only returns on an internal error, and the DNS proxy returns
     // when the guest closes its single DNS vsock connection, which cannot be
@@ -1042,6 +1062,7 @@ pub async fn run_up(
     )
     .context("failed to start Docker API server")?;
     tracing::info!("Docker API server started at {}", sock_path.display());
+    mark("docker");
 
     spawn_guest_clock_sync(guest.clone());
 
@@ -1081,6 +1102,7 @@ pub async fn run_up(
     let _ = std::fs::remove_file(&ctrl_sock_path);
     let listener = UnixListener::bind(&ctrl_sock_path).context("failed to bind control socket")?;
     std::fs::set_permissions(&ctrl_sock_path, std::fs::Permissions::from_mode(0o600))?;
+    drop(progress);
     let vm_state_ctrl = vm_state.clone();
     tokio::spawn(async move {
         loop {

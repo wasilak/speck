@@ -9,6 +9,7 @@ pub const RED: &str = "\x1b[38;2;255;0;0m";
 pub fn format_status(status: &str) -> String {
     match status {
         "running" => format!("{GREEN}{status}{RESET}"),
+        "starting" => format!("{NEON_CYAN}{status}{RESET}"),
         "exited" | "stopped" => format!("{YELLOW}{status}{RESET}"),
         "dead" => format!("{RED}{status}{RESET}"),
         s => s.to_string(),

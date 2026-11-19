@@ -18,6 +18,9 @@ use crate::theme;
 pub struct Info {
     pub profile: String,
     pub running: bool,
+    /// Set while the daemon boots, before it is running.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub starting: Option<crate::commands::startup::Startup>,
     pub pid: Option<u32>,
     pub uptime_secs: Option<u64>,
     pub arch: &'static str,
@@ -100,6 +103,7 @@ pub async fn gather(profile: &Profile) -> Info {
         info.disk_used_bytes = Some(meta.blocks() * 512);
     }
     if !info.running {
+        info.starting = crate::commands::startup::read(speck_home);
         return info;
     }
 
@@ -160,6 +164,26 @@ pub fn render_status(info: &Info, extended: bool) -> String {
     } else {
         format!("Speck profile \"{}\"", info.profile)
     };
+    if let Some(startup) = &info.starting {
+        out.push_str(&format!(
+            "{name} is {} (PID {}, {})\n",
+            theme::format_status("starting"),
+            startup.pid,
+            format_duration(startup.elapsed_secs)
+        ));
+        let current = startup.stages.iter().position(|s| !s.done);
+        for (i, stage) in startup.stages.iter().enumerate() {
+            let mark = if stage.done {
+                "✓"
+            } else if Some(i) == current {
+                "…"
+            } else {
+                "·"
+            };
+            out.push_str(&format!("  {mark} {}\n", stage.label));
+        }
+        return out;
+    }
     if !info.running {
         out.push_str(&format!("{name} is {}\n", theme::format_status("stopped")));
         return out;
@@ -295,7 +319,14 @@ pub fn render_list(infos: &[Info], current: &str) -> String {
                         name.to_owned()
                     }
                 },
-                if info.running { "Running" } else { "Stopped" }.to_owned(),
+                if info.running {
+                    "Running"
+                } else if info.starting.is_some() {
+                    "Starting"
+                } else {
+                    "Stopped"
+                }
+                .to_owned(),
                 info.arch.to_owned(),
                 info.cpus.map_or("-".into(), |c| c.to_string()),
                 info.memory_mb.map_or("-".into(), gib),
@@ -370,6 +401,7 @@ pub async fn run_version(format: Output) -> anyhow::Result<()> {
 fn format_duration(secs: u64) -> String {
     let (d, h, m) = (secs / 86_400, secs % 86_400 / 3600, secs % 3600 / 60);
     match (d, h) {
+        (0, 0) if m == 0 => format!("{secs}s"),
         (0, 0) => format!("{m}m"),
         (0, _) => format!("{h}h {m}m"),
         _ => format!("{d}d {h}h"),
@@ -393,6 +425,7 @@ mod tests {
         Info {
             profile: "default".into(),
             running: true,
+            starting: None,
             pid: Some(42),
             uptime_secs: Some(3 * 3600 + 7 * 60),
             arch: "aarch64",
@@ -434,6 +467,32 @@ mod tests {
         assert!(out.contains("2 running, 5 total"));
         assert!(out.contains("images:     20"));
         assert!(out.contains("spk 1.4.1, initrd 1.4.0, rootfs 1.3.0, kernel 6.18.35-197"));
+    }
+
+    #[test]
+    fn starting_status_lists_the_stages() {
+        use crate::commands::startup::{STAGES, Stage, Startup};
+        let info = Info {
+            starting: Some(Startup {
+                pid: 7,
+                elapsed_secs: 4,
+                stages: STAGES
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &(name, label))| Stage {
+                        name,
+                        label,
+                        done: i < 2,
+                    })
+                    .collect(),
+            }),
+            ..Info::default()
+        };
+        let out = render_status(&info, false);
+        assert!(out.contains("starting") && out.contains("PID 7"));
+        assert!(out.contains("✓ VM assets") && out.contains("✓ VM boot"));
+        assert!(out.contains("… guest init") && out.contains("· Docker API"));
+        assert!(render_list(&[info], "default").contains("Starting"));
     }
 
     #[test]
@@ -525,7 +584,7 @@ mod tests {
 
     #[test]
     fn durations_and_sizes_are_human_readable() {
-        assert_eq!(format_duration(59), "0m");
+        assert_eq!(format_duration(59), "59s");
         assert_eq!(format_duration(3 * 86_400 + 5 * 3600), "3d 5h");
         assert_eq!(format_bytes(300 * 1024 * 1024), "300 MiB");
     }

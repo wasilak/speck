@@ -58,6 +58,8 @@ check "container via $CTX"        docker --context "$CTX" run --rm alpine:latest
 check "DOCKER_HOST to the socket" env DOCKER_HOST="unix://$home/speck.sock" docker ps
 check "docker context unchanged"  test "$(docker context show 2>/dev/null)" = "$context_before"
 check "start again is a no-op"    sh -c "'$SPK' -p '$P' start | grep -q 'already running'"
+check "status right after start"  sh -c "'$SPK' -p '$P' stop >/dev/null && '$SPK' -p '$P' start >/dev/null && '$SPK' -p '$P' status | grep -Eq 'is (starting|running)'"
+check "start --wait while starting" "$SPK" -p "$P" start --wait --timeout 180
 
 # SSH (rootfs 1.4.0+)
 check "ssh -- true"               "$SPK" -p "$P" ssh -- true
