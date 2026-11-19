@@ -100,11 +100,60 @@ Podman keeps layers unpacked and stores a small `tar-split.gz` per layer. It reb
 
 Speck keeps the containerd store, because multi-platform builds matter more than this speed. For local builds, `docker build -o type=image,name=myimage,compression=zstd .` halves the build time (see the README).
 
-The remaining gap to Colima, about 1 s, matches the CPU loop result (Speck about 10% slower). The cause is not investigated yet.
+### CPU is the same (2026-11-19)
 
-### Bind mounts
+The CPU loop row above suggested Speck is about 10% slower. Identical CPU tests inside an `alpine` container, 3 runs each, show no difference:
 
-Speck and Colima mount VirtioFS with the same options (`virtiofs rw,relatime`), and all three runtimes use Apple's VirtioFS server. The differences come from the guest side. Possible causes are the guest kernel (Kata 6.18 vs Ubuntu 6.8) and per-container start overhead. Neither is verified.
+| Test | Speck | Colima |
+|---|---|---|
+| shell loop, 2 000 000 iterations | 1898–1980 ms | 1922–1980 ms |
+| gzip of 256 MiB, 1 process | 5421–5449 ms | 5389–5443 ms |
+| gzip of 256 MiB, 4 processes | 5639–5659 ms | 5616–5653 ms |
+| sha256 of 256 MiB | 103–104 ms | 97–103 ms |
+
+The benchmark's CPU loop row also includes starting and removing the container. Measured again with hyperfine (6 runs), it is 2.317 s on Speck and 2.241 s on Colima. About half of that 76 ms gap is the container start:
+
+| | Speck | Colima |
+|---|---|---|
+| `docker run --rm alpine true` from the Mac | 170 ms | 134 ms |
+| the same inside the guest, 10 runs | 173 ms | 127 ms |
+
+The extra time on Speck is spent inside the guest, not in the host proxy or the vsock bridge. Speck's guest runs dockerd 26.1.5 and runc 1.1.14, and Colima runs docker 29.5.2 and runc 1.3.5. runc 1.3 did not start on Speck's Kata kernel in an earlier test, so a newer guest stack is a separate task.
+
+The guest kernels also differ: Colima uses HZ=1000 with `PREEMPT_VOLUNTARY` and transparent huge pages. Both report the same CPU vulnerability mitigations and use `arch_sys_counter`.
+
+### Bind mounts (2026-11-19)
+
+Speck and Colima mount VirtioFS with the same options (`virtiofs rw,relatime`), and all three runtimes use Apple's VirtioFS server. A rerun with 5 runs per test, 512 MiB file:
+
+| Test | Speck | Colima |
+|---|---|---|
+| write, 1 MiB blocks, fsync | 285–375 ms | 290–313 ms |
+| read, 1 MiB blocks | 168–190 ms | 147–151 ms |
+| read, 4 KiB blocks | 186–209 ms | 154–159 ms |
+| read with a cold guest cache | 155–166 ms | 105–181 ms |
+| read with a warm guest cache | 189–233 ms | 119–140 ms |
+
+Writes are the same. The 515 vs 409 ms in the main table was noise. Reads are about 20% slower on Speck, and only when the file is already in the guest's page cache. These did not change it:
+
+- `lru_gen/min_ttl_ms` 1000 → 0;
+- `vm.min_free_kbytes` 8 MiB → 44 MiB (Colima's value);
+- the container memory limit (3.3 GiB, far from reached).
+
+The page size is 4 KiB in both guests. The remaining suspect is the guest kernel (Kata 6.18 without transparent huge pages vs Ubuntu 6.8). This is a hypothesis.
+
+## Disk space on the Mac
+
+The data disk (`data.img`) is a sparse file. Speck 1.5.3 and earlier never return space to the Mac after images or containers are deleted. Test on 2026-11-19:
+
+| Step | `data.img` on the Mac | Used in the guest |
+|---|---|---|
+| start | 7235 MiB | 6550 MiB |
+| after `docker pull python:3.12` | 8765 MiB | 8081 MiB |
+| after `docker rmi` and prune | 8785 MiB | 1195 MiB |
+| after `fstrim` in the guest | 1680 MiB | 1195 MiB |
+
+The guest's virtio-blk device supports discard, but nothing sent it. vminitd now trims the data disk every 10 minutes (`FITRIM`). In a test, `data.img` went from 3128 MiB to 1742 MiB without any manual step after an image was deleted.
 
 ### Memory is not returned to the Mac
 
@@ -119,7 +168,7 @@ Virtualization.framework does not release ballooned pages to the host. The VZ ba
 
 - One Mac, one run per runtime for the full table. Small differences (under about 10%) are within noise.
 - Pull, build and network rows depend on the internet connection at the time.
-- Speck's numbers come from a build of `main`, not from a released binary. The fsync fix is not released yet.
+- Speck's numbers come from a build of `main`. The fsync fix shipped in 1.5.3.
 - Raw results are in `~/.cache/speck-bench/20261102-*` on the test Mac and are not in this repo.
 
 ## Reproduce

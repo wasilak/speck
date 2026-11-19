@@ -157,6 +157,12 @@ the same bundle (with `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE` and
 Desktop and Colima; copy the CA into the image in the Dockerfile when a build
 step needs it.
 
+`disk_gb` is the largest size of the data disk (`data.img`), which holds
+images, containers, volumes and the build cache. The file is sparse, so it
+takes only the space in use. The disk can grow, but not shrink. Speck returns
+the space of deleted images and containers to the Mac within about 10 minutes
+(from initrd 1.5.2).
+
 `spk start --cpus/--memory/--disk` saves the values to the config file, like
 `colima start`. Sizes take k/m/g/t units in any case (`--memory 8g`); a plain
 number is MiB for memory and GiB for disk. A running VM keeps its settings
