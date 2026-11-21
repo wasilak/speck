@@ -2457,7 +2457,7 @@ dependencies = [
 
 [[package]]
 name = "speck-cli"
-version = "1.5.3"
+version = "1.5.4"
 dependencies = [
  "anstream",
  "anyhow",
@@ -2491,7 +2491,7 @@ dependencies = [
 
 [[package]]
 name = "speck-core"
-version = "1.5.3"
+version = "1.5.4"
 dependencies = [
  "base64",
  "secrecy",
@@ -2501,7 +2501,7 @@ dependencies = [
 
 [[package]]
 name = "speck-dockerd"
-version = "1.5.3"
+version = "1.5.4"
 dependencies = [
  "axum",
  "bollard",
@@ -2523,7 +2523,7 @@ dependencies = [
 
 [[package]]
 name = "speck-guest"
-version = "1.5.3"
+version = "1.5.4"
 dependencies = [
  "libc",
  "mockall",
@@ -2532,7 +2532,7 @@ dependencies = [
 
 [[package]]
 name = "speck-net"
-version = "1.5.3"
+version = "1.5.4"
 dependencies = [
  "dispatch2",
  "libc",
@@ -2551,7 +2551,7 @@ dependencies = [
 
 [[package]]
 name = "speck-vz"
-version = "1.5.3"
+version = "1.5.4"
 dependencies = [
  "block2",
  "bollard",
@@ -3656,7 +3656,7 @@ dependencies = [
 
 [[package]]
 name = "xtask"
-version = "1.5.3"
+version = "1.5.4"
 
 [[package]]
 name = "yoke"
